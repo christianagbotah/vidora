@@ -119,9 +119,17 @@ export async function POST(req: NextRequest) {
       scenes: updatedScenes,
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to generate video:", error);
+    // Reset project status on failure
+    try {
+      const body = await req.clone().json().catch(() => null);
+      if (body?.projectId) {
+        await db.videoProject.update({ where: { id: body.projectId }, data: { status: "draft" } });
+      }
+    } catch {}
     return NextResponse.json(
-      { success: false, error: "Failed to generate video" },
+      { success: false, error: "Failed to generate video: " + message },
       { status: 500 }
     );
   }

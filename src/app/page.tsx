@@ -88,9 +88,10 @@ export default function HomePage() {
   const fetchProjects = async () => {
     try {
       const res = await fetch("/api/projects");
+      if (!res.ok) { toast({ title: "Failed to load projects", description: "Server error " + res.status, variant: "destructive" }); return; }
       const data = await res.json();
       if (data.success) setProjects(data.projects);
-    } catch { toast({ title: "Failed to load projects", variant: "destructive" }); }
+    } catch (err) { toast({ title: "Failed to load projects", description: err instanceof Error ? err.message : "Network error", variant: "destructive" }); }
   };
 
   // Voice
@@ -157,17 +158,19 @@ export default function HomePage() {
     const pTitle = title || prompt.slice(0, 40) + (prompt.length > 40 ? "..." : "");
     try {
       const res = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: pTitle, description: prompt, style: selectedStyle, aspectRatio: selectedAspect }) });
+      if (!res.ok) { toast({ title: "Failed to create project", description: "Server error " + res.status, variant: "destructive" }); return; }
       const data = await res.json();
-      if (data.success) {
-        await fetch(`/api/projects/${data.project.id}/scenes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, enhancedPrompt: enhancedText || undefined }) });
+      if (!data.success) { toast({ title: "Failed to create project", description: data.error || "Unknown error", variant: "destructive" }); return; }
+      const sceneRes = await fetch(`/api/projects/${data.project.id}/scenes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, enhancedPrompt: enhancedText || undefined }) });
+      if (sceneRes.ok) {
         const projRes = await fetch(`/api/projects/${data.project.id}`);
         const projData = await projRes.json();
         if (projData.success) { setCurrentProject(projData.project); setCurrentView("studio"); }
-        fetchProjects();
-        setCreateDialogOpen(false);
-        toast({ title: "Project created!" });
       }
-    } catch { toast({ title: "Failed to create project", variant: "destructive" }); }
+      fetchProjects();
+      setCreateDialogOpen(false);
+      toast({ title: "Project created!" });
+    } catch (err) { toast({ title: "Failed to create project", description: err instanceof Error ? err.message : "Network error", variant: "destructive" }); }
   };
 
   // Add Scene
@@ -175,9 +178,11 @@ export default function HomePage() {
     if (!currentProject || !newScenePrompt.trim()) return;
     try {
       const res = await fetch(`/api/projects/${currentProject.id}/scenes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: newScenePrompt, duration: parseInt(newSceneDuration), transition: newSceneTransition }) });
+      if (!res.ok) { toast({ title: "Failed to add scene", description: "Server error " + res.status, variant: "destructive" }); return; }
       const data = await res.json();
       if (data.success) { setNewScenePrompt(""); refreshProject(); toast({ title: "Scene added" }); }
-    } catch { toast({ title: "Failed to add scene", variant: "destructive" }); }
+      else { toast({ title: "Failed to add scene", description: data.error || "Unknown error", variant: "destructive" }); }
+    } catch (err) { toast({ title: "Failed to add scene", description: err instanceof Error ? err.message : "Network error", variant: "destructive" }); }
   };
 
   const refreshProject = async () => {
@@ -190,37 +195,67 @@ export default function HomePage() {
 
   const deleteScene = async (sceneId: string) => {
     if (!currentProject) return;
-    await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "DELETE" });
-    refreshProject(); toast({ title: "Scene removed" });
+    try {
+      const res = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "DELETE" });
+      if (res.ok) { refreshProject(); toast({ title: "Scene removed" }); }
+      else { toast({ title: "Failed to remove scene", variant: "destructive" }); }
+    } catch { toast({ title: "Failed to remove scene", variant: "destructive" }); }
   };
 
   const deleteProject = async (id: string) => {
-    await fetch(`/api/projects/${id}`, { method: "DELETE" });
-    fetchProjects();
-    if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
-    toast({ title: "Project deleted" });
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+      if (!res.ok) { toast({ title: "Failed to delete project", variant: "destructive" }); return; }
+      fetchProjects();
+      if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
+      toast({ title: "Project deleted" });
+    } catch { toast({ title: "Failed to delete project", variant: "destructive" }); }
   };
 
   const generateVideo = async () => {
-    if (!currentProject || currentProject.scenes.length === 0) return;
+    if (!currentProject || currentProject.scenes.length === 0) {
+      toast({ title: "No scenes to generate", description: "Add at least one scene first", variant: "destructive" });
+      return;
+    }
     setIsGenerating(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2min timeout
     try {
-      const res = await fetch("/api/generate-video", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: currentProject.id }) });
+      const res = await fetch("/api/generate-video", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: currentProject.id }), signal: controller.signal });
+      if (!res.ok) { toast({ title: "Generation failed", description: "Server error (" + res.status + "). Try again.", variant: "destructive" }); return; }
       const data = await res.json();
       if (data.success) { refreshProject(); toast({ title: "Generation complete!", description: data.message }); }
-    } catch { toast({ title: "Generation failed", variant: "destructive" }); }
-    finally { setIsGenerating(false); }
+      else { toast({ title: "Generation failed", description: data.error || "Unknown error", variant: "destructive" }); }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") { toast({ title: "Generation timed out", description: "The request took too long. Try generating individual scenes instead.", variant: "destructive" }); }
+      else { toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Network error. Check your connection.", variant: "destructive" }); }
+    } finally { clearTimeout(timeoutId); setIsGenerating(false); }
   };
 
   const generateSceneImage = async (sceneId: string, prompt: string) => {
+    if (!currentProject) return;
     try {
+      // Mark as generating in the UI immediately
+      setCurrentProject({ ...currentProject, scenes: currentProject.scenes.map(s => s.id === sceneId ? { ...s, status: "generating" } : s) });
       const res = await fetch("/api/generate-scene", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
+      if (!res.ok) {
+        toast({ title: "Scene generation failed", description: "Server error (" + res.status + "). Try again.", variant: "destructive" });
+        refreshProject();
+        return;
+      }
       const data = await res.json();
       if (data.success && currentProject) {
-        await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: data.imageUrl, status: "completed" }) });
-        refreshProject(); toast({ title: "Scene generated!" });
+        const updateRes = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: data.imageUrl, status: "completed" }) });
+        if (updateRes.ok) { refreshProject(); toast({ title: "Scene generated!" }); }
+        else { toast({ title: "Scene saved but update failed", variant: "destructive" }); refreshProject(); }
+      } else {
+        toast({ title: "Scene generation failed", description: data.error || "AI service unavailable. Try again.", variant: "destructive" });
+        refreshProject();
       }
-    } catch { toast({ title: "Scene generation failed", variant: "destructive" }); }
+    } catch (err) {
+      toast({ title: "Scene generation failed", description: err instanceof Error ? err.message : "Network error. Check your connection.", variant: "destructive" });
+      refreshProject();
+    }
   };
 
   const handleSelectClassicScene = (scene: ClassicScene) => {

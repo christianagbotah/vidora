@@ -48,9 +48,10 @@ export async function POST(req: NextRequest) {
       imageUrl: `/generated/${filename}`,
     });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to generate scene:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to generate scene" },
+      { success: false, error: "Failed to generate scene: " + message },
       { status: 500 }
     );
   }
