@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { VideoProject, ClassicScene, InputMode } from "@/types/video";
 import {
   Film, Mic, MicOff, Upload, Sparkles, Play, Plus, Trash2,
-  ChevronRight, Wand2, ArrowLeft, Image, LayoutGrid, Loader2,
+  ChevronRight, Wand2, ArrowLeft, ImageIcon, LayoutGrid, Loader2,
   X, Download, Layers, Palette, Clapperboard, GripVertical,
   Copy, Eye, Volume2, SkipForward, Clock,
 } from "lucide-react";
@@ -223,7 +223,7 @@ export default function HomePage() {
     } catch { toast({ title: "Scene generation failed", variant: "destructive" }); }
   };
 
-  const useClassicScene = (scene: ClassicScene) => {
+  const handleSelectClassicScene = (scene: ClassicScene) => {
     setTextPrompt(scene.prompt); setInputMode("text"); setCreateDialogOpen(true); setProjectTitle(scene.title);
   };
 
@@ -286,7 +286,7 @@ export default function HomePage() {
                   <p className="mt-3 text-white/80 text-sm sm:text-base max-w-lg">Transform your ideas into professional video scenes using text, voice, or video uploads. Powered by AI.</p>
                   <div className="flex flex-wrap gap-3 mt-6">
                     <Button size="lg" className="bg-white text-black hover:bg-white/90 rounded-xl" onClick={() => setCurrentView("create")}><Play className="h-4 w-4 mr-2" />Start Creating</Button>
-                    <Button size="lg" variant="outline" className="border-white/30 text-white hover:bg-white/10 rounded-xl" onClick={() => setCurrentView("gallery")}><Image className="h-4 w-4 mr-2" />Browse Scenes</Button>
+                    <Button size="lg" variant="outline" className="border-white/30 text-white hover:bg-white/10 rounded-xl" onClick={() => setCurrentView("gallery")}><ImageIcon className="h-4 w-4 mr-2" />Browse Scenes</Button>
                   </div>
                 </div>
               </section>
@@ -378,10 +378,10 @@ export default function HomePage() {
                   <Card key={scene.id} className="overflow-hidden group cursor-pointer hover:shadow-xl transition-all duration-300">
                     <div className="aspect-video relative overflow-hidden bg-muted">
                       {scene.image ? (<img src={scene.image} alt={scene.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />) : (<div className="w-full h-full bg-gradient-to-br from-purple-900/40 via-slate-900/60 to-cyan-900/40 flex items-center justify-center"><Film className="h-12 w-12 text-white/30" /></div>)}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Button className="rounded-full" onClick={() => useClassicScene(scene)}><Play className="h-5 w-5 mr-2" />Use This Scene</Button></div>
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Button className="rounded-full" onClick={() => handleSelectClassicScene(scene)}><Play className="h-5 w-5 mr-2" />Use This Scene</Button></div>
                       <Badge className="absolute top-3 left-3 capitalize text-xs">{scene.category}</Badge>
                     </div>
-                    <CardContent className="p-4"><h3 className="font-semibold">{scene.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{scene.description}</p><div className="flex items-center gap-2 mt-3"><Button variant="outline" size="sm" className="flex-1" onClick={() => useClassicScene(scene)}><Sparkles className="h-3.5 w-3.5 mr-1.5" />Use</Button><Button variant="ghost" size="sm" onClick={() => copyText(scene.prompt)}><Copy className="h-3.5 w-3.5" /></Button></div></CardContent>
+                    <CardContent className="p-4"><h3 className="font-semibold">{scene.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{scene.description}</p><div className="flex items-center gap-2 mt-3"><Button variant="outline" size="sm" className="flex-1" onClick={() => handleSelectClassicScene(scene)}><Sparkles className="h-3.5 w-3.5 mr-1.5" />Use</Button><Button variant="ghost" size="sm" onClick={() => copyText(scene.prompt)}><Copy className="h-3.5 w-3.5" /></Button></div></CardContent>
                   </Card>))}
               </div>
             </motion.div>)}
@@ -400,7 +400,7 @@ export default function HomePage() {
 
               {/* Preview Area */}
               {currentProject.scenes.some((s) => s.imageUrl) && (
-                <Card className="overflow-hidden"><div className="aspect-video bg-black relative"><img src={currentProject.scenes.find((s) => s.imageUrl)?.imageUrl || ""} alt="Preview" className="w-full h-full object-contain" /><div className="absolute bottom-3 left-3 right-3 flex items-center gap-2"><Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm">Scene 1 of {currentProject.scenes.length}</Badge><div className="ml-auto flex gap-1">{currentProject.scenes.map((s, i) => (<button key={s.id} onClick={() => s.imageUrl && setPreviewImage(s.imageUrl)} className={`h-8 w-12 rounded overflow-hidden border-2 ${s.imageUrl ? (previewImage === s.imageUrl ? "border-white" : "border-white/30") : "border-transparent"}`}><div className="w-full h-full bg-muted" />{s.imageUrl && <img src={s.imageUrl} className="w-full h-full object-cover" />}</button>))}</div></div></div></Card>
+                <Card className="overflow-hidden"><div className="aspect-video bg-black relative"><img src={currentProject.scenes.find((s) => s.imageUrl)?.imageUrl || ""} alt="Preview" className="w-full h-full object-contain" /><div className="absolute bottom-3 left-3 right-3 flex items-center gap-2"><Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm">Scene 1 of {currentProject.scenes.length}</Badge><div className="ml-auto flex gap-1">{currentProject.scenes.map((s, i) => (<button key={s.id} onClick={() => s.imageUrl && setPreviewImage(s.imageUrl)} className={`h-8 w-12 rounded overflow-hidden border-2 ${s.imageUrl ? (previewImage === s.imageUrl ? "border-white" : "border-white/30") : "border-transparent"}`}><div className="w-full h-full bg-muted" />{s.imageUrl && <img src={s.imageUrl} alt={"Scene thumbnail"} className="w-full h-full object-cover" />}</button>))}</div></div></div></Card>
               )}
 
               {/* Add Scene */}
@@ -418,7 +418,7 @@ export default function HomePage() {
                 ) : (<div className="space-y-3">
                   {currentProject.scenes.map((scene) => (
                     <Card key={scene.id} className="overflow-hidden"><div className="flex flex-col sm:flex-row">
-                      <div className="sm:w-48 aspect-video sm:aspect-auto bg-muted relative shrink-0">{scene.imageUrl ? (<img src={scene.imageUrl} alt={`Scene ${scene.sceneNumber}`} className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center"><Image className="h-8 w-8 text-muted-foreground/40" /></div>)}<Badge className="absolute top-2 left-2 text-xs">#{scene.sceneNumber}</Badge></div>
+                      <div className="sm:w-48 aspect-video sm:aspect-auto bg-muted relative shrink-0">{scene.imageUrl ? (<img src={scene.imageUrl} alt={`Scene ${scene.sceneNumber}`} className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center"><ImageIcon className="h-8 w-8 text-muted-foreground/40" /></div>)}<Badge className="absolute top-2 left-2 text-xs">#{scene.sceneNumber}</Badge></div>
                       <CardContent className="p-4 flex-1 min-w-0"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="text-sm line-clamp-2">{scene.enhancedPrompt || scene.prompt}</p><div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground"><span className="flex items-center gap-1"><Clock className="h-3 w-3" />{scene.duration}s</span><Badge variant="outline" className="text-xs capitalize">{scene.transition}</Badge><Badge variant={scene.status === "completed" ? "default" : "outline"} className="text-xs capitalize">{scene.status}</Badge></div></div><div className="flex items-center gap-1 shrink-0"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => generateSceneImage(scene.id, scene.enhancedPrompt || scene.prompt)} disabled={scene.status === "generating"}><Eye className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deleteScene(scene.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div></div></CardContent>
                     </div></Card>))}
                 </div>)}

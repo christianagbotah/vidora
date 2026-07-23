@@ -1,0 +1,455 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState, useRef } from "react";
+     4→import { motion, AnimatePresence } from "framer-motion";
+     5→import { useAppStore } from "@/store/useAppStore";
+     6→import { useToast } from "@/hooks/use-toast";
+     7→import type { VideoProject, ClassicScene, InputMode } from "@/types/video";
+     8→import {
+     9→  Film, Mic, MicOff, Upload, Sparkles, Play, Plus, Trash2,
+    10→  ChevronRight, Wand2, ArrowLeft, Image, LayoutGrid, Loader2,
+    11→  X, Download, Layers, Palette, Clapperboard, GripVertical,
+    12→  Copy, Eye, Volume2, SkipForward, Clock,
+    13→} from "lucide-react";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+    16→import { Input } from "@/components/ui/input";
+    17→import { Textarea } from "@/components/ui/textarea";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Progress } from "@/components/ui/progress";
+    20→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    21→import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+    22→import { ScrollArea } from "@/components/ui/scroll-area";
+    23→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    24→import { Label } from "@/components/ui/label";
+    25→import { Separator } from "@/components/ui/separator";
+    26→import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+    27→
+    28→// ─── Data ────────────────────────────────────────────────
+    29→const CLASSIC_SCENES: ClassicScene[] = [
+    30→  { id: "sunset", title: "Golden Sunset", description: "Dramatic ocean sunset with golden hour lighting", prompt: "Cinematic wide shot of a breathtaking ocean sunset, golden hour lighting casting warm amber rays across gentle waves, dramatic clouds painted in deep orange and magenta, film grain texture, professional cinematography, 4K quality", image: "/images/scene-sunset.png", category: "nature" },
+    31→  { id: "cyberpunk", title: "Neon City", description: "Futuristic cyberpunk metropolis with neon lights", prompt: "Futuristic cyberpunk city at night, neon signs reflecting on rain-soaked streets, holographic billboards, flying vehicles in the distance, cinematic wide shot, moody atmosphere, deep purple and electric cyan color palette, professional film look", image: "/images/scene-cyberpunk.png", category: "sci-fi" },
+    32→  { id: "fantasy", title: "Enchanted Forest", description: "Magical forest with bioluminescent trees", prompt: "Enchanted ancient forest with massive bioluminescent trees, magical glowing particles floating in the air, mystical fog weaving between trunks, ethereal teal and gold lighting, fairy tale atmosphere, cinematic depth of field", image: "/images/scene-fantasy.png", category: "fantasy" },
+    33→  { id: "mountain", title: "Epic Peaks", description: "Aerial mountain landscape above clouds at sunrise", prompt: "Dramatic aerial shot of snow-capped mountain peaks piercing through a sea of clouds at sunrise, golden sun rays breaking through the cloud layer, epic landscape photography, warm and cool contrast, cinematic wide angle composition", image: "/images/scene-mountain.png", category: "nature" },
+    34→  { id: "noir", title: "Film Noir Alley", description: "Moody black-and-white alley with dramatic shadows", prompt: "Classic film noir style alley at night, dramatic chiaroscuro lighting, rain-slicked cobblestones reflecting a single street lamp, silhouettes in fog, black and white with high contrast, vintage 1940s cinematic style, deep shadows", image: "", category: "classic" },
+    35→  { id: "space", title: "Cosmic Voyage", description: "Deep space with nebulas and distant galaxies", prompt: "Deep space vista with vibrant colorful nebula clouds in purple and teal, a massive spiral galaxy visible in the distance, scattered star field, cinematic composition with sense of scale and wonder, ultra high detail, 8K quality", image: "", category: "sci-fi" },
+    36→];
+    37→
+    38→const STYLES = [
+    39→  { value: "cinematic", label: "Cinematic" }, { value: "anime", label: "Anime" },
+    40→  { value: "photorealistic", label: "Photorealistic" }, { value: "oil-painting", label: "Oil Painting" },
+    41→  { value: "watercolor", label: "Watercolor" }, { value: "noir", label: "Film Noir" },
+    42→  { value: "retro", label: "Retro/Vintage" }, { value: "3d-render", label: "3D Render" },
+    43→];
+    44→
+    45→const ASPECTS = [
+    46→  { value: "16:9", label: "16:9 Landscape" }, { value: "9:16", label: "9:16 Portrait" },
+    47→  { value: "1:1", label: "1:1 Square" }, { value: "4:3", label: "4:3 Classic" },
+    48→  { value: "21:9", label: "21:9 Ultra Wide" },
+    49→];
+    50→
+    51→const TRANSITIONS = [
+    52→  { value: "fade", label: "Fade" }, { value: "slide", label: "Slide" },
+    53→  { value: "zoom", label: "Zoom" }, { value: "dissolve", label: "Dissolve" },
+    54→];
+    55→
+    56→const fadeUp = {
+    57→  initial: { opacity: 0, y: 20 }, animate: { opacity: 1, y: 0 },
+    58→  exit: { opacity: 0, y: -10 }, transition: { duration: 0.3 },
+    59→};
+    60→
+    61→// ─── Main Page ───────────────────────────────────────────
+    62→export default function HomePage() {
+    63→  const { currentView, projects, currentProject, isGenerating, isEnhancing, isRecording,
+    64→    setCurrentView, setProjects, setCurrentProject, setIsGenerating, setIsEnhancing, setIsRecording } = useAppStore();
+    65→  const { toast } = useToast();
+    66→
+    67→  const [inputMode, setInputMode] = useState<InputMode>("text");
+    68→  const [textPrompt, setTextPrompt] = useState("");
+    69→  const [enhancedText, setEnhancedText] = useState("");
+    70→  const [selectedStyle, setSelectedStyle] = useState("cinematic");
+    71→  const [selectedAspect, setSelectedAspect] = useState("16:9");
+    72→  const [projectTitle, setProjectTitle] = useState("");
+    73→  const [newScenePrompt, setNewScenePrompt] = useState("");
+    74→  const [newSceneDuration, setNewSceneDuration] = useState("3");
+    75→  const [newSceneTransition, setNewSceneTransition] = useState("fade");
+    76→  const [sceneFilter, setSceneFilter] = useState("all");
+    77→  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+    78→  const [videoFile, setVideoFile] = useState<File | null>(null);
+    79→  const [videoPreview, setVideoPreview] = useState<string | null>(null);
+    80→  const [previewImage, setPreviewImage] = useState<string | null>(null);
+    81→
+    82→  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    83→  const audioChunksRef = useRef<Blob[]>([]);
+    84→  const videoInputRef = useRef<HTMLInputElement>(null);
+    85→
+    86→  useEffect(() => { fetchProjects(); }, []);
+    87→
+    88→  const fetchProjects = async () => {
+    89→    try {
+    90→      const res = await fetch("/api/projects");
+    91→      const data = await res.json();
+    92→      if (data.success) setProjects(data.projects);
+    93→    } catch { toast({ title: "Failed to load projects", variant: "destructive" }); }
+    94→  };
+    95→
+    96→  // Voice
+    97→  const startRecording = async () => {
+    98→    try {
+    99→      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   100→      const recorder = new MediaRecorder(stream);
+   101→      audioChunksRef.current = [];
+   102→      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+   103→      recorder.onstop = async () => {
+   104→        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+   105→        setIsRecording(false);
+   106→        stream.getTracks().forEach((t) => t.stop());
+   107→        toast({ title: "Transcribing your voice..." });
+   108→        const formData = new FormData();
+   109→        formData.append("audio", blob, "recording.webm");
+   110→        try {
+   111→          const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+   112→          const data = await res.json();
+   113→          if (data.success && data.transcription) { setTextPrompt(data.transcription); toast({ title: "Voice transcribed!" }); }
+   114→          else toast({ title: "Transcription failed", description: "Try typing instead", variant: "destructive" });
+   115→        } catch { toast({ title: "Transcription error", variant: "destructive" }); }
+   116→      };
+   117→      recorder.start();
+   118→      mediaRecorderRef.current = recorder;
+   119→      setIsRecording(true);
+   120→    } catch { toast({ title: "Microphone access denied", variant: "destructive" }); }
+   121→  };
+   122→  const stopRecording = () => { mediaRecorderRef.current?.stop(); };
+   123→
+   124→  // Video Upload
+   125→  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+   126→    const file = e.target.files?.[0];
+   127→    if (!file) return;
+   128→    setVideoFile(file);
+   129→    setVideoPreview(URL.createObjectURL(file));
+   130→  };
+   131→  const analyzeUploadedVideo = async () => {
+   132→    if (!videoFile) return;
+   133→    toast({ title: "Analyzing your video..." });
+   134→    const formData = new FormData();
+   135→    formData.append("video", videoFile);
+   136→    try {
+   137→      const res = await fetch("/api/analyze-video", { method: "POST", body: formData });
+   138→      const data = await res.json();
+   139→      if (data.success && data.suggestedPrompt) { setTextPrompt(data.suggestedPrompt); toast({ title: "Video analyzed!" }); setInputMode("text"); }
+   140→    } catch { toast({ title: "Video analysis failed", variant: "destructive" }); }
+   141→  };
+   142→
+   143→  // Enhance
+   144→  const enhancePrompt = async () => {
+   145→    if (!textPrompt.trim()) return;
+   146→    setIsEnhancing(true);
+   147→    try {
+   148→      const res = await fetch("/api/enhance-prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: textPrompt, style: selectedStyle }) });
+   149→      const data = await res.json();
+   150→      if (data.success) { setEnhancedText(data.enhancedPrompt); toast({ title: "Prompt enhanced!" }); }
+   151→    } catch { toast({ title: "Enhancement failed", variant: "destructive" }); }
+   152→    finally { setIsEnhancing(false); }
+   153→  };
+   154→
+   155→  // Create Project
+   156→  const createProject = async (prompt: string, title?: string) => {
+   157→    const pTitle = title || prompt.slice(0, 40) + (prompt.length > 40 ? "..." : "");
+   158→    try {
+   159→      const res = await fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: pTitle, description: prompt, style: selectedStyle, aspectRatio: selectedAspect }) });
+   160→      const data = await res.json();
+   161→      if (data.success) {
+   162→        await fetch(`/api/projects/${data.project.id}/scenes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, enhancedPrompt: enhancedText || undefined }) });
+   163→        const projRes = await fetch(`/api/projects/${data.project.id}`);
+   164→        const projData = await projRes.json();
+   165→        if (projData.success) { setCurrentProject(projData.project); setCurrentView("studio"); }
+   166→        fetchProjects();
+   167→        setCreateDialogOpen(false);
+   168→        toast({ title: "Project created!" });
+   169→      }
+   170→    } catch { toast({ title: "Failed to create project", variant: "destructive" }); }
+   171→  };
+   172→
+   173→  // Add Scene
+   174→  const addScene = async () => {
+   175→    if (!currentProject || !newScenePrompt.trim()) return;
+   176→    try {
+   177→      const res = await fetch(`/api/projects/${currentProject.id}/scenes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: newScenePrompt, duration: parseInt(newSceneDuration), transition: newSceneTransition }) });
+   178→      const data = await res.json();
+   179→      if (data.success) { setNewScenePrompt(""); refreshProject(); toast({ title: "Scene added" }); }
+   180→    } catch { toast({ title: "Failed to add scene", variant: "destructive" }); }
+   181→  };
+   182→
+   183→  const refreshProject = async () => {
+   184→    if (!currentProject) return;
+   185→    const r = await fetch(`/api/projects/${currentProject.id}`);
+   186→    const d = await r.json();
+   187→    if (d.success) setCurrentProject(d.project);
+   188→    fetchProjects();
+   189→  };
+   190→
+   191→  const deleteScene = async (sceneId: string) => {
+   192→    if (!currentProject) return;
+   193→    await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "DELETE" });
+   194→    refreshProject(); toast({ title: "Scene removed" });
+   195→  };
+   196→
+   197→  const deleteProject = async (id: string) => {
+   198→    await fetch(`/api/projects/${id}`, { method: "DELETE" });
+   199→    fetchProjects();
+   200→    if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
+   201→    toast({ title: "Project deleted" });
+   202→  };
+   203→
+   204→  const generateVideo = async () => {
+   205→    if (!currentProject || currentProject.scenes.length === 0) return;
+   206→    setIsGenerating(true);
+   207→    try {
+   208→      const res = await fetch("/api/generate-video", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectId: currentProject.id }) });
+   209→      const data = await res.json();
+   210→      if (data.success) { refreshProject(); toast({ title: "Generation complete!", description: data.message }); }
+   211→    } catch { toast({ title: "Generation failed", variant: "destructive" }); }
+   212→    finally { setIsGenerating(false); }
+   213→  };
+   214→
+   215→  const generateSceneImage = async (sceneId: string, prompt: string) => {
+   216→    try {
+   217→      const res = await fetch("/api/generate-scene", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
+   218→      const data = await res.json();
+   219→      if (data.success && currentProject) {
+   220→        await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageUrl: data.imageUrl, status: "completed" }) });
+   221→        refreshProject(); toast({ title: "Scene generated!" });
+   222→      }
+   223→    } catch { toast({ title: "Scene generation failed", variant: "destructive" }); }
+   224→  };
+   225→
+   226→  const useClassicScene = (scene: ClassicScene) => {
+   227→    setTextPrompt(scene.prompt); setInputMode("text"); setCreateDialogOpen(true); setProjectTitle(scene.title);
+   228→  };
+   229→
+   230→  const copyText = (text: string) => { navigator.clipboard.writeText(text); toast({ title: "Copied!" }); };
+   231→
+   232→  const filteredScenes = CLASSIC_SCENES.filter((s) => sceneFilter === "all" || s.category === sceneFilter);
+   233→
+   234→  // ─── RENDER ──────────────────────────────────────────────
+   235→  return (
+   236→    <div className="min-h-screen flex flex-col bg-background">
+   237→      {/* ── Header ── */}
+   238→      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-lg">
+   239→        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+   240→          <button onClick={() => { if (currentView === "studio") { setCurrentView("home"); setCurrentProject(null); } else setCurrentView("home"); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+   241→            {currentView === "studio" && <ArrowLeft className="h-4 w-4" />}
+   242→            <Clapperboard className="h-5 w-5 text-primary" />
+   243→            <span className="font-bold text-lg tracking-tight">SceneForge<span className="text-muted-foreground font-normal text-sm ml-1">AI</span></span>
+   244→          </button>
+   245→          <nav className="flex items-center gap-1">
+   246→            {[["home","LayoutGrid","Home"],["create","Plus","Create"],["gallery","Film","Gallery"]].map(([v,Icon,l]) => (
+   247→              <Button key={v as string} variant={currentView === v ? "default" : "ghost"} size="sm" onClick={() => setCurrentView(v as typeof currentView)} className="rounded-lg">
+   248→                {v === "home" && <LayoutGrid className="h-4 w-4 mr-1.5" />}
+   249→                {v === "create" && <Plus className="h-4 w-4 mr-1.5" />}
+   250→                {v === "gallery" && <Film className="h-4 w-4 mr-1.5" />}
+   251→                <span className="hidden sm:inline">{l as string}</span>
+   252→              </Button>
+   253→            ))}
+   254→            {projects.length > 0 && (
+   255→              <Sheet>
+   256→                <SheetTrigger asChild>
+   257→                  <Button variant="outline" size="icon" className="ml-1 rounded-lg"><Layers className="h-4 w-4" /></Button>
+   258→                </SheetTrigger>
+   259→                <SheetContent><SheetHeader><SheetTitle>My Projects</SheetTitle></SheetHeader>
+   260→                  <ScrollArea className="h-[calc(100vh-100px)] mt-4"><div className="space-y-2 pr-3">
+   261→                    {projects.map((p) => (
+   262→                      <Card key={p.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => { setCurrentProject(p); setCurrentView("studio"); }}>
+   263→                        <CardContent className="p-3"><div className="flex items-center justify-between"><div className="min-w-0"><p className="font-medium text-sm truncate">{p.title}</p><p className="text-xs text-muted-foreground">{p.scenes.length} scenes · {p.style}</p></div><Badge variant={p.status === "completed" ? "default" : "outline"} className="ml-2 shrink-0 text-xs">{p.status}</Badge></div></CardContent>
+   264→                      </Card>))}
+   265→                  </div></ScrollArea>
+   266→                </SheetContent>
+   267→              </Sheet>)}
+   268→          </nav>
+   269→        </div>
+   270→      </header>
+   271→
+   272→      {/* ── Main ── */}
+   273→      <main className="flex-1">
+   274→        <AnimatePresence mode="wait">
+   275→
+   276→          {/* ═══ HOME ═══ */}
+   277→          {currentView === "home" && (
+   278→            <motion.div key="home" {...fadeUp} className="max-w-7xl mx-auto px-4 py-6 space-y-8">
+   279→              {/* Hero */}
+   280→              <section className="relative overflow-hidden rounded-2xl">
+   281→                <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: "url('/images/hero-bg.png')" }} />
+   282→                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/20" />
+   283→                <div className="relative z-10 px-6 py-12 sm:py-16 md:py-20 flex flex-col items-start justify-end min-h-[280px] sm:min-h-[340px]">
+   284→                  <Badge className="mb-3 bg-white/15 text-white border-white/20 backdrop-blur-sm"><Sparkles className="h-3 w-3 mr-1" />AI-Powered Video Creation</Badge>
+   285→                  <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight max-w-2xl">Create Stunning<br /><span className="text-amber-400">Cinematic Scenes</span></h1>
+   286→                  <p className="mt-3 text-white/80 text-sm sm:text-base max-w-lg">Transform your ideas into professional video scenes using text, voice, or video uploads. Powered by AI.</p>
+   287→                  <div className="flex flex-wrap gap-3 mt-6">
+   288→                    <Button size="lg" className="bg-white text-black hover:bg-white/90 rounded-xl" onClick={() => setCurrentView("create")}><Play className="h-4 w-4 mr-2" />Start Creating</Button>
+   289→                    <Button size="lg" variant="outline" className="border-white/30 text-white hover:bg-white/10 rounded-xl" onClick={() => setCurrentView("gallery")}><Image className="h-4 w-4 mr-2" />Browse Scenes</Button>
+   290→                  </div>
+   291→                </div>
+   292→              </section>
+   293→
+   294→              {/* Quick Actions */}
+   295→              <section><h2 className="text-xl font-bold mb-4">Quick Create</h2>
+   296→                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   297→                  {[[Wand2, "Text to Scene", "Describe your vision"], [Mic, "Voice to Scene", "Speak your idea aloud"], [Upload, "Video to Scene", "Upload & recreate"]].map(([Icon, title, desc], i) => (
+   298→                    <Card key={i} className="cursor-pointer hover:shadow-lg hover:border-primary/30 transition-all group" onClick={() => { setCurrentView("create"); if (i === 1) setTimeout(() => setInputMode("voice"), 100); if (i === 2) setTimeout(() => setInputMode("video"), 100); }}>
+   299→                      <CardContent className="p-5 flex items-center gap-4">
+   300→                        <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">{Icon && <Icon className="h-6 w-6 text-primary" />}</div>
+   301→                        <div><p className="font-semibold">{title as string}</p><p className="text-sm text-muted-foreground">{desc as string}</p></div>
+   302→                      </CardContent>
+   303→                    </Card>
+   304→                  ))}
+   305→                </div>
+   306→              </section>
+   307→
+   308→              {/* Recent */}
+   309→              {projects.length > 0 && (
+   310→                <section>
+   311→                  <div className="flex items-center justify-between mb-4"><h2 className="text-xl font-bold">Recent Projects</h2><Button variant="ghost" size="sm" onClick={() => setCurrentView("gallery")}>View All <ChevronRight className="h-4 w-4 ml-1" /></Button></div>
+   312→                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+   313→                    {projects.slice(0, 3).map((p) => (
+   314→                      <Card key={p.id} className="cursor-pointer hover:shadow-lg transition-all overflow-hidden group" onClick={() => { setCurrentProject(p); setCurrentView("studio"); }}>
+   315→                        {p.scenes[0]?.imageUrl && <div className="aspect-video overflow-hidden"><img src={p.scenes[0].imageUrl} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" /></div>}
+   316→                        <CardHeader className="pb-2"><div className="flex items-center justify-between"><CardTitle className="text-base truncate">{p.title}</CardTitle><Badge variant="outline" className="text-xs shrink-0">{p.style}</Badge></div><CardDescription className="text-xs">{p.scenes.length} scene{p.scenes.length !== 1 ? "s" : ""} · {p.aspectRatio}</CardDescription></CardHeader>
+   317→                      </Card>
+   318→                    ))}
+   319→                  </div>
+   320→                </section>)}
+   321→            </motion.div>)}
+   322→
+   323→          {/* ═══ CREATE ═══ */}
+   324→          {currentView === "create" && (
+   325→            <motion.div key="create" {...fadeUp} className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+   326→              <div><h2 className="text-2xl font-bold">Create New Scene</h2><p className="text-muted-foreground mt-1">Describe your vision, speak it aloud, or upload a video to recreate</p></div>
+   327→
+   328→              {/* Input Mode Tabs */}
+   329→              <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
+   330→                <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="text" className="gap-1.5"><Wand2 className="h-4 w-4" />Text</TabsTrigger><TabsTrigger value="voice" className="gap-1.5"><Mic className="h-4 w-4" />Voice</TabsTrigger><TabsTrigger value="video" className="gap-1.5"><Upload className="h-4 w-4" />Video</TabsTrigger></TabsList>
+   331→
+   332→                <TabsContent value="text" className="space-y-4 mt-4">
+   333→                  <Textarea placeholder="Describe your cinematic scene in detail... e.g., 'A lone astronaut standing on the edge of a crater, looking at Earth rising over the lunar horizon, golden hour lighting, 2001 Space Odyssey style'" className="min-h-[120px] resize-y text-base" value={textPrompt} onChange={(e) => setTextPrompt(e.target.value)} />
+   334→                  <div className="flex flex-wrap gap-2">
+   335→                    <Button variant="outline" size="sm" onClick={enhancePrompt} disabled={isEnhancing || !textPrompt.trim()}>{isEnhancing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1.5" />}{isEnhancing ? "Enhancing..." : "Enhance with AI"}</Button>
+   336→                    {textPrompt && <Button variant="ghost" size="sm" onClick={() => copyText(textPrompt)}><Copy className="h-4 w-4 mr-1.5" />Copy</Button>}
+   337→                  </div>
+   338→                  {enhancedText && (<Card className="border-primary/30 bg-primary/5"><CardContent className="p-4"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-medium text-primary mb-1"><Sparkles className="h-3 w-3 inline mr-1" />Enhanced Prompt</p><p className="text-sm">{enhancedText}</p></div><Button variant="ghost" size="icon" className="shrink-0 h-8 w-8" onClick={() => setEnhancedText("")}><X className="h-4 w-4" /></Button></div></CardContent></Card>)}
+   339→                </TabsContent>
+   340→
+   341→                <TabsContent value="voice" className="space-y-4 mt-4">
+   342→                  <Card className="border-dashed"><CardContent className="p-8 flex flex-col items-center gap-4">
+   343→                    {isRecording ? (<><div className="h-16 w-16 rounded-full bg-red-500/20 flex items-center justify-center animate-pulse"><MicOff className="h-8 w-8 text-red-500" /></div><p className="text-sm font-medium">Recording... Tap to stop</p><Button variant="destructive" onClick={stopRecording}><MicOff className="h-4 w-4 mr-2" />Stop Recording</Button></>
+   344→                    ) : (<><div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center"><Volume2 className="h-8 w-8 text-primary" /></div><p className="text-sm text-muted-foreground">Tap to start recording your scene description</p><Button onClick={startRecording}><Mic className="h-4 w-4 mr-2" />Start Recording</Button></>)}
+   345→                  </CardContent></Card>
+   346→                  {textPrompt && (<Card><CardContent className="p-4"><p className="text-xs font-medium mb-1">Transcription</p><p className="text-sm">{textPrompt}</p></CardContent></Card>)}
+   347→                </TabsContent>
+   348→
+   349→                <TabsContent value="video" className="space-y-4 mt-4">
+   350→                  <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} />
+   351→                  {!videoPreview ? (<Card className="border-dashed cursor-pointer" onClick={() => videoInputRef.current?.click()}><CardContent className="p-8 flex flex-col items-center gap-4"><Upload className="h-12 w-12 text-muted-foreground" /><div className="text-center"><p className="font-medium">Upload a Video</p><p className="text-sm text-muted-foreground">We&apos;ll analyze it and generate a similar scene</p></div><Button variant="outline"><Upload className="h-4 w-4 mr-2" />Choose File</Button></CardContent></Card>
+   352→                  ) : (<Card className="overflow-hidden"><div className="aspect-video bg-black"><video src={videoPreview} controls className="w-full h-full object-contain" /></div><CardContent className="p-4"><div className="flex items-center justify-between"><p className="text-sm font-medium truncate">{videoFile?.name}</p><div className="flex gap-2"><Button variant="ghost" size="sm" onClick={() => { setVideoFile(null); setVideoPreview(null); }}><X className="h-4 w-4 mr-1" />Remove</Button><Button size="sm" onClick={analyzeUploadedVideo}><Sparkles className="h-4 w-4 mr-1.5" />Analyze</Button></div></div></CardContent></Card>)}
+   353→                </TabsContent>
+   354→              </Tabs>
+   355→
+   356→              <Separator />
+   357→
+   358→              {/* Settings */}
+   359→              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   360→                <div className="space-y-2"><Label>Visual Style</Label><Select value={selectedStyle} onValueChange={setSelectedStyle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent></Select></div>
+   361→                <div className="space-y-2"><Label>Aspect Ratio</Label><Select value={selectedAspect} onValueChange={setSelectedAspect}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select></div>
+   362→                <div className="space-y-2"><Label>Project Title</Label><Input placeholder="My Video Project" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} /></div>
+   363→              </div>
+   364→
+   365→              {/* Create Button */}
+   366→              <div className="flex justify-end"><Button size="lg" className="rounded-xl" disabled={!textPrompt.trim()} onClick={() => createProject(textPrompt, projectTitle || undefined)}><Sparkles className="h-5 w-5 mr-2" />Create Scene</Button></div>
+   367→            </motion.div>)}
+   368→
+   369→          {/* ═══ GALLERY ═══ */}
+   370→          {currentView === "gallery" && (
+   371→            <motion.div key="gallery" {...fadeUp} className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+   372→              <div><h2 className="text-2xl font-bold">Scene Gallery</h2><p className="text-muted-foreground mt-1">Browse classic cinematic scenes to use as inspiration or starting points</p></div>
+   373→              <div className="flex gap-2 flex-wrap">
+   374→                {["all","nature","sci-fi","fantasy","classic"].map((f) => (<Button key={f} variant={sceneFilter === f ? "default" : "outline"} size="sm" onClick={() => setSceneFilter(f)} className="rounded-full capitalize">{f}</Button>))}
+   375→              </div>
+   376→              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+   377→                {filteredScenes.map((scene) => (
+   378→                  <Card key={scene.id} className="overflow-hidden group cursor-pointer hover:shadow-xl transition-all duration-300">
+   379→                    <div className="aspect-video relative overflow-hidden bg-muted">
+   380→                      {scene.image ? (<img src={scene.image} alt={scene.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />) : (<div className="w-full h-full bg-gradient-to-br from-purple-900/40 via-slate-900/60 to-cyan-900/40 flex items-center justify-center"><Film className="h-12 w-12 text-white/30" /></div>)}
+   381→                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Button className="rounded-full" onClick={() => useClassicScene(scene)}><Play className="h-5 w-5 mr-2" />Use This Scene</Button></div>
+   382→                      <Badge className="absolute top-3 left-3 capitalize text-xs">{scene.category}</Badge>
+   383→                    </div>
+   384→                    <CardContent className="p-4"><h3 className="font-semibold">{scene.title}</h3><p className="text-sm text-muted-foreground mt-1 line-clamp-2">{scene.description}</p><div className="flex items-center gap-2 mt-3"><Button variant="outline" size="sm" className="flex-1" onClick={() => useClassicScene(scene)}><Sparkles className="h-3.5 w-3.5 mr-1.5" />Use</Button><Button variant="ghost" size="sm" onClick={() => copyText(scene.prompt)}><Copy className="h-3.5 w-3.5" /></Button></div></CardContent>
+   385→                  </Card>))}
+   386→              </div>
+   387→            </motion.div>)}
+   388→
+   389→          {/* ═══ STUDIO ═══ */}
+   390→          {currentView === "studio" && currentProject && (
+   391→            <motion.div key="studio" {...fadeUp} className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+   392→              {/* Project Header */}
+   393→              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+   394→                <div><h2 className="text-2xl font-bold">{currentProject.title}</h2><p className="text-muted-foreground text-sm mt-0.5">{currentProject.scenes.length} scene{currentProject.scenes.length !== 1 ? "s" : ""} · {currentProject.style} · {currentProject.aspectRatio}</p></div>
+   395→                <div className="flex items-center gap-2">
+   396→                  <Badge variant={currentProject.status === "completed" ? "default" : currentProject.status === "generating" ? "secondary" : "outline"}>{currentProject.status}</Badge>
+   397→                  <Button onClick={generateVideo} disabled={isGenerating || currentProject.scenes.length === 0}>{isGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}{isGenerating ? "Generating..." : "Generate All Scenes"}</Button>
+   398→                </div>
+   399→              </div>
+   400→
+   401→              {/* Preview Area */}
+   402→              {currentProject.scenes.some((s) => s.imageUrl) && (
+   403→                <Card className="overflow-hidden"><div className="aspect-video bg-black relative"><img src={currentProject.scenes.find((s) => s.imageUrl)?.imageUrl || ""} alt="Preview" className="w-full h-full object-contain" /><div className="absolute bottom-3 left-3 right-3 flex items-center gap-2"><Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm">Scene 1 of {currentProject.scenes.length}</Badge><div className="ml-auto flex gap-1">{currentProject.scenes.map((s, i) => (<button key={s.id} onClick={() => s.imageUrl && setPreviewImage(s.imageUrl)} className={`h-8 w-12 rounded overflow-hidden border-2 ${s.imageUrl ? (previewImage === s.imageUrl ? "border-white" : "border-white/30") : "border-transparent"}`}><div className="w-full h-full bg-muted" />{s.imageUrl && <img src={s.imageUrl} className="w-full h-full object-cover" />}</button>))}</div></div></div></Card>
+   404→              )}
+   405→
+   406→              {/* Add Scene */}
+   407→              <Card><CardHeader className="pb-3"><CardTitle className="text-lg">Add New Scene</CardTitle></CardHeader><CardContent className="space-y-3">
+   408→                <div className="flex gap-3"><Textarea placeholder="Describe the next scene..." className="min-h-[80px] flex-1" value={newScenePrompt} onChange={(e) => setNewScenePrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey) addScene(); }} /><Button className="self-end shrink-0" disabled={!newScenePrompt.trim()} onClick={addScene}><Plus className="h-4 w-4 mr-1.5" />Add</Button></div>
+   409→                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+   410→                  <div className="space-y-1"><Label className="text-xs">Duration (s)</Label><Select value={newSceneDuration} onValueChange={setNewSceneDuration}><SelectTrigger className="h-9"><SelectValue /></SelectTrigger><SelectContent>{["1","2","3","4","5"].map((d) => <SelectItem key={d} value={d}>{d}s</SelectItem>)}</SelectContent></Select></div>
+   411→                  <div className="space-y-1"><Label className="text-xs">Transition</Label><Select value={newSceneTransition} onValueChange={setNewSceneTransition}><SelectTrigger className="h-9"><SelectValue /></SelectTrigger><SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></div>
+   412→                </div>
+   413→              </CardContent></Card>
+   414→
+   415→              {/* Scenes List */}
+   416→              <div><h3 className="text-lg font-semibold mb-3">Scenes ({currentProject.scenes.length})</h3>
+   417→                {currentProject.scenes.length === 0 ? (<Card className="border-dashed"><CardContent className="p-8 text-center"><Film className="h-10 w-10 mx-auto text-muted-foreground/40" /><p className="text-muted-foreground mt-3">No scenes yet. Add your first scene above.</p></CardContent></Card>
+   418→                ) : (<div className="space-y-3">
+   419→                  {currentProject.scenes.map((scene) => (
+   420→                    <Card key={scene.id} className="overflow-hidden"><div className="flex flex-col sm:flex-row">
+   421→                      <div className="sm:w-48 aspect-video sm:aspect-auto bg-muted relative shrink-0">{scene.imageUrl ? (<img src={scene.imageUrl} alt={`Scene ${scene.sceneNumber}`} className="w-full h-full object-cover" />) : (<div className="w-full h-full flex items-center justify-center"><Image className="h-8 w-8 text-muted-foreground/40" /></div>)}<Badge className="absolute top-2 left-2 text-xs">#{scene.sceneNumber}</Badge></div>
+   422→                      <CardContent className="p-4 flex-1 min-w-0"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="text-sm line-clamp-2">{scene.enhancedPrompt || scene.prompt}</p><div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground"><span className="flex items-center gap-1"><Clock className="h-3 w-3" />{scene.duration}s</span><Badge variant="outline" className="text-xs capitalize">{scene.transition}</Badge><Badge variant={scene.status === "completed" ? "default" : "outline"} className="text-xs capitalize">{scene.status}</Badge></div></div><div className="flex items-center gap-1 shrink-0"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => generateSceneImage(scene.id, scene.enhancedPrompt || scene.prompt)} disabled={scene.status === "generating"}><Eye className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deleteScene(scene.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button></div></div></CardContent>
+   423→                    </div></Card>))}
+   424→                </div>)}
+   425→              </div>
+   426→
+   427→              {/* Project Actions */}
+   428→              <div className="flex items-center justify-between pt-4 border-t"><Button variant="outline" onClick={() => deleteProject(currentProject.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-4 w-4 mr-2" />Delete Project</Button></div>
+   429→            </motion.div>)}
+   430→        </AnimatePresence>
+   431→      </main>
+   432→
+   433→      {/* ── Create Dialog (for classic scenes) ── */}
+   434→      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+   435→        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Create from Template</DialogTitle><DialogDescription>Customize and create a new project from this classic scene</DialogDescription></DialogHeader>
+   436→        <div className="space-y-4 py-2"><div className="space-y-2"><Label>Title</Label><Input value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} /></div><div className="space-y-2"><Label>Prompt</Label><Textarea className="min-h-[100px]" value={textPrompt} onChange={(e) => setTextPrompt(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="space-y-2"><Label>Style</Label><Select value={selectedStyle} onValueChange={setSelectedStyle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Aspect Ratio</Label><Select value={selectedAspect} onValueChange={setSelectedAspect}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select></div></div></div>
+   437→        <DialogFooter><Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button><Button onClick={() => createProject(textPrompt, projectTitle || undefined)}><Sparkles className="h-4 w-4 mr-2" />Create</Button></DialogFooter>
+   438→        </DialogContent>
+   439→      </Dialog>
+   440→
+   441→      {/* ── Image Preview Dialog ── */}
+   442→      <Dialog open={!!previewImage} onOpenChange={() => setPreviewImage(null)}>
+   443→        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden"><div className="aspect-video bg-black"><img src={previewImage || ""} alt="Preview" className="w-full h-full object-contain" /></div></DialogContent>
+   444→      </Dialog>
+   445→
+   446→      {/* ── Footer ── */}
+   447→      <footer className="border-t border-border bg-background mt-auto">
+   448→        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+   449→          <p>SceneForge AI — Professional AI Video Scene Creator</p>
+   450→          <p>Powered by AI · Create cinematic magic in seconds</p>
+   451→        </div>
+   452→      </footer>
+   453→    </div>
+   454→  );
+   455→}

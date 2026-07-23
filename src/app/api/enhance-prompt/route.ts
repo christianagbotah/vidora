@@ -15,20 +15,18 @@ export async function POST(req: NextRequest) {
     const zai = await ZAI.create();
 
     const styleContext = style
-      ? `The desired visual style is: ${style}.`
+      ? "The desired visual style is: " + style + "."
       : "Use a cinematic, professional film style.";
+
+    const systemPrompt =
+      "You are a professional cinematographer and video director. Enhance the user's video prompt into a detailed, vivid scene description suitable for AI image generation. Include specific details about: camera angle, lighting, color palette, mood, composition, and cinematic style. Keep it concise but rich in visual detail (2-3 sentences max). Output ONLY the enhanced description, no preamble or explanation.";
+
+    const userPrompt = styleContext + "\n\nOriginal prompt: \"" + prompt + "\"";
 
     const completion = await zai.chat.completions.create({
       messages: [
-        {
-          role: "assistant",
-          content:
-            "You are a professional cinematographer and video director. Enhance the user's video prompt into a detailed, vivid scene description suitable for AI image generation. Include specific details about: camera angle, lighting, color palette, mood, composition, and cinematic style. Keep it concise but rich in visual detail (2-3 sentences max). Output ONLY the enhanced description, no preamble or explanation.",
-        },
-        {
-          role: "user",
-          content: `${styleContext}\n\nOriginal prompt: "${prompt}"",
-        },
+        { role: "assistant", content: systemPrompt },
+        { role: "user", content: userPrompt },
       ],
       thinking: { type: "disabled" },
     });

@@ -16,7 +16,7 @@ export async function GET(
     console.error("Failed to fetch scenes:", error);
     return NextResponse.json(
       { success: false, error: "Failed to fetch scenes" },
-      status: 500
+      { status: 500 }
     );
   }
 }
@@ -33,7 +33,7 @@ export async function POST(
     if (!prompt) {
       return NextResponse.json(
         { success: false, error: "Prompt is required" },
-        status: 400
+        { status: 400 }
       );
     }
 
@@ -62,7 +62,7 @@ export async function POST(
     console.error("Failed to create scene:", error);
     return NextResponse.json(
       { success: false, error: "Failed to create scene" },
-      status: 500
+      { status: 500 }
     );
   }
 }
