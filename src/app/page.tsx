@@ -571,6 +571,9 @@ export default function HomePage() {
                     ) : (
                       <img src={mainPreviewImage || ""} alt="Preview" className="w-full h-full object-contain" />
                     )}
+                    {isAnyGenerating && (
+                      <div className="absolute top-3 right-3"><Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Generating</Badge></div>
+                    )}
                     <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2">
                       <Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm">Scene 1 of {currentProject.scenes.length}</Badge>
                       <div className="ml-auto flex gap-1">
@@ -609,12 +612,13 @@ export default function HomePage() {
                         className="sm:w-48 aspect-video sm:aspect-auto bg-muted relative shrink-0 cursor-pointer"
                         onClick={() => scene.videoUrl ? openVideoPreview(scene.videoUrl) : scene.imageUrl ? openImagePreview(scene.imageUrl) : null}
                       >
-                        {scene.status === "generating" ? (
-                          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-primary/5"><Loader2 className="h-8 w-8 animate-spin text-primary" /><span className="text-xs text-primary font-medium">Generating video...</span></div>
-                        ) : scene.imageUrl ? (
+                        {scene.imageUrl ? (
                           <img src={scene.imageUrl} alt={"Scene " + scene.sceneNumber} className="w-full h-full object-cover" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center"><ImageIcon className="h-8 w-8 text-muted-foreground/40" /></div>
+                        )}
+                        {scene.status === "generating" && (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 backdrop-blur-[2px]"><Loader2 className="h-8 w-8 animate-spin text-white" /><span className="text-xs text-white font-medium">Generating video...</span></div>
                         )}
                         <Badge className="absolute top-2 left-2 text-xs">#{scene.sceneNumber}</Badge>
                         {scene.videoUrl && (
