@@ -447,7 +447,7 @@ export default function HomePage() {
                   <p className="mt-3 text-white/80 text-sm sm:text-base max-w-lg">Transform your ideas into professional AI-generated videos using text, voice, or video uploads.</p>
                   <div className="flex flex-wrap gap-3 mt-6">
                     <Button size="lg" className="bg-white text-black hover:bg-white/90 rounded-xl" onClick={() => setCurrentView("create")}><Play className="h-4 w-4 mr-2" />Start Creating</Button>
-                    <Button size="lg" variant="outline" className="border-white/30 text-white hover:bg-white/10 rounded-xl" onClick={() => setCurrentView("gallery")}><ImageIcon className="h-4 w-4 mr-2" />Browse Scenes</Button>
+                    <Button size="lg" variant="outline" className="border-white/30 hover:bg-white/10 rounded-xl" style={{ color: "white" }} onClick={() => setCurrentView("gallery")}><ImageIcon className="h-4 w-4 mr-2" />Browse Scenes</Button>
                   </div>
                 </div>
               </section>
