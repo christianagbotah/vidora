@@ -28,6 +28,8 @@ model VideoScene {
   enhancedPrompt    String?
   imageUrl          String?
   imageBase64       String?
+  videoUrl          String?
+  taskId            String?
   duration          Int      @default(3) // seconds
   transition        String   @default("fade") // fade, slide, zoom, dissolve
   status            String   @default("pending") // pending, generating, completed, failed

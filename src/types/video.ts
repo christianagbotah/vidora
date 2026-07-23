@@ -5,6 +5,9 @@ export interface VideoScene {
   prompt: string;
   enhancedPrompt?: string | null;
   imageUrl?: string | null;
+  imageBase64?: string | null;
+  videoUrl?: string | null;
+  taskId?: string | null;
   duration: number;
   transition: string;
   status: string;

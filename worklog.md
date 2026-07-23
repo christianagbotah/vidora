@@ -87,3 +87,27 @@ Work Log:
 
 Stage Summary:
 - All lint errors fixed, browser-verified across all views
+---
+Task ID: 1
+Agent: main
+Task: Upgrade SceneForge AI from image generation to actual AI video generation
+
+Work Log:
+- Verified z-ai-web-dev-sdk has video generation support via zai.video.generations.create() and zai.async.result.query()
+- Updated Prisma schema with videoUrl and taskId fields on VideoScene model
+- Regenerated Prisma client and pushed schema
+- Updated VideoScene TypeScript type with videoUrl and taskId
+- Created /api/generate-video-scene/route.ts - generates single scene video with async polling
+- Created /api/video-status/route.ts - frontend polling endpoint for video task status
+- Updated /api/generate-video/route.ts - batch video generation with SDK video.generations.create()
+- Rewrote page.tsx with video players, polling system, Video icon, status badges
+- Verified all views (Home, Create, Gallery, Studio) render correctly
+- Lint passes with zero errors
+
+Stage Summary:
+- App now generates actual AI videos instead of static images
+- SDK flow: create video task → poll every 8 seconds → get video URL
+- Frontend shows video players when videos are ready
+- Thumbnail images still generated as scene previews
+- Polling system notifies users when videos complete
+
