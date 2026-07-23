@@ -569,7 +569,7 @@ export default function HomePage() {
                     {mainPreviewVideo ? (
                       <video src={mainPreviewVideo} controls autoPlay loop className="w-full h-full object-contain" />
                     ) : (
-                      <img src={mainPreviewImage || ""} alt="Preview" className="w-full h-full object-contain" />
+                      {mainPreviewImage && <img src={mainPreviewImage} alt="Preview" className="w-full h-full object-contain" />}
                     )}
                     {isAnyGenerating && (
                       <div className="absolute top-3 right-3"><Badge variant="secondary" className="bg-black/60 text-white border-0 backdrop-blur-sm"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Generating</Badge></div>
@@ -685,7 +685,7 @@ export default function HomePage() {
             {previewVideoUrl ? (
               <video src={previewVideoUrl} controls autoPlay className="w-full h-full object-contain" />
             ) : (
-              <img src={previewImage || ""} alt="Preview" className="w-full h-full object-contain" />
+              {previewImage && <img src={previewImage} alt="Preview" className="w-full h-full object-contain" />}
             )}
           </div>
         </DialogContent>
