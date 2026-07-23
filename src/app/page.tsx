@@ -680,7 +680,7 @@ export default function HomePage() {
 
       {/* ── Media Preview Dialog ── */}
       <Dialog open={!!previewVideoUrl || !!previewImage} onOpenChange={closePreview}>
-        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
+        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden"><DialogTitle className="sr-only">Media Preview</DialogTitle>
           <div className="aspect-video bg-black">
             {previewVideoUrl ? (
               <video src={previewVideoUrl} controls autoPlay className="w-full h-full object-contain" />
