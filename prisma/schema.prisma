@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model VideoProject {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  style       String   @default("cinematic")
+  aspectRatio String   @default("16:9")
+ status      String   @default("draft") // draft, generating, completed, failed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  scenes      VideoScene[]
+}
+
+model VideoScene {
+  id                String   @id @default(cuid())
+  projectId         String
+  project           VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sceneNumber       Int
+  prompt            String
+  enhancedPrompt    String?
+  imageUrl          String?
+  imageBase64       String?
+  duration          Int      @default(3) // seconds
+  transition        String   @default("fade") // fade, slide, zoom, dissolve
+  status            String   @default("pending") // pending, generating, completed, failed
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  @@index([projectId])
+}
+
+model GenerationHistory {
+  id          String   @id @default(cuid())
+  prompt      String
+  inputType   String   @default("text") // text, voice, video
+  style       String?
+  createdAt   DateTime @default(now())
+}
