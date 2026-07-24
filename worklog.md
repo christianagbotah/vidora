@@ -276,3 +276,32 @@ Stage Summary:
 - Drag-and-drop editing, TTS narration, quality export
 - Production-ready landing page with features, testimonials
 ---
+Task ID: 12
+Agent: main
+Task: Fix critical bugs + implement groundbreaking advanced features
+
+Work Log:
+- **BUG FIX 1**: Created missing `/api/projects/[id]/characters/upload/route.ts` — character image upload was completely broken because the route didn't exist. Now accepts FormData with image file and characterId, saves to public/generated/characters/, stores imageUrl and imageBase64 in DB
+- **BUG FIX 2**: Fixed `/api/generate-narration/route.ts` — was using `result.audio` but z-ai TTS SDK returns a standard Response object. Changed to `response.arrayBuffer()` → `Buffer.from(new Uint8Array(arrayBuffer))`. Also added text chunking (900 char max per TTS request), multi-voice support (7 voices), speed control, and GET endpoint for available voices
+- **BUG FIX 3**: Fixed `/api/generate-video/route.ts` polling — was only checking for `status === "SUCCESS"` but z-ai API may return other values. Added `isTaskComplete()` handling SUCCESS/COMPLETED/SUCCEEDED/DONE/FINISHED/COMPLETE, `isTaskFailed()` for FAIL/FAILED/ERROR/CANCELLED. Added early URL extraction (if video URL appears even while PROCESSING), regex URL extraction fallback, full response logging on first poll and status changes. Increased max attempts from 40 (10min) to 80 (20min). Added retry for scenes stuck in "generating" with no taskId
+- Updated Prisma schema with new fields: `narrationVoice`, `mood`, `cameraMove`, `musicMood` on VideoScene; `voiceId` on Character
+- Created `/api/enhance-scene/route.ts` — AI Director Mode API. Takes scene prompt + optional mood/camera/lighting, returns enhanced prompt with professional cinematographic details. GET returns available camera moves (18), moods (14), lighting styles (14)
+- Created `/api/check-continuity/route.ts` — AI Scene Continuity Checker. Analyzes all scenes for visual consistency, character continuity, narrative flow, and cinematography issues. Returns continuity score and actionable issues with severity and fix suggestions
+- Updated TypeScript types with ContinuityIssue interface, new scene fields
+- Complete frontend rewrite (2655 lines) with all advanced features:
+  - AI Director Mode: per-scene mood, camera movement, lighting selectors + AI Enhance button
+  - AI Continuity Checker: one-click analysis with score display and issue resolution
+  - Multi-voice narration: 7 TTS voices with per-character assignment
+  - Character voice assignment dropdown in character panel
+  - Enhanced character panel with upload, AI portrait, voice, delete
+  - Professional landing page with animated hero, features, how-it-works, testimonials
+  - Studio view with full scene timeline, drag-drop, progress tracking
+  - All bugs fixed: upload works, TTS works with correct API, video polling handles all status values
+
+Stage Summary:
+- 3 critical bugs fixed (upload, TTS, video polling)
+- 2 new groundbreaking AI APIs (Director Mode, Continuity Checker)
+- Full frontend rewrite with 2655 lines of professional code
+- Lint passes clean, browser verified with 0 errors
+- All views rendering correctly: Home, Create, Studio, Gallery
+---

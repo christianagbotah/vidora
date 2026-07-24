@@ -34,8 +34,12 @@ model VideoScene {
   visualNote     String?                       // extracted visual direction
   dialogue       String?                       // extracted dialogue/narration
   characterIds   String?                       // JSON array of character IDs involved in scene
-  referenceImageUrl String?                   // uploaded/generared reference image for scene
+  referenceImageUrl String?                   // uploaded/generated reference image for scene
   narrationUrl   String?                       // generated TTS narration audio URL
+  narrationVoice String?                       // which TTS voice was used
+  mood           String?                       // emotional mood of the scene (dramatic, happy, dark, etc.)
+  cameraMove     String?                       // camera movement directive (zoom_in, pan_left, tracking, etc.)
+  musicMood      String?                       // background music mood (epic, calm, tense, joyful)
   imageUrl       String?
   imageBase64    String?
   videoUrl       String?
@@ -56,6 +60,7 @@ model Character {
   role           String?                       // protagonist, supporting, narrator, background
   description    String?                       // physical appearance, clothing, personality
   stylePrompt    String?                       // AI-optimized character description for consistency
+  voiceId        String?                       // assigned TTS voice ID for this character
   imageUrl       String?                       // reference image (uploaded or AI-generated)
   imageBase64    String?                       // for uploaded images stored as base64
   createdAt      DateTime @default(now())

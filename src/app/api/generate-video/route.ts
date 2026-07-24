@@ -46,19 +46,56 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 5)
   throw new Error(label + ": max retries exceeded");
 }
 
+/**
+ * Extract video URL from the async result — handles multiple possible response structures.
+ */
 function extractVideoUrl(result: Record<string, unknown>): string | null {
+  // Check nested video_result array
   if (result.video_result && Array.isArray(result.video_result) && result.video_result.length > 0) {
     const first = result.video_result[0] as Record<string, unknown>;
     if (first.url && typeof first.url === "string") return first.url;
+    if (first.video_url && typeof first.video_url === "string") return first.video_url;
   }
+  // Check top-level fields
   if (result.video_url && typeof result.video_url === "string") return result.video_url;
   if (result.url && typeof result.url === "string") return result.url;
   if (result.video && typeof result.video === "string") return result.video;
+  if (result.output && typeof result.output === "string") return result.output;
+  if (result.result && typeof result.result === "string") return result.result;
+  // Check nested result object
+  if (result.result && typeof result.result === "object" && result.result !== null) {
+    const nested = result.result as Record<string, unknown>;
+    if (nested.url && typeof nested.url === "string") return nested.url;
+    if (nested.video_url && typeof nested.video_url === "string") return nested.video_url;
+    if (nested.video && typeof nested.video === "string") return nested.video;
+  }
+  // Check data field
+  if (result.data && typeof result.data === "object" && result.data !== null) {
+    const data = result.data as Record<string, unknown>;
+    if (data.url && typeof data.url === "string") return data.url;
+    if (data.video_url && typeof data.video_url === "string") return data.video_url;
+  }
   return null;
 }
 
+/**
+ * Check if the task status indicates completion — handles multiple API conventions.
+ */
+function isTaskComplete(status: string): boolean {
+  const s = status.toUpperCase().trim();
+  return s === "SUCCESS" || s === "COMPLETED" || s === "SUCCEEDED" || s === "DONE" || s === "FINISHED" || s === "COMPLETE";
+}
+
+function isTaskFailed(status: string): boolean {
+  const s = status.toUpperCase().trim();
+  return s === "FAIL" || s === "FAILED" || s === "ERROR" || s === "CANCELLED" || s === "CANCELED" || s === "REJECTED";
+}
+
 async function createSceneTask(
-  scene: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null },
+  scene: {
+    id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null;
+    imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null;
+  },
   videoSize: string,
   thumbSize: string,
   zai: Awaited<ReturnType<typeof ZAI.create>>
@@ -88,7 +125,7 @@ async function createSceneTask(
     }
   }
 
-  // Determine reference image URL (scene-specific or character-based)
+  // Determine reference image URL
   let referenceImage: string | undefined;
   if (scene.referenceImageUrl) {
     referenceImage = scene.referenceImageUrl;
@@ -102,7 +139,7 @@ async function createSceneTask(
     } catch { /* ignore parse errors */ }
   }
 
-  // Create video generation task (with optional image reference for character animation)
+  // Create video generation task
   const videoParams: Record<string, unknown> = {
     prompt: scenePrompt,
     quality: "quality",
@@ -118,7 +155,7 @@ async function createSceneTask(
 
   const task = await withRetry(
     () => zai.video.generations.create(videoParams),
-    `Scene ${scene.sceneNumber} video task${referenceImage ? ' (with image ref)' : ''}`
+    `Scene ${scene.sceneNumber} video task${referenceImage ? " (with image ref)" : ""}`
   );
 
   await db.videoScene.update({ where: { id: scene.id }, data: { taskId: task.id, status: "generating" } });
@@ -132,34 +169,64 @@ async function pollTaskUntilDone(
   sceneNumber: number,
   zai: Awaited<ReturnType<typeof ZAI.create>>
 ): Promise<string | null> {
-  const MAX_ATTEMPTS = 40; // 40 * 15s = 600s = 10 minutes
+  const MAX_ATTEMPTS = 80; // 80 * 15s = 1200s = 20 minutes
   const POLL_INTERVAL = 15000;
+  let lastLoggedStatus = "";
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     await sleep(POLL_INTERVAL);
 
     try {
       const result = await zai.async.result.query(taskId);
-      const status = result.task_status;
+      const resultObj = result as unknown as Record<string, unknown>;
+      const status = String(resultObj.task_status || resultObj.status || "UNKNOWN");
 
-      console.log(`Scene ${sceneNumber} (${taskId}): poll ${i + 1}/${MAX_ATTEMPTS} -> ${status}`);
+      // Log on first poll and on status change
+      if (i === 0 || status !== lastLoggedStatus) {
+        const keys = Object.keys(resultObj).join(",");
+        console.log(`Scene ${sceneNumber} (${taskId}): poll ${i + 1}/${MAX_ATTEMPTS} -> ${status} [keys: ${keys}]`);
+        lastLoggedStatus = status;
+      } else if ((i + 1) % 10 === 0) {
+        // Progress log every 10 polls even if status unchanged
+        console.log(`Scene ${sceneNumber} (${taskId}): poll ${i + 1}/${MAX_ATTEMPTS} -> ${status} (still waiting)`);
+      }
 
-      if (status === "SUCCESS") {
-        const videoUrl = extractVideoUrl(result as unknown as Record<string, unknown>);
+      // Check for completion with multiple status conventions
+      if (isTaskComplete(status)) {
+        const videoUrl = extractVideoUrl(resultObj);
         if (videoUrl) {
           await db.videoScene.update({ where: { id: sceneId }, data: { videoUrl, status: "completed" } });
-          console.log(`Scene ${sceneNumber}: video ready!`);
+          console.log(`Scene ${sceneNumber}: video ready! URL: ${videoUrl.slice(0, 80)}...`);
           return videoUrl;
         }
-        console.error(`Scene ${sceneNumber}: SUCCESS but no URL. Keys: ${Object.keys(result).join(",")}`);
+        // SUCCESS but no URL — log full response for debugging
+        console.error(`Scene ${sceneNumber}: ${status} but no URL found. Full response:`, JSON.stringify(resultObj).slice(0, 500));
+        // Try harder — check if there's ANY string field that looks like a URL
+        const allValues = JSON.stringify(resultObj);
+        const urlMatch = allValues.match(/https?:\/\/[^\s"']+/);
+        if (urlMatch) {
+          const extractedUrl = urlMatch[0];
+          await db.videoScene.update({ where: { id: sceneId }, data: { videoUrl: extractedUrl, status: "completed" } });
+          console.log(`Scene ${sceneNumber}: extracted URL from response: ${extractedUrl.slice(0, 80)}...`);
+          return extractedUrl;
+        }
         await db.videoScene.update({ where: { id: sceneId }, data: { status: "failed" } });
         return null;
       }
 
-      if (status === "FAIL") {
-        console.error(`Scene ${sceneNumber}: task failed on server`);
+      // Check for failure
+      if (isTaskFailed(status)) {
+        console.error(`Scene ${sceneNumber}: task ${status}. Response:`, JSON.stringify(resultObj).slice(0, 300));
         await db.videoScene.update({ where: { id: sceneId }, data: { status: "failed" } });
         return null;
+      }
+
+      // Additional check: even if status is PROCESSING/PENDING, maybe the video URL is already available
+      const earlyUrl = extractVideoUrl(resultObj);
+      if (earlyUrl) {
+        console.log(`Scene ${sceneNumber}: found video URL while status=${status}, using it`);
+        await db.videoScene.update({ where: { id: sceneId }, data: { videoUrl: earlyUrl, status: "completed" } });
+        return earlyUrl;
       }
     } catch (pollErr) {
       const msg = pollErr instanceof Error ? pollErr.message : String(pollErr);
@@ -173,7 +240,7 @@ async function pollTaskUntilDone(
     }
   }
 
-  console.error(`Scene ${sceneNumber}: polling timed out after ${MAX_ATTEMPTS} attempts`);
+  console.error(`Scene ${sceneNumber}: polling timed out after ${MAX_ATTEMPTS} attempts (${MAX_ATTEMPTS * POLL_INTERVAL / 1000}s)`);
   return null;
 }
 
@@ -195,13 +262,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
     }
 
-    // Only process pending scenes (skip failed and completed)
+    // Process pending scenes only (also retry scenes stuck in "generating" with no taskId)
     const scenesToProcess = project.scenes.filter(
-      (s) => !s.videoUrl && s.status === "pending"
+      (s) => !s.videoUrl && (s.status === "pending" || (s.status === "generating" && !s.taskId))
     );
 
     if (scenesToProcess.length === 0) {
-      const hasGenerating = project.scenes.some((s) => s.status === "generating");
+      const hasGenerating = project.scenes.some((s) => s.status === "generating" && s.taskId);
       if (hasGenerating) {
         return NextResponse.json({
           success: true,
@@ -229,12 +296,12 @@ export async function POST(req: NextRequest) {
       await db.videoScene.update({ where: { id: scene.id }, data: { status: "generating" } });
     }
 
-    // Return immediately — all work in background
+    // Return immediately — all work happens in background
     (async () => {
       const zai = await ZAI.create();
       const taskIds: { sceneId: string; sceneNumber: number; taskId: string }[] = [];
 
-      // Phase 1: Create video tasks (sequential to avoid rate limits)
+      // Phase 1: Create video tasks sequentially to avoid rate limits
       for (let i = 0; i < scenesToProcess.length; i++) {
         const scene = scenesToProcess[i];
         try {
@@ -249,7 +316,7 @@ export async function POST(req: NextRequest) {
         if (i < scenesToProcess.length - 1) await sleep(8000);
       }
 
-      // Phase 2: Poll for completion (sequential, one at a time)
+      // Phase 2: Poll for completion sequentially
       console.log(`Project ${projectId}: ${taskIds.length} tasks created, polling...`);
       for (const entry of taskIds) {
         try {
@@ -270,14 +337,15 @@ export async function POST(req: NextRequest) {
       } else {
         const completed = allScenes.filter((s) => s.videoUrl).length;
         const failed = allScenes.filter((s) => s.status === "failed").length;
-        console.log(`Project ${projectId}: done with ${completed} completed, ${failed} failed`);
+        const pending = allScenes.filter((s) => !s.videoUrl && s.status !== "failed").length;
+        console.log(`Project ${projectId}: done with ${completed} completed, ${failed} failed, ${pending} pending`);
       }
     })();
 
     const skipped = project.scenes.length - scenesToProcess.length;
     return NextResponse.json({
       success: true,
-      message: `Generating ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}${skipped > 0 ? " (" + skipped + " already done)" : ""}. Videos will appear as they complete.`,
+      message: `Generating ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}${skipped > 0 ? ` (${skipped} already done)` : ""}. Videos will appear as they complete.`,
       sceneCount: scenesToProcess.length,
       totalScenes: project.scenes.length,
     });

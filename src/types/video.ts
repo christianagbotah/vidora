@@ -5,6 +5,7 @@ export interface Character {
   role?: string | null;
   description?: string | null;
   stylePrompt?: string | null;
+  voiceId?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
   createdAt: string;
@@ -23,6 +24,10 @@ export interface VideoScene {
   characterIds?: string | null;
   referenceImageUrl?: string | null;
   narrationUrl?: string | null;
+  narrationVoice?: string | null;
+  mood?: string | null;
+  cameraMove?: string | null;
+  musicMood?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
   videoUrl?: string | null;
@@ -72,6 +77,14 @@ export interface DetectedCharacter {
   role: string;
   description: string;
   stylePrompt?: string;
+}
+
+export interface ContinuityIssue {
+  type: "inconsistency" | "suggestion" | "warning";
+  sceneIndex: number;
+  description: string;
+  fix: string;
+  severity: "low" | "medium" | "high";
 }
 
 export type InputMode = "text" | "voice" | "video" | "script";
