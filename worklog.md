@@ -244,3 +244,35 @@ Stage Summary:
 - Auto-commit/push system active via auto-git.sh (runs every 10s)
 - Worklog maintained at /home/z/my-project/worklog.md
 ---
+Task ID: 11
+Agent: main
+Task: Major professional upgrade - 8 enhancements for production-ready AI video studio
+
+Work Log:
+- Created TTS narration API (`/api/generate-narration/route.ts`) — generates AI narration audio for scene dialogue using z-ai-web-dev-sdk TTS
+- Enhanced split-scenes with brand character recognition — KNOWN_CHARACTERS map with 25+ characters (PAW Patrol, Bluey, Spider-Man, CoComelon, Disney, SpongeBob, etc.)
+- Created enhanced export video API (`/api/export-video/route.ts`) — 4 quality presets (720p/1080p/4K), 5 transitions (fade/dissolve/wipe/slide/cut), mp4/webm format, optional title card
+- Created scene reorder API (`/api/projects/[id]/scenes/reorder/route.ts`) — drag-and-drop reordering with sceneNumber updates
+- Added `narrationUrl` field to Prisma schema and TypeScript types
+- Added `stylePrompt` to DetectedCharacter type
+- Complete frontend rewrite of page.tsx with all 8 enhancements:
+  1. Brand Character Recognition — known characters auto-detected with accurate visual descriptions
+  2. AI Scene Thumbnails — prominent thumbnails in scene cards
+  3. Drag & Drop Reordering — @dnd-kit sortable scene cards with grip handles
+  4. Transition Effects Selector — per-scene transition dropdown (fade/dissolve/wipe/slide/cut)
+  5. Export Quality Options — export dialog with quality/transition/format/title card settings
+  6. Voice Narration — TTS generate button per scene with audio player
+  7. Professional Landing Page — features showcase (6 cards), how-it-works (3 steps), testimonials (3 quotes)
+  8. Professional Footer — sticky footer with branding, links, and Z.ai credit
+- SortableSceneCard sub-component for drag-and-drop scene list
+- Export dialog with quality presets using new /api/export-video endpoint
+- All lint errors resolved (JSX fragment patterns fixed)
+- Pushed to GitHub: commit 3cb039c
+
+Stage Summary:
+- Full professional AI video studio with 8 new enhancements
+- 4 new/updated API endpoints, complete frontend rewrite
+- Brand character recognition for 25+ popular characters
+- Drag-and-drop editing, TTS narration, quality export
+- Production-ready landing page with features, testimonials
+---
