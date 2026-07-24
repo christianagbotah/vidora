@@ -1,0 +1,776 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useState, useRef, useCallback } from "react";
+     4→import { motion, AnimatePresence } from "framer-motion";
+     5→import { useAppStore } from "@/store/useAppStore";
+     6→import { useToast } from "@/hooks/use-toast";
+     7→import type { VideoProject, ClassicScene, InputMode } from "@/types/video";
+     8→import {
+     9→  Film, Mic, MicOff, Upload, Sparkles, Play, Plus, Trash2,
+    10→  ChevronRight, Wand2, ArrowLeft, ImageIcon, LayoutGrid, Loader2,
+    11→  X, Download, Layers, Palette, Clapperboard,
+    12→  Copy, Eye, Volume2, Clock, Video, RefreshCw,
+    13→} from "lucide-react";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+    16→import { Input } from "@/components/ui/input";
+    17→import { Textarea } from "@/components/ui/textarea";
+    18→import { Badge } from "@/components/ui/badge";
+    19→import { Progress } from "@/components/ui/progress";
+    20→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    21→import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+    22→import { ScrollArea } from "@/components/ui/scroll-area";
+    23→import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+    24→import { Label } from "@/components/ui/label";
+    25→import { Separator } from "@/components/ui/separator";
+    26→import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+    27→import DeviceSimulator from "@/components/DeviceSimulator";
+    28→
+    29→// --- Data ---
+    30→const CLASSIC_SCENES: ClassicScene[] = [
+    31→  { id: "sunset", title: "Golden Sunset", description: "Dramatic ocean sunset with golden hour lighting", prompt: "Cinematic wide shot of a breathtaking ocean sunset, golden hour lighting casting warm amber rays across gentle waves, dramatic clouds painted in deep orange and magenta, film grain texture, professional cinematography, 4K quality", image: "/images/scene-sunset.png", category: "nature" },
+    32→  { id: "cyberpunk", title: "Neon City", description: "Futuristic cyberpunk metropolis with neon lights", prompt: "Futuristic cyberpunk city at night, neon signs reflecting on rain-soaked streets, holographic billboards, flying vehicles in the distance, cinematic wide shot, moody atmosphere, deep purple and electric cyan color palette, professional film look", image: "/images/scene-cyberpunk.png", category: "sci-fi" },
+    33→  { id: "fantasy", title: "Enchanted Forest", description: "Magical forest with bioluminescent trees", prompt: "Enchanted ancient forest with massive bioluminescent trees, magical glowing particles floating in the air, mystical fog weaving between trunks, ethereal teal and gold lighting, fairy tale atmosphere, cinematic depth of field", image: "/images/scene-fantasy.png", category: "fantasy" },
+    34→  { id: "mountain", title: "Epic Peaks", description: "Aerial mountain landscape above clouds at sunrise", prompt: "Dramatic aerial shot of snow-capped mountain peaks piercing through a sea of clouds at sunrise, golden sun rays breaking through the cloud layer, epic landscape photography, warm and cool contrast, cinematic wide angle composition", image: "/images/scene-mountain.png", category: "nature" },
+    35→  { id: "noir", title: "Film Noir Alley", description: "Moody black-and-white alley with dramatic shadows", prompt: "Classic film noir style alley at night, dramatic chiaroscuro lighting, rain-slicked cobblestones reflecting a single street lamp, silhouettes in fog, black and white with high contrast, vintage 1940s cinematic style, deep shadows", image: "", category: "classic" },
+    36→  { id: "space", title: "Cosmic Voyage", description: "Deep space with nebulas and distant galaxies", prompt: "Deep space vista with vibrant colorful nebula clouds in purple and teal, a massive spiral galaxy visible in the distance, scattered star field, cinematic composition with sense of scale and wonder, ultra high detail, 8K quality", image: "", category: "sci-fi" },
+    37→];
+    38→
+    39→const STYLES = [
+    40→  { value: "cinematic", label: "Cinematic" }, { value: "anime", label: "Anime" },
+    41→  { value: "photorealistic", label: "Photorealistic" }, { value: "oil-painting", label: "Oil Painting" },
+    42→  { value: "watercolor", label: "Watercolor" }, { value: "noir", label: "Film Noir" },
+    43→  { value: "retro", label: "Retro/Vintage" }, { value: "3d-render", label: "3D Render" },
+    44→];
+    45→
+    46→const ASPECTS = [
+    47→  { value: "16:9", label: "16:9 Landscape" }, { value: "9:16", label: "9:16 Portrait" },
+    48→  { value: "1:1", label: "1:1 Square" }, { value: "4:3", label: "4:3 Classic" },
+    49→  { value: "21:9", label: "21:9 Ultra Wide" },
+    50→];
+    51→
+    52→const TRANSITIONS = [
+    53→  { value: "fade", label: "Fade" }, { value: "slide", label: "Slide" },
+    54→  { value: "zoom", label: "Zoom" }, { value: "dissolve", label: "Dissolve" },
+    55→];
+    56→
+    57→const DURATIONS = [
+    58→  { value: 15, label: "15 seconds" },
+    59→  { value: 30, label: "30 seconds" },
+    60→  { value: 60, label: "1 minute" },
+    61→  { value: 120, label: "2 minutes" },
+    62→  { value: 180, label: "3 minutes" },
+    63→  { value: 300, label: "5 minutes" },
+    64→];
+    65→
+    66→const fadeUp = {
+    67→  initial: { opacity: 0, y: 20 }, animate: { opacity: 1, y: 0 },
+    68→  exit: { opacity: 0, y: -10 }, transition: { duration: 0.3 },
+    69→};
+    70→
+    71→// ─── Main Page ───────────────────────────────────────────
+    72→export default function HomePage() {
+    73→  const { currentView, projects, currentProject, isGenerating, isEnhancing, isRecording,
+    74→    setCurrentView, setProjects, setCurrentProject, setIsGenerating, setIsEnhancing, setIsRecording } = useAppStore();
+    75→  const { toast } = useToast();
+    76→
+    77→  const [inputMode, setInputMode] = useState<InputMode>("text");
+    78→  const [textPrompt, setTextPrompt] = useState("");
+    79→  const [enhancedText, setEnhancedText] = useState("");
+    80→  const [selectedStyle, setSelectedStyle] = useState("cinematic");
+    81→  const [selectedAspect, setSelectedAspect] = useState("16:9");
+    82→  const [selectedDuration, setSelectedDuration] = useState(60);
+    83→  const [projectTitle, setProjectTitle] = useState("");
+    84→  const [newScenePrompt, setNewScenePrompt] = useState("");
+    85→  const [newSceneTransition, setNewSceneTransition] = useState("fade");
+    86→  const [sceneFilter, setSceneFilter] = useState("all");
+    87→  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+    88→  const [videoFile, setVideoFile] = useState<File | null>(null);
+    89→  const [videoPreview, setVideoPreview] = useState<string | null>(null);
+    90→  const [previewImage, setPreviewImage] = useState<string | null>(null);
+    91→  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+    92→  const [generatingScenes, setGeneratingScenes] = useState<Set<string>>(new Set());
+    93→  const [expandedSceneId, setExpandedSceneId] = useState<string | null>(null);
+    94→  const [isExporting, setIsExporting] = useState(false);
+    95→  const [isCreatingProject, setIsCreatingProject] = useState(false);
+    96→
+    97→  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    98→  const audioChunksRef = useRef<Blob[]>([]);
+    99→  const videoInputRef = useRef<HTMLInputElement>(null);
+   100→  const autoGenTriggeredRef = useRef<Set<string>>(new Set());
+   101→  const projectPollTimerRef = useRef<NodeJS.Timeout | null>(null);
+   102→  const prevSceneStatesRef = useRef<Map<string, string>>(new Map());
+   103→
+   104→  // ── Auto-generate on studio load ──
+   105→  useEffect(() => {
+   106→    if (currentView !== "studio" || !currentProject?.scenes?.length || isGenerating) return;
+   107→    if (autoGenTriggeredRef.current.has(currentProject.id)) return;
+   108→    const hasPending = currentProject.scenes.some((s) => !s.videoUrl && s.status === "pending");
+   109→    if (hasPending) {
+   110→      autoGenTriggeredRef.current.add(currentProject.id);
+   111→      setTimeout(() => generateVideo(currentProject), 600);
+   112→    }
+   113→  }, [currentView, currentProject?.id]);
+   114→
+   115→  // ── Fetch projects on mount ──
+   116→  useEffect(() => { fetchProjects(); }, []);
+   117→
+   118→  // ── Cleanup poll timer on unmount ──
+   119→  useEffect(() => {
+   120→    return () => { if (projectPollTimerRef.current) clearInterval(projectPollTimerRef.current); };
+   121→  }, []);
+   122→
+   123→  // ── Project-level polling: refresh every 15s when scenes are generating ──
+   124→  useEffect(() => {
+   125→    if (!currentProject?.scenes) return;
+   126→    const hasGenerating = currentProject.scenes.some((s) => s.status === "generating");
+   127→    if (hasGenerating) {
+   128→      if (projectPollTimerRef.current) clearInterval(projectPollTimerRef.current);
+   129→      projectPollTimerRef.current = setInterval(() => refreshProject(), 15000);
+   130→      setGeneratingScenes((prev) => {
+   131→        const next = new Set(prev);
+   132→        currentProject.scenes.forEach((s) => { if (s.status === "generating") next.add(s.id); });
+   133→        return next;
+   134→      });
+   135→      const t = setTimeout(() => refreshProject(), 5000);
+   136→      return () => { clearTimeout(t); if (projectPollTimerRef.current) clearInterval(projectPollTimerRef.current); };
+   137→    } else {
+   138→      if (projectPollTimerRef.current) { clearInterval(projectPollTimerRef.current); projectPollTimerRef.current = null; }
+   139→      setGeneratingScenes(new Set());
+   140→    }
+   141→  }, [currentProject?.id, currentProject?.scenes?.map((s) => s.status).join(",")]);
+   142→
+   143→  // ── Detect scene status changes → toasts ──
+   144→  useEffect(() => {
+   145→    if (!currentProject?.scenes) return;
+   146→    for (const scene of currentProject.scenes) {
+   147→      const prev = prevSceneStatesRef.current.get(scene.id);
+   148→      if (prev === "generating" && scene.status === "completed" && scene.videoUrl) {
+   149→        toast({ title: "Video ready!", description: "Scene " + scene.sceneNumber + " generated." });
+   150→      } else if (prev === "generating" && scene.status === "failed") {
+   151→        toast({ title: "Scene " + scene.sceneNumber + " failed", description: "Try retrying.", variant: "destructive" });
+   152→      }
+   153→      prevSceneStatesRef.current.set(scene.id, scene.status);
+   154→    }
+   155→  }, [currentProject?.scenes]);
+   156→
+   157→  // ── Data fetching ──
+   158→  const fetchProjects = async () => {
+   159→    try {
+   160→      const res = await fetch("/api/projects");
+   161→      if (!res.ok) return;
+   162→      const data = await res.json();
+   163→      if (data.success) setProjects(data.projects);
+   164→    } catch { /* ignore */ }
+   165→  };
+   166→
+   167→  const refreshProject = async () => {
+   168→    if (!currentProject) return;
+   169→    try {
+   170→      const res = await fetch(`/api/projects/${currentProject.id}`);
+   171→      if (res.ok) {
+   172→        const data = await res.json();
+   173→        if (data.success) {
+   174→          setCurrentProject(data.project);
+   175→          setProjects((prev) => prev.map((p) => p.id === data.project.id ? data.project : p));
+   176→        }
+   177→      }
+   178→    } catch { /* ignore */ }
+   179→  };
+   180→
+   181→  // ── Voice recording ──
+   182→  const startRecording = async () => {
+   183→    try {
+   184→      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+   185→      const recorder = new MediaRecorder(stream);
+   186→      audioChunksRef.current = [];
+   187→      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+   188→      recorder.onstop = async () => {
+   189→        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+   190→        setIsRecording(false); stream.getTracks().forEach((t) => t.stop());
+   191→        toast({ title: "Transcribing..." });
+   192→        const formData = new FormData(); formData.append("audio", blob, "recording.webm");
+   193→        try {
+   194→          const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+   195→          const data = await res.json();
+   196→          if (data.success && data.transcription) { setTextPrompt(data.transcription); toast({ title: "Transcribed!" }); }
+   197→          else toast({ title: "Transcription failed", variant: "destructive" });
+   198→        } catch { toast({ title: "Transcription error", variant: "destructive" }); }
+   199→      };
+   200→      recorder.start(); mediaRecorderRef.current = recorder; setIsRecording(true);
+   201→    } catch { toast({ title: "Microphone denied", variant: "destructive" }); }
+   202→  };
+   203→  const stopRecording = () => { mediaRecorderRef.current?.stop(); };
+   204→
+   205→  // ── Video upload ──
+   206→  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+   207→    const file = e.target.files?.[0];
+   208→    if (!file) return;
+   209→    setVideoFile(file); setVideoPreview(URL.createObjectURL(file));
+   210→  };
+   211→  const analyzeUploadedVideo = async () => {
+   212→    if (!videoFile) return;
+   213→    toast({ title: "Analyzing video..." });
+   214→    const formData = new FormData(); formData.append("video", videoFile);
+   215→    try {
+   216→      const res = await fetch("/api/analyze-video", { method: "POST", body: formData });
+   217→      const data = await res.json();
+   218→      if (data.success) { setTextPrompt(data.suggestedPrompt || data.description); toast({ title: "Analyzed!" }); }
+   219→      else toast({ title: "Analysis failed", variant: "destructive" });
+   220→    } catch { toast({ title: "Analysis error", variant: "destructive" }); }
+   221→  };
+   222→
+   223→  // ── Enhance prompt ──
+   224→  const enhancePrompt = async () => {
+   225→    if (!textPrompt.trim()) return;
+   226→    setIsEnhancing(true);
+   227→    try {
+   228→      const res = await fetch("/api/enhance-prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: textPrompt, style: selectedStyle }) });
+   229→      const data = await res.json();
+   230→      if (data.success) { setEnhancedText(data.enhancedPrompt); setTextPrompt(data.enhancedPrompt); toast({ title: "Prompt enhanced!" }); }
+   231→      else toast({ title: "Enhancement failed", variant: "destructive" });
+   232→    } catch { toast({ title: "Enhancement error", variant: "destructive" }); }
+   233→    finally { setIsEnhancing(false); }
+   234→  };
+   235→
+   236→  // ── Create project (split-scenes flow) ──
+   237→  const createProject = async (promptOverride?: string, titleOverride?: string) => {
+   238→    const prompt = promptOverride || textPrompt;
+   239→    if (!prompt.trim()) { toast({ title: "Enter a prompt first", variant: "destructive" }); return; }
+   240→    setIsCreatingProject(true);
+   241→    try {
+   242→      // Step 1: Split prompt into scenes
+   243→      toast({ title: "Analyzing your prompt..." });
+   244→      const splitRes = await fetch("/api/split-scenes", {
+   245→        method: "POST", headers: { "Content-Type": "application/json" },
+   246→        body: JSON.stringify({ prompt, targetDuration: selectedDuration }),
+   247→      });
+   248→      const splitData = await splitRes.json();
+   249→      if (!splitData.success) { toast({ title: "Failed to analyze prompt", variant: "destructive" }); return; }
+   250→
+   251→      const sceneDescriptions = splitData.scenes || [prompt];
+   252→
+   253→      // Step 2: Create project
+   254→      const projRes = await fetch("/api/projects", {
+   255→        method: "POST", headers: { "Content-Type": "application/json" },
+   256→        body: JSON.stringify({
+   257→          title: titleOverride || projectTitle || ("Video — " + new Date().toLocaleDateString()),
+   258→          style: selectedStyle, aspectRatio: selectedAspect, targetDuration: selectedDuration,
+   259→        }),
+   260→      });
+   261→      const projData = await projRes.json();
+   262→      if (!projData.success) { toast({ title: "Failed to create project", variant: "destructive" }); return; }
+   263→      const project = projData.project;
+   264→
+   265→      // Step 3: Create scenes
+   266→      if (sceneDescriptions.length > 0) {
+   267→        await fetch(`/api/projects/${project.id}/scenes`, {
+   268→          method: "POST", headers: { "Content-Type": "application/json" },
+   269→          body: JSON.stringify({
+   270→            scenes: sceneDescriptions.map((s: string, i: number) => ({
+   271→              prompt: s, duration: 10, transition: "fade",
+   272→            })),
+   273→          }),
+   274→        });
+   275→      }
+   276→
+   277→      // Refresh and go to studio
+   278→      const fullRes = await fetch(`/api/projects/${project.id}`);
+   279→      const fullData = await fullRes.json();
+   280→      if (fullData.success) {
+   281→        setCurrentProject(fullData.project);
+   282→        setProjects((prev) => [fullData.project, ...prev]);
+   283→        setCurrentView("studio");
+   284→        setCreateDialogOpen(false);
+   285→        toast({ title: "Project created with " + sceneDescriptions.length + " scenes!", description: "Video generation will start automatically." });
+   286→        // Clear form
+   287→        setTextPrompt(""); setEnhancedText(""); setProjectTitle("");
+   288→        setVideoFile(null); setVideoPreview(null);
+   289→      }
+   290→    } catch (err) {
+   291→      toast({ title: "Error creating project", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+   292→    } finally { setIsCreatingProject(false); }
+   293→  };
+   294→
+   295→  // ── Generate all videos for a project ──
+   296→  const generateVideo = async (projectOverride?: VideoProject) => {
+   297→    const proj = projectOverride || currentProject;
+   298→    if (!proj || !proj.scenes || proj.scenes.length === 0) {
+   299→      toast({ title: "No scenes to generate", variant: "destructive" }); return;
+   300→    }
+   301→    setIsGenerating(true);
+   302→    try {
+   303→      const res = await fetch("/api/generate-video", {
+   304→        method: "POST", headers: { "Content-Type": "application/json" },
+   305→        body: JSON.stringify({ projectId: proj.id }),
+   306→      });
+   307→      if (!res.ok) { toast({ title: "Generation failed", description: "Server error (" + res.status + ")", variant: "destructive" }); return; }
+   308→      const data = await res.json();
+   309→      if (data.success) {
+   310→        setTimeout(() => refreshProject(), 2000);
+   311→        toast({ title: "Video generation started!", description: data.message });
+   312→      } else { toast({ title: "Generation failed", description: data.error || "Unknown error", variant: "destructive" }); }
+   313→    } catch (err) {
+   314→      toast({ title: "Generation failed", description: err instanceof Error ? err.message : "Network error", variant: "destructive" });
+   315→    } finally { setIsGenerating(false); }
+   316→  };
+   317→
+   318→  // ── Retry a failed scene ──
+   319→  const retryScene = async (scene: { id: string; enhancedPrompt?: string | null; prompt: string }) => {
+   320→    if (!currentProject) return;
+   321→    try {
+   322→      await fetch(`/api/projects/${currentProject.id}/scenes/${scene.id}`, {
+   323→        method: "PUT", headers: { "Content-Type": "application/json" },
+   324→        body: JSON.stringify({ status: "pending", taskId: null }),
+   325→      });
+   326→      toast({ title: "Retrying scene..." });
+   327→      generateSceneVideo(scene.id, scene.enhancedPrompt || scene.prompt);
+   328→    } catch { toast({ title: "Retry failed", variant: "destructive" }); }
+   329→  };
+   330→
+   331→  // ── Generate single scene video ──
+   332→  const generateSceneVideo = async (sceneId: string, prompt: string) => {
+   333→    if (!currentProject) return;
+   334→    setGeneratingScenes((prev) => new Set(prev).add(sceneId));
+   335→    setCurrentProject({ ...currentProject, scenes: currentProject.scenes.map((s) => s.id === sceneId ? { ...s, status: "generating" } : s) });
+   336→    try {
+   337→      const res = await fetch("/api/generate-video-scene", {
+   338→        method: "POST", headers: { "Content-Type": "application/json" },
+   339→        body: JSON.stringify({ prompt, sceneId, projectId: currentProject.id }),
+   340→      });
+   341→      if (!res.ok) { toast({ title: "Generation failed", description: "Server error", variant: "destructive" }); refreshProject(); return; }
+   342→      const data = await res.json();
+   343→      if (data.success) {
+   344→        if (data.videoUrl) { toast({ title: "Video generated!" }); setGeneratingScenes((prev) => { const n = new Set(prev); n.delete(sceneId); return n; }); }
+   345→        else { toast({ title: "Generating video...", description: "We will notify you when ready." }); }
+   346→        refreshProject();
+   347→      } else { toast({ title: "Failed", description: data.error, variant: "destructive" }); refreshProject(); }
+   348→    } catch {
+   349→      toast({ title: "Failed", variant: "destructive" }); refreshProject();
+   350→    } finally { setGeneratingScenes((prev) => { const n = new Set(prev); n.delete(sceneId); return n; }); }
+   351→  };
+   352→
+   353→  // ── Export/concatenate full video ──
+   354→  const exportFullVideo = async () => {
+   355→    if (!currentProject?.scenes) return;
+   356→    const completedCount = currentProject.scenes.filter((s) => s.videoUrl).length;
+   357→    if (completedCount === 0) { toast({ title: "No videos ready", variant: "destructive" }); return; }
+   358→    setIsExporting(true);
+   359→    toast({ title: "Exporting full video...", description: "Concatenating " + completedCount + " scenes." });
+   360→    try {
+   361→      const res = await fetch("/api/concatenate-video", {
+   362→        method: "POST", headers: { "Content-Type": "application/json" },
+   363→        body: JSON.stringify({ projectId: currentProject.id }),
+   364→      });
+   365→      const data = await res.json();
+   366→      if (data.success) {
+   367→        toast({ title: "Full video exported!", description: data.message });
+   368→        refreshProject();
+   369→      } else { toast({ title: "Export failed", description: data.error, variant: "destructive" }); }
+   370→    } catch { toast({ title: "Export error", variant: "destructive" }); }
+   371→    finally { setIsExporting(false); }
+   372→  };
+   373→
+   374→  // ── Delete/add scenes ──
+   375→  const addScene = async () => {
+   376→    if (!currentProject || !newScenePrompt.trim()) return;
+   377→    try {
+   378→      await fetch(`/api/projects/${currentProject.id}/scenes`, {
+   379→        method: "POST", headers: { "Content-Type": "application/json" },
+   380→        body: JSON.stringify({ prompt: newScenePrompt, duration: 10, transition: newSceneTransition }),
+   381→      });
+   382→      setNewScenePrompt(""); refreshProject();
+   383→      toast({ title: "Scene added" });
+   384→    } catch { toast({ title: "Failed to add scene", variant: "destructive" }); }
+   385→  };
+   386→
+   387→  const deleteScene = async (sceneId: string) => {
+   388→    if (!currentProject) return;
+   389→    try {
+   390→      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "DELETE" });
+   391→      refreshProject(); toast({ title: "Scene removed" });
+   392→    } catch { toast({ title: "Failed", variant: "destructive" }); }
+   393→  };
+   394→
+   395→  const deleteProject = async (id: string) => {
+   396→    try {
+   397→      await fetch(`/api/projects/${id}`, { method: "DELETE" });
+   398→      fetchProjects();
+   399→      if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
+   400→      toast({ title: "Project deleted" });
+   401→    } catch { toast({ title: "Failed", variant: "destructive" }); }
+   402→  };
+   403→
+   404→  const openVideoPreview = (url: string) => setPreviewVideoUrl(url);
+   405→  const openImagePreview = (url: string) => setPreviewImage(url);
+   406→  const closePreview = () => { setPreviewVideoUrl(null); setPreviewImage(null); };
+   407→  const handleSelectClassicScene = (scene: ClassicScene) => {
+   408→    setTextPrompt(scene.prompt); setInputMode("text"); setCreateDialogOpen(true); setProjectTitle(scene.title);
+   409→  };
+   410→
+   411→  const isAnyGenerating = currentProject?.scenes.some((s) => s.status === "generating") || false;
+   412→  const completedSceneCount = currentProject?.scenes.filter((s) => s.videoUrl).length || 0;
+   413→
+   414→  // ─── RENDER ────────────────────────────────────────────
+   415→  return (
+   416→    <div className="min-h-screen flex flex-col bg-background">
+   417→      {/* ── Header ── */}
+   418→      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
+   419→        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+   420→          <button onClick={() => currentView !== "home" ? setCurrentView("home") : null} className="flex items-center gap-2 font-bold text-lg hover:opacity-80 transition-opacity">
+   421→            <Clapperboard className="h-5 w-5 text-primary" />
+   422→            <span>Vidora</span>
+   423→          </button>
+   424→          <div className="flex items-center gap-2">
+   425→            {currentView === "home" && (
+   426→              <Button onClick={() => setCurrentView("create")} size="sm"><Sparkles className="h-4 w-4 mr-1" />Create</Button>
+   427→            )}
+   428→            {currentView !== "home" && (
+   429→              <Button variant="ghost" size="sm" onClick={() => setCurrentView("home")}><ArrowLeft className="h-4 w-4 mr-1" />Back</Button>
+   430→            )}
+   431→          </div>
+   432→        </div>
+   433→      </header>
+   434→
+   435→      {/* ── Main Content ── */}
+   436→      <main className="flex-1">
+   437→        <AnimatePresence mode="wait">
+   438→          {/* ═══ HOME VIEW ═══ */}
+   439→          {currentView === "home" && (
+   440→            <motion.div key="home" {...fadeUp} className="max-w-7xl mx-auto px-4 py-8 space-y-12">
+   441→              {/* Hero */}
+   442→              <div className="text-center space-y-4">
+   443→                <h1 className="text-4xl sm:text-5xl font-bold tracking-tight">Create Stunning <span className="text-primary">AI Videos</span></h1>
+   444→                <p className="text-muted-foreground text-lg max-w-2xl mx-auto">Transform your ideas into cinematic video scenes. Text, voice, or video — Vidora brings your vision to life.</p>
+   445→                <div className="flex gap-3 justify-center">
+   446→                  <Button size="lg" onClick={() => setCurrentView("create")}><Sparkles className="h-5 w-5 mr-2" />Start Creating</Button>
+   447→                  <Button size="lg" variant="outline" onClick={() => setCurrentView("gallery")}><LayoutGrid className="h-5 w-5 mr-2" />Gallery</Button>
+   448→                </div>
+   449→              </div>
+   450→
+   451→              {/* Quick Create Cards */}
+   452→              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   453→                {[
+   454→                  { icon: <Wand2 className="h-6 w-6" />, title: "Text to Video", desc: "Describe your scene and let AI generate it", action: () => { setInputMode("text"); setCurrentView("create"); } },
+   455→                  { icon: <Mic className="h-6 w-6" />, title: "Voice to Video", desc: "Speak your idea and we'll create it", action: () => { setInputMode("voice"); setCurrentView("create"); } },
+   456→                  { icon: <Upload className="h-6 w-6" />, title: "Video to Video", desc: "Upload a video and we'll recreate it", action: () => { setInputMode("video"); setCurrentView("create"); } },
+   457→                ].map((card) => (
+   458→                  <Card key={card.title} className="cursor-pointer hover:shadow-lg transition-shadow group" onClick={card.action}>
+   459→                    <CardHeader><div className="mb-2 text-primary group-hover:scale-110 transition-transform">{card.icon}</div><CardTitle className="text-lg">{card.title}</CardTitle><CardDescription>{card.desc}</CardDescription></CardHeader>
+   460→                  </Card>
+   461→                ))}
+   462→              </div>
+   463→
+   464→              {/* Recent Projects */}
+   465→              {projects.length > 0 && (
+   466→                <div>
+   467→                  <h2 className="text-xl font-semibold mb-4">Recent Projects</h2>
+   468→                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+   469→                    {projects.slice(0, 6).map((p) => (
+   470→                      <Card key={p.id} className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => { setCurrentProject(p); setCurrentView("studio"); }}>
+   471→                        <CardHeader className="pb-2"><CardTitle className="text-base truncate">{p.title}</CardTitle></CardHeader>
+   472→                        <CardContent>
+   473→                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+   474→                            <Badge variant="outline" className="text-xs">{p.aspectRatio}</Badge>
+   475→                            <Badge variant="outline" className="text-xs">{p.style}</Badge>
+   476→                            <span>{p.targetDuration}s target</span>
+   477→                            <Badge variant={p.status === "completed" ? "default" : p.status === "generating" ? "secondary" : p.status === "failed" ? "destructive" : "outline"} className="text-xs ml-auto capitalize">{p.status}</Badge>
+   478→                          </div>
+   479→                          <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+   480→                            <Film className="h-3 w-3" /><span>{p.scenes?.length || 0} scenes</span>
+   481→                            {p.finalVideoUrl && <Video className="h-3 w-3 ml-1" />}
+   482→                          </div>
+   483→                        </CardContent>
+   484→                      </Card>
+   485→                    ))}
+   486→                  </div>
+   487→                </div>
+   488→              )}
+   489→            </motion.div>
+   490→          )}
+   491→
+   492→          {/* ═══ CREATE VIEW ═══ */}
+   493→          {currentView === "create" && (
+   494→            <motion.div key="create" {...fadeUp} className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+   495→              <div><h1 className="text-2xl font-bold">Create New Video</h1><p className="text-muted-foreground mt-1">Describe your scene and choose settings</p></div>
+   496→
+   497→              {/* Title + Duration + Style + Aspect */}
+   498→              <Card>
+   499→                <CardContent className="pt-6 space-y-4">
+   500→                  <div className="space-y-2"><Label>Project Title</Label><Input placeholder="My Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} /></div>
+   501→                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+   502→                    <div className="space-y-2"><Label>Duration</Label>
+   503→                      <Select value={String(selectedDuration)} onValueChange={(v) => setSelectedDuration(Number(v))}>
+   504→                        <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{DURATIONS.map((d) => <SelectItem key={d.value} value={String(d.value)}>{d.label}</SelectItem>)}</SelectContent>
+   505→                      </Select>
+   506→                      <p className="text-xs text-muted-foreground">~{Math.ceil(selectedDuration / 10)} scenes</p>
+   507→                    </div>
+   508→                    <div className="space-y-2"><Label>Style</Label>
+   509→                      <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+   510→                        <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
+   511→                      </Select>
+   512→                    </div>
+   513→                    <div className="space-y-2"><Label>Aspect Ratio</Label>
+   514→                      <Select value={selectedAspect} onValueChange={setSelectedAspect}>
+   515→                        <SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent>
+   516→                      </Select>
+   517→                    </div>
+   518→                    <div className="space-y-2"><Label>Transition</Label>
+   519→                      <Select value="fade"><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select>
+   520→                    </div>
+   521→                  </div>
+   522→                </CardContent>
+   523→              </Card>
+   524→
+   525→              {/* Input Tabs */}
+   526→              <Card>
+   527→                <CardContent className="pt-6">
+   528→                  <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
+   529→                    <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="text"><Wand2 className="h-4 w-4 mr-1" />Text</TabsTrigger><TabsTrigger value="voice"><Mic className="h-4 w-4 mr-1" />Voice</TabsTrigger><TabsTrigger value="video"><Upload className="h-4 w-4 mr-1" />Video</TabsTrigger></TabsList>
+   530→                    <TabsContent value="text" className="space-y-3 mt-3">
+   531→                      <Textarea placeholder="Describe your video scene in detail..." className="min-h-[140px]" value={textPrompt} onChange={(e) => setTextPrompt(e.target.value)} />
+   532→                      <div className="flex gap-2">
+   533→                        <Button variant="outline" size="sm" onClick={enhancePrompt} disabled={isEnhancing || !textPrompt.trim()}><Palette className="h-4 w-4 mr-1" />{isEnhancing ? "Enhancing..." : "Enhance Prompt"}</Button>
+   534→                      </div>
+   535→                      {enhancedText && enhancedText !== textPrompt && (<Card className="bg-muted/50"><CardContent className="p-3"><p className="text-xs font-medium text-muted-foreground mb-1">Enhanced version:</p><p className="text-sm">{enhancedText}</p></CardContent></Card>)}
+   536→                    </TabsContent>
+   537→                    <TabsContent value="voice" className="space-y-3 mt-3">
+   538→                      <div className="flex flex-col items-center gap-4 py-8 border-2 border-dashed rounded-lg">
+   539→                        <Button size="lg" variant={isRecording ? "destructive" : "default"} onClick={isRecording ? stopRecording : startRecording}>
+   540→                          {isRecording ? <><MicOff className="h-5 w-5 mr-2" />Stop Recording</> : <><Mic className="h-5 w-5 mr-2" />Start Recording</>}
+   541→                        </Button>
+   542→                        <p className="text-sm text-muted-foreground">{isRecording ? "Recording... speak now" : "Click to record your voice"}</p>
+   543→                      </div>
+   544→                    </TabsContent>
+   545→                    <TabsContent value="video" className="space-y-3 mt-3">
+   546→                      <div className="border-2 border-dashed rounded-lg p-8 text-center space-y-4">
+   547→                        {videoPreview ? (<><video src={videoPreview} controls className="max-h-64 rounded-lg mx-auto" /><div className="flex gap-2 justify-center"><Button size="sm" onClick={analyzeUploadedVideo}>Analyze &amp; Use</Button><Button size="sm" variant="outline" onClick={() => { setVideoFile(null); setVideoPreview(null); }}>Remove</Button></div></>
+   548→                        ) : (<><Upload className="h-10 w-10 mx-auto text-muted-foreground/40" /><p className="text-sm text-muted-foreground">Upload a video to analyze</p><input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} /><Button variant="outline" onClick={() => videoInputRef.current?.click()}>Choose File</Button></>)}
+   549→                      </div>
+   550→                    </TabsContent>
+   551→                  </Tabs>
+   552→                </CardContent>
+   553→              </Card>
+   554→
+   555→              {/* Create Button */}
+   556→              <div className="flex gap-3">
+   557→                <Button className="flex-1" size="lg" onClick={() => createProject()} disabled={isCreatingProject || (!textPrompt.trim() && !videoFile)}>
+   558→                  {isCreatingProject ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Creating...</> : <><Sparkles className="h-5 w-5 mr-2" />Create &amp; Generate</>}
+   559→                </Button>
+   560→                <Button variant="outline" size="lg" onClick={() => setCurrentView("gallery")}><LayoutGrid className="h-5 w-5 mr-2" />Templates</Button>
+   561→              </div>
+   562→            </motion.div>
+   563→          )}
+   564→
+   565→          {/* ═══ GALLERY VIEW ═══ */}
+   566→          {currentView === "gallery" && (
+   567→            <motion.div key="gallery" {...fadeUp} className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+   568→              <div><h1 className="text-2xl font-bold">Scene Templates</h1><p className="text-muted-foreground mt-1">Choose a template to get started quickly</p></div>
+   569→              <div className="flex gap-2 flex-wrap">
+   570→                {["all", "nature", "sci-fi", "fantasy", "classic"].map((cat) => (
+   571→                  <Button key={cat} size="sm" variant={sceneFilter === cat ? "default" : "outline"} onClick={() => setSceneFilter(cat)}>{cat.charAt(0).toUpperCase() + cat.slice(1)}</Button>
+   572→                ))}
+   573→              </div>
+   574→              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+   575→                {CLASSIC_SCENES.filter((s) => sceneFilter === "all" || s.category === sceneFilter).map((scene) => (
+   576→                  <Card key={scene.id} className="cursor-pointer hover:shadow-lg transition-shadow overflow-hidden group">
+   577→                    <div className="aspect-video bg-muted relative">{scene.image ? <img src={scene.image} alt={scene.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" /> : <div className="w-full h-full flex items-center justify-center"><ImageIcon className="h-12 w-12 text-muted-foreground/30" /></div>}
+   578→                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Button size="sm"><Sparkles className="h-4 w-4 mr-1" />Use</Button></div>
+   579→                    <Badge className="absolute top-2 right-2 text-xs">{scene.category}</Badge>
+   580→                    </div>
+   581→                    <CardHeader className="pb-2"><CardTitle className="text-base">{scene.title}</CardTitle><CardDescription className="text-xs">{scene.description}</CardDescription></CardHeader>
+   582→                    <CardContent className="pt-0"><Button variant="outline" size="sm" className="w-full" onClick={() => handleSelectClassicScene(scene)}><Copy className="h-4 w-4 mr-1" />Use Template</Button></CardContent>
+   583→                  </Card>
+   584→                ))}
+   585→              </div>
+   586→            </motion.div>
+   587→          )}
+   588→
+   589→          {/* ═══ STUDIO VIEW ═══ */}
+   590→          {currentView === "studio" && currentProject && (
+   591→            <motion.div key="studio" {...fadeUp} className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+   592→              {/* Project Header */}
+   593→              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+   594→                <div><h1 className="text-2xl font-bold">{currentProject.title}</h1>
+   595→                  <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+   596→                    <Badge variant="outline">{currentProject.aspectRatio}</Badge><Badge variant="outline">{currentProject.style}</Badge>
+   597→                    <span>{currentProject.targetDuration}s target</span>
+   598→                    <Badge variant={currentProject.status === "completed" ? "default" : currentProject.status === "generating" ? "secondary" : "outline"} className="capitalize">{currentProject.status}</Badge>
+   599→                  </div>
+   600→                </div>
+   601→                <div className="flex gap-2">
+   602→                  <Button variant="outline" onClick={exportFullVideo} disabled={isExporting || completedSceneCount === 0}>
+   603→                    {isExporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+   604→                    {isExporting ? "Exporting..." : "Export Video"}
+   605→                  </Button>
+   606→                  <Button onClick={() => generateVideo(currentProject)} disabled={isGenerating || isAnyGenerating || !currentProject.scenes.length}>
+   607→                    {(isGenerating || isAnyGenerating) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+   608→                    {(isGenerating || isAnyGenerating) ? "Generating..." : "Generate All"}
+   609→                  </Button>
+   610→                </div>
+   611→              </div>
+   612→
+   613→              {/* Progress bar when generating */}
+   614→              {isAnyGenerating && (
+   615→                <Card className="bg-muted/30">
+   616→                  <CardContent className="p-4">
+   617→                    <div className="flex items-center justify-between mb-2">
+   618→                      <span className="text-sm font-medium">Generating scenes...</span>
+   619→                      <span className="text-sm text-muted-foreground">{completedSceneCount}/{currentProject.scenes.length} completed</span>
+   620→                    </div>
+   621→                    <Progress value={(completedSceneCount / currentProject.scenes.length) * 100} className="h-2" />
+   622→                  </CardContent>
+   623→                </Card>
+   624→              )}
+   625→
+   626→              {/* Final Video */}
+   627→              {currentProject.finalVideoUrl && (
+   628→                <Card>
+   629→                  <CardHeader><CardTitle className="text-lg">Final Video</CardTitle></CardHeader>
+   630→                  <CardContent>
+   631→                    <DeviceSimulator aspectRatio={currentProject.aspectRatio} showLabel={false}>
+   632→                      <video src={currentProject.finalVideoUrl} controls className="w-full h-full object-contain" />
+   633→                    </DeviceSimulator>
+   634→                  </CardContent>
+   635→                </Card>
+   636→              )}
+   637→
+   638→              {/* Add Scene */}
+   639→              <Card>
+   640→                <CardHeader><CardTitle className="text-lg">Add Scene</CardTitle></CardHeader>
+   641→                <CardContent>
+   642→                  <div className="flex flex-col sm:flex-row gap-2">
+   643→                    <Textarea placeholder="Describe a new scene..." className="min-h-[60px] flex-1" value={newScenePrompt} onChange={(e) => setNewScenePrompt(e.target.value)} />
+   644→                    <div className="flex gap-2 sm:flex-col">
+   645→                      <Select value={newSceneTransition} onValueChange={setNewSceneTransition}><SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger><SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select>
+   646→                      <Button onClick={addScene} disabled={!newScenePrompt.trim()}><Plus className="h-4 w-4 mr-1" />Add</Button>
+   647→                    </div>
+   648→                  </div>
+   649→                </CardContent>
+   650→              </Card>
+   651→
+   652→              {/* Scenes List */}
+   653→              <div><h3 className="text-lg font-semibold mb-3">Scenes ({currentProject.scenes.length})</h3>
+   654→                {currentProject.scenes.length === 0 ? (
+   655→                  <Card className="border-dashed"><CardContent className="p-8 text-center"><Film className="h-10 w-10 mx-auto text-muted-foreground/40" /><p className="text-muted-foreground mt-3">No scenes yet. Add your first scene above.</p></CardContent></Card>
+   656→                ) : (
+   657→                  <div className="space-y-3">
+   658→                    {currentProject.scenes.map((scene) => (
+   659→                      <Card key={scene.id} className="overflow-hidden">
+   660→                        <div className="flex flex-col sm:flex-row">
+   661→                          {/* Thumbnail/Video Preview */}
+   662→                          <div className="sm:w-56 aspect-video sm:aspect-auto bg-muted relative shrink-0 cursor-pointer" onClick={() => scene.videoUrl ? openVideoPreview(scene.videoUrl) : scene.imageUrl ? openImagePreview(scene.imageUrl) : null}>
+   663→                            {scene.videoUrl ? (
+   664→                              <DeviceSimulator aspectRatio={currentProject.aspectRatio} compact showLabel={false}>
+   665→                                <video src={scene.videoUrl} className="w-full h-full object-cover" muted />
+   666→                              </DeviceSimulator>
+   667→                            ) : scene.imageUrl ? (
+   668→                              <img src={scene.imageUrl} alt={"Scene " + scene.sceneNumber} className="w-full h-full object-cover" />
+   669→                            ) : (
+   670→                              <div className="w-full h-full flex items-center justify-center"><ImageIcon className="h-8 w-8 text-muted-foreground/40" /></div>
+   671→                            )}
+   672→                            {scene.status === "generating" && (
+   673→                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 backdrop-blur-[2px]"><Loader2 className="h-8 w-8 animate-spin text-white" /><span className="text-xs text-white font-medium">Generating...</span></div>
+   674→                            )}
+   675→                            <Badge className="absolute top-2 left-2 text-xs">#{scene.sceneNumber}</Badge>
+   676→                            {scene.videoUrl && !scene.status.includes("generating") && (
+   677→                              <div className="absolute inset-0 flex items-center justify-center bg-black/30 hover:bg-black/40 transition-colors">
+   678→                                <div className="h-10 w-10 rounded-full bg-white/90 flex items-center justify-center"><Play className="h-5 w-5 text-black ml-0.5" /></div>
+   679→                              </div>
+   680→                            )}
+   681→                          </div>
+   682→                          {/* Scene Info */}
+   683→                          <CardContent className="p-4 flex-1 min-w-0">
+   684→                            <div className="flex items-start justify-between gap-2">
+   685→                              <div className="min-w-0 flex-1">
+   686→                                {/* Expandable prompt */}
+   687→                                <p
+   688→                                  className={`text-sm cursor-pointer hover:text-primary transition-colors ${expandedSceneId === scene.id ? "" : "line-clamp-2"}`}
+   689→                                  onClick={() => setExpandedSceneId(expandedSceneId === scene.id ? null : scene.id)}
+   690→                                >
+   691→                                  {scene.enhancedPrompt || scene.prompt}
+   692→                                </p>
+   693→                                {expandedSceneId === scene.id && (
+   694→                                  <button onClick={() => setExpandedSceneId(null)} className="text-xs text-muted-foreground hover:text-primary mt-1">Show less</button>
+   695→                                )}
+   696→                                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground flex-wrap">
+   697→                                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{scene.duration}s</span>
+   698→                                  <Badge variant="outline" className="text-xs">{scene.transition}</Badge>
+   699→                                  {scene.videoUrl ? (
+   700→                                    <Badge variant="default" className="text-xs"><Video className="h-3 w-3 mr-1" />Ready</Badge>
+   701→                                  ) : scene.status === "generating" ? (
+   702→                                    <Badge variant="secondary" className="text-xs"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Generating</Badge>
+   703→                                  ) : scene.status === "failed" ? (
+   704→                                    <Badge variant="destructive" className="text-xs">Failed</Badge>
+   705→                                  ) : (
+   706→                                    <Badge variant="outline" className="text-xs capitalize">{scene.status}</Badge>
+   707→                                  )}
+   708→                                </div>
+   709→                              </div>
+   710→                              {/* Action buttons */}
+   711→                              <div className="flex items-center gap-1 shrink-0">
+   712→                                {scene.status === "failed" && (
+   713→                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => retryScene(scene)} title="Retry"><RefreshCw className="h-4 w-4" /></Button>
+   714→                                )}
+   715→                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => generateSceneVideo(scene.id, scene.enhancedPrompt || scene.prompt)} disabled={scene.status === "generating"} title="Generate video"><Eye className="h-4 w-4" /></Button>
+   716→                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => deleteScene(scene.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+   717→                              </div>
+   718→                            </div>
+   719→                          </CardContent>
+   720→                        </div>
+   721→                      </Card>
+   722→                    ))}
+   723→                  </div>
+   724→                )}
+   725→              </div>
+   726→
+   727→              {/* Delete project */}
+   728→              <div className="flex items-center justify-between pt-4 border-t">
+   729→                <Button variant="outline" onClick={() => deleteProject(currentProject.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-4 w-4 mr-2" />Delete Project</Button>
+   730→              </div>
+   731→            </motion.div>
+   732→          )}
+   733→        </AnimatePresence>
+   734→      </main>
+   735→
+   736→      {/* ── Create Dialog ── */}
+   737→      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+   738→        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Create from Template</DialogTitle><DialogDescription>Customize and create a new project from this template</DialogDescription></DialogHeader>
+   739→          <div className="space-y-4 py-2">
+   740→            <div className="space-y-2"><Label>Title</Label><Input value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} /></div>
+   741→            <div className="space-y-2"><Label>Prompt</Label><Textarea className="min-h-[100px]" value={textPrompt} onChange={(e) => setTextPrompt(e.target.value)} /></div>
+   742→            <div className="grid grid-cols-2 gap-3">
+   743→              <div className="space-y-2"><Label>Style</Label><Select value={selectedStyle} onValueChange={setSelectedStyle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent></Select></div>
+   744→              <div className="space-y-2"><Label>Aspect</Label><Select value={selectedAspect} onValueChange={setSelectedAspect}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select></div>
+   745→            </div>
+   746→          </div>
+   747→          <DialogFooter><Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button><Button onClick={() => createProject()}><Sparkles className="h-4 w-4 mr-2" />Create</Button></DialogFooter>
+   748→        </DialogContent>
+   749→      </Dialog>
+   750→
+   751→      {/* ── Media Preview Dialog ── */}
+   752→      <Dialog open={!!previewVideoUrl || !!previewImage} onOpenChange={closePreview}>
+   753→        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden"><DialogTitle className="sr-only">Preview</DialogTitle>
+   754→          <div className="bg-black">
+   755→            {previewVideoUrl ? (
+   756→              <DeviceSimulator aspectRatio={currentProject?.aspectRatio || "16:9"} showLabel={false}>
+   757→                <video src={previewVideoUrl} controls autoPlay className="w-full h-full object-contain" />
+   758→              </DeviceSimulator>
+   759→            ) : previewImage ? (
+   760→              <img src={previewImage} alt="Preview" className="w-full h-auto max-h-[80vh] object-contain" />
+   761→            ) : null}
+   762→          </div>
+   763→        </DialogContent>
+   764→      </Dialog>
+   765→
+   766→      {/* ── Footer ── */}
+   767→      <footer className="border-t border-border bg-background mt-auto">
+   768→        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+   769→          <p>Vidora — Professional AI Video Creator</p>
+   770→          <p>Powered by AI · Create cinematic videos in seconds</p>
+   771→        </div>
+   772→      </footer>
+   773→    </div>
+   774→  );
+   775→}
+   776→
