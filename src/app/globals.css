@@ -131,8 +131,37 @@
   body {
     @apply bg-background text-foreground;
   }
-  button, [role="button"], a, [role="link"], [type="button"], [type="submit"], [type="reset"], select, summary, [onclick], [cursor-pointer] {
-    cursor: pointer;
+  /* Pointer cursor on all interactive elements */
+  button,
+  [role="button"],
+  a,
+  [role="link"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"],
+  select,
+  summary,
+  [onclick],
+  [cursor-pointer],
+  [data-radix-collection-item],
+  [data-radix-select-trigger],
+  [data-radix-tabs-trigger],
+  [data-radix-dialog-close],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  label:has(input[type="checkbox"]),
+  label:has(input[type="radio"]) {
+    cursor: pointer !important;
+  }
+  /* Ensure all Card/group/cursor-pointer divs show pointer */
+  .card-glow,
+  .group {
+    &:has([onclick]),
+    &[onclick],
+    &[cursor-pointer] {
+      cursor: pointer !important;
+    }
   }
 }
 

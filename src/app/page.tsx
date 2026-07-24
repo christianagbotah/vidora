@@ -106,6 +106,8 @@ export default function HomePage() {
   const [expandedSceneId, setExpandedSceneId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [pendingDeleteAction, setPendingDeleteAction] = useState<{ type: "scene" | "project"; id: string; label: string } | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -399,21 +401,35 @@ export default function HomePage() {
     } catch { toast({ title: "Failed to add scene", variant: "destructive" }); }
   };
 
-  const deleteScene = async (sceneId: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, { method: "DELETE" });
-      refreshProject(); toast({ title: "Scene removed" });
-    } catch { toast({ title: "Failed", variant: "destructive" }); }
+  const requestDelete = (type: "scene" | "project", id: string, label: string) => {
+    setPendingDeleteAction({ type, id, label });
+    setConfirmDeleteOpen(true);
   };
 
-  const deleteProject = async (id: string) => {
-    try {
-      await fetch(`/api/projects/${id}`, { method: "DELETE" });
-      fetchProjects();
-      if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
-      toast({ title: "Project deleted" });
-    } catch { toast({ title: "Failed", variant: "destructive" }); }
+  const confirmDelete = async () => {
+    if (!pendingDeleteAction) return;
+    setConfirmDeleteOpen(false);
+    const { type, id } = pendingDeleteAction;
+    setPendingDeleteAction(null);
+    if (type === "scene") {
+      if (!currentProject) return;
+      try {
+        await fetch(`/api/projects/${currentProject.id}/scenes/${id}`, { method: "DELETE" });
+        refreshProject(); toast({ title: "Scene removed" });
+      } catch { toast({ title: "Failed", variant: "destructive" }); }
+    } else {
+      try {
+        await fetch(`/api/projects/${id}`, { method: "DELETE" });
+        fetchProjects();
+        if (currentProject?.id === id) { setCurrentProject(null); setCurrentView("home"); }
+        toast({ title: "Project deleted" });
+      } catch { toast({ title: "Failed", variant: "destructive" }); }
+    }
+  };
+
+  const cancelDelete = () => {
+    setConfirmDeleteOpen(false);
+    setPendingDeleteAction(null);
   };
 
   const openVideoPreview = (url: string) => setPreviewVideoUrl(url);
@@ -475,11 +491,15 @@ export default function HomePage() {
           {currentView === "home" && (
             <motion.div key="home" {...fadeUp}>
               {/* ── Hero Section ── */}
-              <section className="hero-gradient relative overflow-hidden">
+              <section className="relative overflow-hidden min-h-[520px] sm:min-h-[600px]">
+                {/* Background Image */}
+                <div className="absolute inset-0">
+                  <img src="/images/hero-bg.png" alt="" className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/50 to-black/70" />
+                </div>
                 <div className="orb orb-violet w-[400px] h-[400px] -top-20 -left-32" />
                 <div className="orb orb-amber w-[300px] h-[300px] top-10 right-10" />
                 <div className="orb orb-rose w-[250px] h-[250px] -bottom-10 left-1/3" />
-                <div className="orb orb-violet w-[200px] h-[200px] bottom-20 right-1/4" />
 
                 <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-20 sm:py-28 lg:py-36 text-center">
                   <motion.div
@@ -1050,7 +1070,7 @@ export default function HomePage() {
                                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-amber-50" onClick={() => retryScene(scene)} title="Retry"><RefreshCw className="h-4 w-4 text-amber-500" /></Button>
                                 )}
                                 <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-violet-50" onClick={() => generateSceneVideo(scene.id, scene.enhancedPrompt || scene.prompt)} disabled={scene.status === "generating"} title="Generate"><Eye className="h-4 w-4 text-violet-500" /></Button>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-red-50" onClick={() => deleteScene(scene.id)}><Trash2 className="h-4 w-4 text-red-400" /></Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-red-50" onClick={() => requestDelete("scene", scene.id, "Scene #" + scene.sceneNumber)}><Trash2 className="h-4 w-4 text-red-400" /></Button>
                               </div>
                             </div>
                           </CardContent>
@@ -1063,7 +1083,7 @@ export default function HomePage() {
 
               {/* Delete project */}
               <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-                <Button variant="ghost" onClick={() => deleteProject(currentProject.id)} className="text-red-500 hover:text-red-600 hover:bg-red-50">
+                <Button variant="ghost" onClick={() => requestDelete("project", currentProject.id, currentProject.title)} className="text-red-500 hover:text-red-600 hover:bg-red-50">
                   <Trash2 className="h-4 w-4 mr-2" />Delete Project
                 </Button>
               </div>
@@ -1099,6 +1119,27 @@ export default function HomePage() {
               <img src={previewImage} alt="Preview" className="w-full h-auto max-h-[80vh] object-contain" />
             ) : null}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete Confirmation Dialog ── */}
+      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-red-100 flex items-center justify-center">
+                <Trash2 className="h-4 w-4 text-red-600" />
+              </div>
+              Delete {pendingDeleteAction?.type === "project" ? "Project" : "Scene"}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <span className="font-semibold text-foreground">{pendingDeleteAction?.label}</span>? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={cancelDelete}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDelete}>Delete</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
