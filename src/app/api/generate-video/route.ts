@@ -58,7 +58,7 @@ function extractVideoUrl(result: Record<string, unknown>): string | null {
 }
 
 async function createSceneTask(
-  scene: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; imageUrl?: string | null },
+  scene: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null },
   videoSize: string,
   thumbSize: string,
   zai: Awaited<ReturnType<typeof ZAI.create>>
@@ -88,17 +88,37 @@ async function createSceneTask(
     }
   }
 
-  // Create video generation task
+  // Determine reference image URL (scene-specific or character-based)
+  let referenceImage: string | undefined;
+  if (scene.referenceImageUrl) {
+    referenceImage = scene.referenceImageUrl;
+  } else if (scene.characterIds) {
+    try {
+      const charIds: string[] = JSON.parse(scene.characterIds);
+      if (charIds.length > 0) {
+        const firstChar = await db.character.findUnique({ where: { id: charIds[0] } });
+        if (firstChar?.imageUrl) referenceImage = firstChar.imageUrl;
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  // Create video generation task (with optional image reference for character animation)
+  const videoParams: Record<string, unknown> = {
+    prompt: scenePrompt,
+    quality: "quality",
+    size: videoSize,
+    duration: 10,
+    with_audio: false,
+    watermark_enabled: false,
+  };
+  if (referenceImage) {
+    videoParams.image_url = referenceImage;
+    console.log(`Scene ${scene.sceneNumber}: using reference image ${referenceImage}`);
+  }
+
   const task = await withRetry(
-    () => zai.video.generations.create({
-      prompt: scenePrompt,
-      quality: "quality",
-      size: videoSize,
-      duration: 10,
-      with_audio: false,
-      watermark_enabled: false,
-    }),
-    `Scene ${scene.sceneNumber} video task`
+    () => zai.video.generations.create(videoParams),
+    `Scene ${scene.sceneNumber} video task${referenceImage ? ' (with image ref)' : ''}`
   );
 
   await db.videoScene.update({ where: { id: scene.id }, data: { taskId: task.id, status: "generating" } });

@@ -5,9 +5,8 @@ export async function GET() {
   try {
     const projects = await db.videoProject.findMany({
       include: {
-        scenes: {
-          orderBy: { sceneNumber: "asc" },
-        },
+        scenes: { orderBy: { sceneNumber: "asc" } },
+        characters: { orderBy: { createdAt: "asc" } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -24,7 +23,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { title, description, style, aspectRatio } = body;
+    const { title, description, style, aspectRatio, projectType, characters } = body;
 
     if (!title) {
       return NextResponse.json(
@@ -40,8 +39,18 @@ export async function POST(req: NextRequest) {
         style: style || "cinematic",
         aspectRatio: aspectRatio || "16:9",
         targetDuration: body.targetDuration || 60,
+        projectType: projectType || "custom",
+        characters: characters?.length
+          ? { create: characters.map((c: Record<string, string>) => ({
+              name: c.name,
+              role: c.role || "supporting",
+              description: c.description || null,
+              stylePrompt: c.stylePrompt || null,
+              imageUrl: c.imageUrl || null,
+            })) }
+          : undefined,
       },
-      include: { scenes: true },
+      include: { scenes: true, characters: true },
     });
 
     return NextResponse.json({ success: true, project }, { status: 201 });

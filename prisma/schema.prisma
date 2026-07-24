@@ -8,17 +8,19 @@ datasource db {
 }
 
 model VideoProject {
-  id             String   @id @default(cuid())
+  id             String     @id @default(cuid())
   title          String
   description    String?
-  style          String   @default("cinematic")
-  aspectRatio    String   @default("16:9")
-  status         String   @default("draft")
-  targetDuration Int      @default(60)
+  style          String     @default("cinematic")
+  aspectRatio    String     @default("16:9")
+  status         String     @default("draft")
+  targetDuration  Int        @default(60)
+  projectType    String     @default("custom")   // custom, birthday, commercial, event, social
   finalVideoUrl  String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
   scenes         VideoScene[]
+  characters     Character[]
 }
 
 model VideoScene {
@@ -26,8 +28,13 @@ model VideoScene {
   projectId      String
   project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sceneNumber    Int
+  title          String?
   prompt         String
   enhancedPrompt String?
+  visualNote     String?                       // extracted visual direction
+  dialogue       String?                       // extracted dialogue/narration
+  characterIds   String?                       // JSON array of character IDs involved in scene
+  referenceImageUrl String?                   // uploaded/generared reference image for scene
   imageUrl       String?
   imageBase64    String?
   videoUrl       String?
@@ -35,6 +42,21 @@ model VideoScene {
   duration       Int      @default(10)
   transition     String   @default("fade")
   status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@index([projectId])
+}
+
+model Character {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  role           String?                       // protagonist, supporting, narrator, background
+  description    String?                       // physical appearance, clothing, personality
+  stylePrompt    String?                       // AI-optimized character description for consistency
+  imageUrl       String?                       // reference image (uploaded or AI-generated)
+  imageBase64    String?                       // for uploaded images stored as base64
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   @@index([projectId])

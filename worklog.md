@@ -190,3 +190,41 @@ Stage Summary:
 - The invisible overlay from .card-glow::before was the sole cause of the input blocking issue
 - Pointer cursor verified working on all interactive elements
 ---
+Task ID: 9
+Agent: main
+Task: Major upgrade to Professional AI Video Studio with character system, script parsing, and production templates
+
+Work Log:
+- Updated Prisma schema: added Character model (name, role, description, stylePrompt, imageUrl, imageBase64), added projectType to VideoProject, added title/visualNote/dialogue/characterIds/referenceImageUrl to VideoScene
+- Pushed schema to DB and regenerated Prisma client
+- Created Character API routes:
+  - /api/projects/[id]/characters (GET list, POST create)
+  - /api/projects/[id]/characters/[characterId] (GET, PUT, DELETE)
+  - /api/projects/[id]/characters/[characterId]/generate-image (POST - AI generate portrait)
+  - /api/projects/[id]/characters/upload (POST - upload reference image)
+- Enhanced /api/split-scenes with:
+  - Character detection from dialogue attribution patterns (CharacterName:)
+  - Per-scene title, dialogue, characterNames, visualNote extraction
+  - AI fallback returns structured scenes + characters
+- Enhanced /api/generate-video with image_url support:
+  - Passes scene.referenceImageUrl or character imageUrl to zai.video.generations.create()
+  - Enables image-to-video animation for character consistency
+- Updated /api/projects routes to include characters in queries and accept projectType
+- Updated TypeScript types: Character interface, ParsedSceneResult, DetectedCharacter, InputMode now includes "script"
+- Complete frontend rewrite as Professional Video Studio:
+  - New "Script" input mode with full screenplay support
+  - Script parser with visual preview showing detected scenes and characters
+  - Character management panel in studio (add, AI generate image, upload image, delete)
+  - Project type selector (Birthday, Commercial, Event, Custom)
+  - 4 Quick Create cards (Script, Text, Voice, Image-to-Video)
+  - PRO badge in header
+  - Character cards in home view project cards
+  - Dialogue badges on scenes in studio
+
+Stage Summary:
+- Full professional AI video studio with script parsing, character management, and production templates
+- Characters can have AI-generated portraits or uploaded reference images
+- Video generation supports image_url for character-based animation (image-to-video)
+- Script parser detects scenes, characters, dialogue, and visual descriptions automatically
+- Production templates: Birthday, Commercial/Ad, Event/Promo, Custom/Creative
+---

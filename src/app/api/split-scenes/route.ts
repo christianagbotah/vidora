@@ -1,77 +1,185 @@
-import { NextRequest, NextResponse } from 'next/server';
-import ZAI from 'z-ai-web-dev-sdk';
+import { NextRequest, NextResponse } from "next/server";
+import ZAI from "z-ai-web-dev-sdk";
 
-const CLIP_DURATION = 10; // each video clip is 10 seconds
+const CLIP_DURATION = 10;
 
-// Try to extract pre-defined scenes from the prompt (e.g. "Scene 1 – ...", "🎬 Scene 2: ...")
-function extractDefinedScenes(prompt: string): string[] | null {
-  const scenePatterns = [
-    /(?:Scene\s*\d+[\s\-–—:]+)([\s\S]*?)(?=(?:Scene\s*\d+[\s\-–—:]|Final\s*Screen|\n\n\n|$))/gi,
-    /(?:🎬\s*Scene\s*\d+[\s\-–—:]+)([\s\S]*?)(?=(?:🎬\s*Scene\s*\d+[\s\-–—:]|Final\s*Screen|\n\n\n|$))/gi,
-  ];
+interface ParsedScene {
+  prompt: string;
+  title?: string;
+  dialogue?: string;
+  characterNames?: string[];
+  visualNote?: string;
+}
 
-  for (const pattern of scenePatterns) {
-    const matches = prompt.match(pattern);
-    if (matches && matches.length >= 2) {
-      const scenes = matches.map((m) => {
-        let cleaned = m.trim();
-        cleaned = cleaned.replace(/^(?:🎬\s*)?Scene\s*\d+[\s\-–—:]+.*/im, '');
-        return cleaned.trim();
-      }).filter((s) => s.length > 20);
+interface DetectedCharacter {
+  name: string;
+  role: string;
+  description: string;
+}
 
-      if (scenes.length >= 2) return scenes;
-    }
+// Extract pre-defined scenes from structured scripts
+function extractDefinedScenes(prompt: string): ParsedScene[] | null {
+  // Pattern for "Scene 1 – Title" or "🎬 Scene 2 – Title"
+  const sceneBlockPattern = /(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]+([^\n]*)\n([\s\S]*?)(?=(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]|Final\s*Screen|$)/gi;
+  const matches = [...prompt.matchAll(sceneBlockPattern)];
+
+  if (matches.length >= 2) {
+    const scenes = matches.map((m) => {
+      const title = m[1]?.trim() || undefined;
+      const body = m[2]?.trim() || "";
+
+      const visual = extractVisualLines(body);
+      const dialogue = extractDialogue(body);
+      const characters = detectCharacterNames(body);
+
+      return {
+        prompt: visual || body.replace(/\n{2,}/g, " ").trim(),
+        title: title || undefined,
+        dialogue: dialogue || undefined,
+        characterNames: characters.length > 0 ? characters : undefined,
+        visualNote: visual || undefined,
+      };
+    }).filter((s) => s.prompt.length > 10);
+
+    if (scenes.length >= 2) return scenes;
   }
 
-  // Try numbered list like "1." or "1)"
+  // Fallback: numbered list pattern
   const numberedPattern = /(?:^|\n)\s*(?:🎬)?\s*\d+[.)][\s]+([\s\S]*?)(?=(?:^|\n)\s*(?:🎬)?\s*\d+[.)]|$)/gi;
   const numberedMatches = [...prompt.matchAll(numberedPattern)];
   if (numberedMatches.length >= 2) {
-    const scenes = numberedMatches.map((m) => m[1].trim()).filter((s) => s.length > 20);
+    const scenes = numberedMatches.map((m) => {
+      const body = m[1].trim();
+      const visual = extractVisualLines(body);
+      const dialogue = extractDialogue(body);
+      const characters = detectCharacterNames(body);
+      return {
+        prompt: visual || body.replace(/\n{2,}/g, " ").trim(),
+        dialogue: dialogue || undefined,
+        characterNames: characters.length > 0 ? characters : undefined,
+        visualNote: visual || undefined,
+      };
+    }).filter((s) => s.prompt.length > 10);
+
     if (scenes.length >= 2) return scenes;
   }
 
   return null;
 }
 
-// Strip dialogue, keep only visual descriptions
-function extractVisualDescription(text: string): string {
-  const lines = text.split('\n');
+// Extract visual-only description lines from scene body
+function extractVisualLines(text: string): string {
+  const lines = text.split("\n");
   const visualLines: string[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+
+    // Skip dialogue lines (CharacterName: "text")
     if (/^[A-Z][a-zA-Z\s]+:\s*["\u201C]/.test(trimmed)) continue;
     if (/^[A-Z][a-zA-Z\s]+\s*["\u201C]/.test(trimmed)) continue;
-    if (/^Narrator:\s*["\u201C]/.test(trimmed)) continue;
+    if (/^Narrator:\s*/i.test(trimmed)) continue;
     if (/^Everyone\s/.test(trimmed) && /:["\u201C]/.test(trimmed)) continue;
-    if (/^[🎵\u{1F3B5}]/.test(trimmed)) continue;
-    if (/^\u{1F3B5}/.test(trimmed)) continue;
+
+    // Skip music/lyrics
+    if (/^[🎵\u{1F3B5}\u{1F3B6}]/.test(trimmed)) continue;
+
+    // Skip Final Screen
     if (/^Final\s+Screen/i.test(trimmed)) continue;
 
+    // Extract Visual: prefixed lines
     if (/^Visual:/i.test(trimmed)) {
-      const visual = trimmed.replace(/^Visual:\s*/i, '');
+      const visual = trimmed.replace(/^Visual:\s*/i, "");
       if (visual.length > 10) visualLines.push(visual);
     } else if (
       !trimmed.endsWith('"') &&
-      !trimmed.endsWith('\u201D') &&
-      !trimmed.endsWith('!\u201D') &&
+      !trimmed.endsWith("\u201D") &&
+      !trimmed.endsWith("!\u201D") &&
       !/^[A-Z][a-z]+\s*[:"\u201C]/.test(trimmed) &&
-      !/^Everyone\s+(shouts|sings|laughs|cheers)/i.test(trimmed)
+      !/^Everyone\s+(shouts|sings|laughs|cheers)/i.test(trimmed) &&
+      trimmed.length > 10
     ) {
-      if (trimmed.length > 10) visualLines.push(trimmed);
+      visualLines.push(trimmed);
     }
   }
 
-  return visualLines.join(' ').trim();
+  return visualLines.join(" ").trim();
+}
+
+// Extract dialogue/narration from scene body
+function extractDialogue(text: string): string {
+  const lines = text.split("\n");
+  const dialogueLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Match CharacterName: "dialogue" patterns
+    if (/^[A-Z][a-zA-Z\s]+:\s*["\u201C]/.test(trimmed)) {
+      dialogueLines.push(trimmed);
+    }
+    if (/^Narrator:\s*/i.test(trimmed)) {
+      dialogueLines.push(trimmed);
+    }
+    if (/^Everyone\s/.test(trimmed) && /:["\u201C]/.test(trimmed)) {
+      dialogueLines.push(trimmed);
+    }
+  }
+
+  return dialogueLines.join("\n").trim();
+}
+
+// Detect character names from dialogue attribution
+function detectCharacterNames(text: string): string[] {
+  const names = new Set<string>();
+  const patterns = [
+    /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*:/gm,
+    /^Narrator:/gim,
+  ];
+
+  for (const pattern of patterns) {
+    const matches = [...text.matchAll(pattern)];
+    for (const m of matches) {
+      if (m[1] && m[1].length > 1 && m[1].length < 30) {
+        names.add(m[1].trim());
+      }
+    }
+  }
+
+  return [...names].filter((n) => !["Visual", "Scene", "Final", "Remember"].includes(n));
+}
+
+// Detect characters across entire script with AI-enhanced descriptions
+function buildCharacterDescriptions(characters: string[], fullPrompt: string): DetectedCharacter[] {
+  return characters.map((name) => {
+    // Try to extract description from context
+    const descPattern = new RegExp(`${name}[^\\n]*?(?:"([^"]*)"[\\s\\n])`, "gi");
+    const descMatch = descPattern.exec(fullPrompt);
+
+    let role = "supporting";
+    let description = `${name} character`;
+
+    if (name.toLowerCase().includes("narrator")) {
+      role = "narrator";
+      description = `Narrator, off-screen voice, storytelling presence`;
+    } else if (name.toLowerCase().includes("hero") || name.toLowerCase().includes("spidey") || name.toLowerCase().includes("super")) {
+      role = "protagonist";
+      description = `Hero character ${name}, brave and adventurous, central to the story`;
+    } else {
+      description = `${name}, a character in the story, colorful and expressive appearance`;
+    }
+
+    return { name, role, description };
+  });
 }
 
 export async function POST(req: NextRequest) {
   try {
     const { prompt, targetDuration = 60 } = await req.json();
     if (!prompt) {
-      return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
     }
 
     const targetSec = Math.max(10, Math.min(300, targetDuration));
@@ -80,94 +188,120 @@ export async function POST(req: NextRequest) {
     // Step 1: Try to extract pre-defined scenes from the prompt
     const predefinedScenes = extractDefinedScenes(prompt);
 
-    let sceneDescriptions: string[] = [];
-
     if (predefinedScenes && predefinedScenes.length >= 2) {
-      sceneDescriptions = predefinedScenes.map((scene) => {
-        const visual = extractVisualDescription(scene);
-        return visual || scene.replace(/\n{2,}/g, ' ').trim();
-      }).filter((s) => s.length > 20);
-
-      if (sceneDescriptions.length > 0) {
-        console.log('Extracted ' + sceneDescriptions.length + ' pre-defined scenes from prompt');
-        return NextResponse.json({
-          success: true,
-          scenes: sceneDescriptions,
-          isSingle: sceneDescriptions.length === 1,
-          count: sceneDescriptions.length,
-          estimatedDuration: sceneDescriptions.length * CLIP_DURATION,
-          source: 'predefined',
-        });
+      // Detect all characters across the full script
+      const allCharacterNames = new Set<string>();
+      for (const scene of predefinedScenes) {
+        if (scene.characterNames) {
+          scene.characterNames.forEach((n) => allCharacterNames.add(n));
+        }
       }
+      const characterList = buildCharacterDescriptions([...allCharacterNames], prompt);
+
+      console.log(`Extracted ${predefinedScenes.length} scenes and ${characterList.length} characters from script`);
+      return NextResponse.json({
+        success: true,
+        scenes: predefinedScenes.slice(0, desiredSceneCount),
+        characters: characterList,
+        count: predefinedScenes.length,
+        estimatedDuration: predefinedScenes.length * CLIP_DURATION,
+        source: "predefined",
+      });
     }
 
-    // Step 2: No pre-defined scenes found — use AI to split
+    // Step 2: No pre-defined scenes — use AI to split and detect characters
     const zai = await ZAI.create();
     const completion = await zai.chat.completions.create({
       messages: [
         {
-          role: 'assistant',
+          role: "assistant",
           content: [
-            'You are a film storyboard assistant. The user will give you a video concept, story, or script.',
-            'Your job is to break it into EXACTLY ' + desiredSceneCount + ' individual scenes for AI video generation.',
-            '',
-            'Rules:',
-            '- Each scene must be a self-contained visual description (NO dialogue, NO text overlays, NO on-screen text)',
-            '- Each scene should represent roughly 10 seconds of video action',
-            '- Scenes should flow narratively with a beginning, middle, and end',
-            '- Each scene prompt should be cinematic, detailed, and 2-4 sentences describing ONLY what is visually happening',
-            '- Include camera movement suggestions (pan, zoom, tracking shot, etc.)',
-            '- Maintain visual continuity (same characters, settings, color palette) across scenes',
-            '- You MUST return EXACTLY ' + desiredSceneCount + ' scenes — no more, no less',
-            '- If the original prompt is very short, expand it creatively into ' + desiredSceneCount + ' connected moments',
-            '- Do NOT add any explanation, just return the JSON',
-            '',
-            'Respond ONLY with valid JSON in this exact format (no markdown, no code fences):',
-            '{"scenes": [{"prompt": "detailed cinematic visual scene description 1"}, {"prompt": "detailed cinematic visual scene description 2"}]}'
-          ].join('\n'),
+            "You are a professional film storyboard assistant and character designer.",
+            "The user will give you a video concept, story, or script.",
+            "",
+            "Your job is to:",
+            "1. Break the concept into EXACTLY " + desiredSceneCount + " individual scenes for AI video generation",
+            "2. Identify all characters mentioned in the script",
+            "3. For each scene, provide visual description (NO dialogue) AND extracted dialogue",
+            "",
+            "Rules:",
+            "- Each scene PROMPT must be a self-contained VISUAL description (NO dialogue, NO text, NO on-screen text)",
+            "- Each scene should represent roughly 10 seconds of video action",
+            "- Maintain visual continuity across scenes",
+            "- Include camera movement suggestions in prompts",
+            "- For characters: describe their visual appearance (clothing, features, age, style) for AI generation",
+            "",
+            "Return ONLY valid JSON (no markdown, no code fences):",
+            '{"scenes": [{"prompt": "cinematic visual description", "title": "Scene Title", "dialogue": "extracted dialogue", "characterNames": ["Character1"]}], "characters": [{"name": "Character1", "role": "protagonist/supporting/narrator", "description": "visual appearance description for AI generation"}]}',
+          ].join("\n"),
         },
         {
-          role: 'user',
+          role: "user",
           content: prompt,
         },
       ],
-      thinking: { type: 'disabled' },
+      thinking: { type: "disabled" },
     });
 
-    let content = completion.choices[0]?.message?.content || '';
-    content = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    let content = completion.choices[0]?.message?.content || "";
+    content = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
     const parsed = JSON.parse(content);
-    let scenes: string[] = parsed.scenes?.map((s: { prompt?: string; text?: string; description?: string }) =>
-      s.prompt || s.text || s.description || ''
-    ).filter((p: string) => p.length > 0) || [];
 
-    // Fallback: if AI returned fewer, pad with variations
+    const scenes: ParsedScene[] = (parsed.scenes || []).map((s: Record<string, unknown>) => ({
+      prompt: (s.prompt || s.text || s.description || "") as string,
+      title: (s.title || undefined) as string | undefined,
+      dialogue: (s.dialogue || undefined) as string | undefined,
+      characterNames: (s.characterNames || undefined) as string[] | undefined,
+      visualNote: (s.visualNote || (s.prompt || "") as string) as string | undefined,
+    })).filter((s: ParsedScene) => s.prompt.length > 0);
+
+    const characters: DetectedCharacter[] = (parsed.characters || []).map((c: Record<string, unknown>) => ({
+      name: (c.name || "") as string,
+      role: (c.role || "supporting") as string,
+      description: (c.description || "") as string,
+    })).filter((c: DetectedCharacter) => c.name.length > 0);
+
+    // Pad if AI returned fewer scenes
     while (scenes.length < desiredSceneCount && scenes.length > 0) {
-      const lastIdx = scenes.length - 1;
-      scenes.push(scenes[lastIdx] + ' (continuation, slightly different angle)');
+      const lastScene = scenes[scenes.length - 1];
+      scenes.push({
+        prompt: lastScene.prompt + " (continuation, different camera angle)",
+        dialogue: lastScene.dialogue,
+        characterNames: lastScene.characterNames,
+      });
     }
 
     if (scenes.length === 0) {
-      return NextResponse.json({ success: true, scenes: [prompt], isSingle: true, fallback: true });
+      return NextResponse.json({
+        success: true,
+        scenes: [{ prompt }],
+        characters: [],
+        isSingle: true,
+        fallback: true,
+      });
     }
-
-    scenes = scenes.slice(0, desiredSceneCount);
 
     return NextResponse.json({
       success: true,
-      scenes,
-      isSingle: scenes.length === 1,
+      scenes: scenes.slice(0, desiredSceneCount),
+      characters,
       count: scenes.length,
       estimatedDuration: scenes.length * CLIP_DURATION,
-      source: 'ai',
+      source: "ai",
     });
   } catch (error) {
-    console.error('Failed to split scenes:', error);
+    console.error("Failed to split scenes:", error);
     const body = await req.clone().json().catch(() => null);
     if (body?.prompt) {
-      return NextResponse.json({ success: true, scenes: [body.prompt], isSingle: true, fallback: true });
+      return NextResponse.json({
+        success: true,
+        scenes: [{ prompt: body.prompt }],
+        characters: [],
+        isSingle: true,
+        fallback: true,
+      });
     }
-    return NextResponse.json({ success: false, error: 'Failed to analyze prompt' }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Failed to analyze prompt" }, { status: 500 });
   }
 }
