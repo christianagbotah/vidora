@@ -39,7 +39,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await req.json();
-    const { title, description, style, aspectRatio, status } = body;
+    const { title, description, style, aspectRatio, status, targetDuration } = body;
 
     const project = await db.videoProject.update({
       where: { id },
@@ -49,6 +49,7 @@ export async function PUT(
         ...(style && { style }),
         ...(aspectRatio && { aspectRatio }),
         ...(status && { status }),
+        ...(targetDuration !== undefined && { targetDuration }),
       },
       include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: true },
     });

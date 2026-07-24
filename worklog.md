@@ -305,3 +305,22 @@ Stage Summary:
 - Lint passes clean, browser verified with 0 errors
 - All views rendering correctly: Home, Create, Studio, Gallery
 ---
+Task ID: 13
+Agent: main
+Task: Move Project Settings to top of studio view, verify hero image
+
+Work Log:
+- Added Project Settings collapsible card at top of studio view (before characters/timeline)
+- Settings card includes: Visual Style, Aspect Ratio, Target Duration selectors
+- Added `handleUpdateProjectSetting()` function for live updates via PUT API
+- Updated PUT API endpoint to support `targetDuration` field
+- Verified hero image already present in home view (/images/hero-bg.png at line 1320)
+- Browser verified: Project Settings shows at top with expand/collapse functionality
+- Lint passes clean
+
+Stage Summary:
+- Project Settings is now the first section in studio view (user's explicit request)
+- Collapsible card with summary badge showing current settings
+- Settings update live via API with toast notifications
+- Hero image confirmed present and rendering correctly
+---

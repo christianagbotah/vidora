@@ -538,6 +538,8 @@ export default function HomePage() {
   const [sceneFilter, setSceneFilter] = useState("all");
   const [editingProjectTitle, setEditingProjectTitle] = useState(false);
   const [editableTitle, setEditableTitle] = useState("");
+  const [showProjectSettings, setShowProjectSettings] = useState(true);
+  const [updatingSettings, setUpdatingSettings] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1245,6 +1247,24 @@ export default function HomePage() {
       toast({ title: "Title updated" });
     } catch {
       toast({ title: "Failed to update title", variant: "destructive" });
+    }
+  };
+
+  const handleUpdateProjectSetting = async (key: string, value: string | number) => {
+    if (!currentProject) return;
+    setUpdatingSettings(true);
+    try {
+      await fetch(`/api/projects/${currentProject.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: value }),
+      });
+      refreshProject();
+      toast({ title: `${key === "style" ? "Style" : key === "aspectRatio" ? "Aspect Ratio" : key === "targetDuration" ? "Duration" : "Setting"} updated` });
+    } catch {
+      toast({ title: "Failed to update setting", variant: "destructive" });
+    } finally {
+      setUpdatingSettings(false);
     }
   };
 
@@ -2004,11 +2024,113 @@ export default function HomePage() {
                 </Button>
               </div>
 
+              {/* ── Project Settings — Always at the top ── */}
+              <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                <CardHeader className="pb-3">
+                  <div
+                    className="flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => setShowProjectSettings(!showProjectSettings)}
+                  >
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                        <Settings className="h-3.5 w-3.5" />
+                      </div>
+                      Project Settings
+                      <Badge variant="outline" className="text-[10px] ml-1">
+                        {currentProject.style} · {currentProject.aspectRatio} · {formatDuration(currentProject.targetDuration)}
+                      </Badge>
+                    </CardTitle>
+                    <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${showProjectSettings ? "rotate-90" : ""}`} />
+                  </div>
+                </CardHeader>
+                <AnimatePresence>
+                  {showProjectSettings && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <CardContent className="space-y-5">
+                        {/* Style */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium flex items-center gap-1.5">
+                            <Palette className="h-3.5 w-3.5 text-muted-foreground" />Visual Style
+                          </Label>
+                          <div className="flex flex-wrap gap-2">
+                            {STYLES.map((s) => (
+                              <button
+                                key={s.value}
+                                onClick={() => handleUpdateProjectSetting("style", s.value)}
+                                disabled={updatingSettings}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                  currentProject.style === s.value
+                                    ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                }`}
+                              >
+                                {s.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Aspect Ratio */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium flex items-center gap-1.5">
+                            <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />Aspect Ratio
+                          </Label>
+                          <div className="flex flex-wrap gap-2">
+                            {ASPECTS.map((a) => (
+                              <button
+                                key={a.value}
+                                onClick={() => handleUpdateProjectSetting("aspectRatio", a.value)}
+                                disabled={updatingSettings}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                  currentProject.aspectRatio === a.value
+                                    ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                }`}
+                              >
+                                <a.icon className="h-3 w-3" />
+                                {a.label}
+                                <span className="opacity-70">{a.desc}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Duration */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium flex items-center gap-1.5">
+                            <Timer className="h-3.5 w-3.5 text-muted-foreground" />Target Duration
+                          </Label>
+                          <div className="flex flex-wrap gap-2">
+                            {DURATION_PRESETS.map((d) => (
+                              <button
+                                key={d.value}
+                                onClick={() => handleUpdateProjectSetting("targetDuration", d.value)}
+                                disabled={updatingSettings}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                  currentProject.targetDuration === d.value
+                                    ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                }`}
+                              >
+                                {d.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </Card>
+
               {/* Project Info Bar */}
               <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
-                <Badge variant="outline" className="text-[10px]">{currentProject.aspectRatio}</Badge>
-                <Badge variant="outline" className="text-[10px]">{currentProject.style}</Badge>
-                <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{formatDuration(currentProject.targetDuration)}</span>
                 <span className="flex items-center gap-0.5"><Film className="h-3 w-3" />{safeScenes.length} scenes</span>
                 {safeCharacters.length > 0 && (
                   <span className="flex items-center gap-0.5"><Users className="h-3 w-3" />{safeCharacters.length} chars</span>
