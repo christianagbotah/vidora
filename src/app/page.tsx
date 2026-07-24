@@ -1315,7 +1315,14 @@ export default function HomePage() {
           {currentView === "home" && (
             <motion.div key="home" {...fadeUp}>
               {/* Hero */}
-              <section className="relative overflow-hidden min-h-[520px] sm:min-h-[600px] hero-gradient">
+              <section className="relative overflow-hidden min-h-[520px] sm:min-h-[600px]">
+                {/* Hero Background Image */}
+                <img
+                  src="/images/hero-bg.png"
+                  alt="Vidora AI Video Studio"
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-violet-950/60 to-black/80" />
                 <div className="orb orb-violet w-[400px] h-[400px] -top-20 -left-32" />
                 <div className="orb orb-amber w-[300px] h-[300px] top-10 right-10" />
                 <div className="orb orb-rose w-[250px] h-[250px] bottom-20 left-1/2" />
@@ -1585,6 +1592,133 @@ export default function HomePage() {
                 <p className="text-muted-foreground mt-1">Write a script, describe a scene, or choose a template</p>
               </div>
 
+              {/* Project Settings — Always at the top */}
+              <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                      <Settings className="h-3.5 w-3.5" />
+                    </div>
+                    Project Settings
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Project Title</Label>
+                    <Input placeholder="My Cinematic Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} className="h-10" />
+                  </div>
+
+                  {/* Project Type */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Project Type</Label>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                      {PROJECT_TEMPLATES.map((t) => (
+                        <button
+                          key={t.id}
+                          onClick={() => setProjectType(t.id)}
+                          className={`relative p-3 rounded-xl border-2 text-left transition-all duration-200 ${
+                            projectType === t.id
+                              ? "border-violet-400 bg-violet-50"
+                              : "border-slate-100 hover:border-slate-200"
+                          }`}
+                        >
+                          <div className={`h-8 w-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center text-white mb-2`}>
+                            <t.icon className="h-4 w-4" />
+                          </div>
+                          <p className="text-xs font-bold">{t.label}</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
+                          {projectType === t.id && (
+                            <div className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-violet-500" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Duration */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Duration</Label>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="flex gap-1.5 flex-wrap">
+                        {DURATION_PRESETS.map((d) => (
+                          <button
+                            key={d.value}
+                            onClick={() => { setSelectedDuration(d.value); setIsCustomDuration(false); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                              !isCustomDuration && selectedDuration === d.value
+                                ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => setIsCustomDuration(true)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          isCustomDuration
+                            ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
+                            : "bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200"
+                        }`}
+                      >
+                        Custom
+                      </button>
+                      {isCustomDuration && (
+                        <div className="flex items-center gap-1.5">
+                          <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-24 h-9 text-xs" />
+                          <span className="text-xs text-muted-foreground">sec (10–300)</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="outline" className="text-[10px]">
+                        <Film className="h-2.5 w-2.5 mr-1" />~{effectiveSceneCount} scene{effectiveSceneCount > 1 ? "s" : ""}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {/* Style, Aspect Ratio */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Visual Style</Label>
+                      <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                        <SelectTrigger className="h-10">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {STYLES.map((s) => (
+                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Aspect Ratio</Label>
+                      <div className="grid grid-cols-5 gap-2">
+                        {ASPECTS.map((a) => (
+                          <button
+                            key={a.value}
+                            onClick={() => setSelectedAspect(a.value)}
+                            className={`p-2 rounded-lg border-2 text-center transition-all ${
+                              selectedAspect === a.value
+                                ? "border-violet-400 bg-violet-50"
+                                : "border-slate-100 hover:border-slate-200"
+                            }`}
+                          >
+                            <a.icon className={`h-4 w-4 mx-auto ${selectedAspect === a.value ? "text-violet-600" : "text-slate-400"}`} />
+                            <p className="text-[9px] mt-0.5 font-bold">{a.label}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Input Tabs */}
               <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
                 <TabsList className="grid grid-cols-4 w-full">
@@ -1798,133 +1932,6 @@ export default function HomePage() {
                   </CardContent>
                 </Card>
               )}
-
-              {/* Project Settings */}
-              <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-base font-bold flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
-                      <Settings className="h-3.5 w-3.5" />
-                    </div>
-                    Project Settings
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">Project Title</Label>
-                    <Input placeholder="My Cinematic Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} className="h-10" />
-                  </div>
-
-                  {/* Project Type */}
-                  <div className="space-y-2">
-                    <Label className="text-sm font-medium">Project Type</Label>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                      {PROJECT_TEMPLATES.map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => setProjectType(t.id)}
-                          className={`relative p-3 rounded-xl border-2 text-left transition-all duration-200 ${
-                            projectType === t.id
-                              ? "border-violet-400 bg-violet-50"
-                              : "border-slate-100 hover:border-slate-200"
-                          }`}
-                        >
-                          <div className={`h-8 w-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center text-white mb-2`}>
-                            <t.icon className="h-4 w-4" />
-                          </div>
-                          <p className="text-xs font-bold">{t.label}</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
-                          {projectType === t.id && (
-                            <div className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-violet-500" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Duration */}
-                  <div className="space-y-2">
-                    <Label className="text-sm font-medium">Duration</Label>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {DURATION_PRESETS.map((d) => (
-                          <button
-                            key={d.value}
-                            onClick={() => { setSelectedDuration(d.value); setIsCustomDuration(false); }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                              !isCustomDuration && selectedDuration === d.value
-                                ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
-                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            }`}
-                          >
-                            {d.label}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        onClick={() => setIsCustomDuration(true)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          isCustomDuration
-                            ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
-                            : "bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200"
-                        }`}
-                      >
-                        Custom
-                      </button>
-                      {isCustomDuration && (
-                        <div className="flex items-center gap-1.5">
-                          <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-24 h-9 text-xs" />
-                          <span className="text-xs text-muted-foreground">sec (10–300)</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-[10px]">
-                        <Film className="h-2.5 w-2.5 mr-1" />~{effectiveSceneCount} scene{effectiveSceneCount > 1 ? "s" : ""}
-                      </Badge>
-                      <Badge variant="outline" className="text-[10px]">
-                        <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* Style, Aspect Ratio */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium">Visual Style</Label>
-                      <Select value={selectedStyle} onValueChange={setSelectedStyle}>
-                        <SelectTrigger className="h-10">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {STYLES.map((s) => (
-                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium">Aspect Ratio</Label>
-                      <div className="grid grid-cols-5 gap-2">
-                        {ASPECTS.map((a) => (
-                          <button
-                            key={a.value}
-                            onClick={() => setSelectedAspect(a.value)}
-                            className={`p-2 rounded-lg border-2 text-center transition-all ${
-                              selectedAspect === a.value
-                                ? "border-violet-400 bg-violet-50"
-                                : "border-slate-100 hover:border-slate-200"
-                            }`}
-                          >
-                            <a.icon className={`h-4 w-4 mx-auto ${selectedAspect === a.value ? "text-violet-600" : "text-slate-400"}`} />
-                            <p className="text-[9px] mt-0.5 font-bold">{a.label}</p>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
 
               {/* Create Button */}
               <div className="flex items-center gap-4 pt-2">
