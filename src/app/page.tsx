@@ -180,7 +180,7 @@ export default function HomePage() {
       const res = await fetch("/api/projects");
       if (!res.ok) return;
       const data = await res.json();
-      if (data.success) setProjects(data.projects);
+      if (data.success && Array.isArray(data.projects)) setProjects(data.projects);
     } catch { /* ignore */ }
   };
 
@@ -192,7 +192,7 @@ export default function HomePage() {
         const data = await res.json();
         if (data.success) {
           setCurrentProject(data.project);
-          setProjects((prev) => prev.map((p) => p.id === data.project.id ? data.project : p));
+          setProjects((prev) => (Array.isArray(prev) ? prev : []).map((p) => p.id === data.project.id ? data.project : p));
         }
       }
     } catch { /* ignore */ }
@@ -295,7 +295,7 @@ export default function HomePage() {
       const fullData = await fullRes.json();
       if (fullData.success) {
         setCurrentProject(fullData.project);
-        setProjects((prev) => [fullData.project, ...prev]);
+        setProjects((prev) => [fullData.project, ...(Array.isArray(prev) ? prev : [])]);
         setCurrentView("studio");
         setCreateDialogOpen(false);
         toast({ title: "Project created with " + sceneDescriptions.length + " scenes!", description: "Video generation will start automatically." });
@@ -423,8 +423,11 @@ export default function HomePage() {
     setTextPrompt(scene.prompt); setInputMode("text"); setCreateDialogOpen(true); setProjectTitle(scene.title);
   };
 
-  const isAnyGenerating = currentProject?.scenes?.some((s) => s.status === "generating") || false;
-  const completedSceneCount = currentProject?.scenes?.filter((s) => s.videoUrl).length || 0;
+  // Safety: ensure projects is always an array
+  const safeProjects = Array.isArray(projects) ? projects : [];
+  const safeScenes = currentProject?.scenes && Array.isArray(currentProject.scenes) ? currentProject.scenes : [];
+  const isAnyGenerating = safeScenes.some((s) => s.status === "generating") || false;
+  const completedSceneCount = safeScenes.filter((s) => s.videoUrl).length || 0;
 
   const formatDuration = (sec: number) => {
     if (sec < 60) return sec + "s";
@@ -579,19 +582,19 @@ export default function HomePage() {
               </section>
 
               {/* ── Recent Projects ── */}
-              {projects.length > 0 && (
+              {safeProjects.length > 0 && (
                 <section className="max-w-5xl mx-auto px-4 sm:px-6 pb-12 sm:pb-16">
                   <div className="section-divider mb-10" />
                   <div className="flex items-center justify-between mb-6">
                     <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Recent Projects</h2>
-                    {projects.length > 3 && (
+                    {safeProjects.length > 3 && (
                       <Button variant="ghost" size="sm" className="text-violet-600 hover:text-violet-700 hover:bg-violet-50">
                         View All <ChevronRight className="h-4 w-4 ml-1" />
                       </Button>
                     )}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {projects.slice(0, 6).map((p) => (
+                    {safeProjects.slice(0, 6).map((p) => (
                       <Card
                         key={p.id}
                         className="card-glow cursor-pointer bg-white border-0 shadow-md shadow-black/5"
@@ -901,7 +904,7 @@ export default function HomePage() {
                     {isExporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
                     {isExporting ? "Exporting..." : "Export Video"}
                   </Button>
-                  <Button onClick={() => generateVideo(currentProject)} disabled={isGenerating || isAnyGenerating || !currentProject.scenes.length} className="btn-gradient">
+                  <Button onClick={() => generateVideo(currentProject)} disabled={isGenerating || isAnyGenerating || safeScenes.length === 0} className="btn-gradient">
                     {(isGenerating || isAnyGenerating) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
                     {(isGenerating || isAnyGenerating) ? "Generating..." : "Generate All"}
                   </Button>
@@ -917,12 +920,12 @@ export default function HomePage() {
                         <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
                         <span className="text-sm font-semibold text-foreground">Generating scenes...</span>
                       </div>
-                      <span className="text-sm text-muted-foreground font-medium">{completedSceneCount}/{currentProject.scenes.length} completed</span>
+                      <span className="text-sm text-muted-foreground font-medium">{completedSceneCount}/{safeScenes.length} completed</span>
                     </div>
                     <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden">
                       <div
                         className="progress-gradient h-full rounded-full transition-all duration-700 ease-out"
-                        style={{ width: `${(completedSceneCount / currentProject.scenes.length) * 100}%` }}
+                        style={{ width: `${(completedSceneCount / safeScenes.length) * 100}%` }}
                       />
                     </div>
                   </CardContent>
@@ -978,13 +981,13 @@ export default function HomePage() {
               <div>
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                   <Layers className="h-4 w-4 text-violet-500" />
-                  Scenes ({currentProject.scenes.length})
+                  Scenes ({safeScenes.length})
                 </h3>
-                {currentProject.scenes.length === 0 ? (
+                {safeScenes.length === 0 ? (
                   <Card className="border-dashed border-2 bg-slate-50/50"><CardContent className="p-10 text-center"><Film className="h-10 w-10 mx-auto text-slate-300" /><p className="text-muted-foreground mt-3 font-medium">No scenes yet. Add your first scene above.</p></CardContent></Card>
                 ) : (
                   <div className="space-y-3">
-                    {currentProject.scenes.map((scene) => (
+                    {safeScenes.map((scene) => (
                       <Card key={scene.id} className="card-glow overflow-hidden bg-white border-0 shadow-md shadow-black/5">
                         <div className="flex flex-col sm:flex-row">
                           {/* Thumbnail */}

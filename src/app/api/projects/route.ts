@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
         description: description || null,
         style: style || "cinematic",
         aspectRatio: aspectRatio || "16:9",
+        targetDuration: body.targetDuration || 60,
       },
       include: { scenes: true },
     });
