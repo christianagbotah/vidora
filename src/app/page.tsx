@@ -738,21 +738,21 @@ export default function HomePage() {
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium">Style</Label>
                       <Select value={selectedStyle} onValueChange={setSelectedStyle}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium">Aspect Ratio</Label>
                       <Select value={selectedAspect} onValueChange={setSelectedAspect}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label} {a.desc}</SelectItem>)}</SelectContent>
                       </Select>
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium">Transition</Label>
                       <Select value="fade">
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                         <SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
                       </Select>
                     </div>

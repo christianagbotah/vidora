@@ -167,3 +167,26 @@ Stage Summary:
 - All functional features preserved: Vidora branding, targetDuration, DeviceSimulator, auto-gen, expandable scenes, isAnyGenerating, project-level polling
 - Lint passes clean, dev server compiles successfully
 ---
+Task ID: 8
+Agent: main
+Task: Fix project settings input blocking, pointer cursor, and pending UI fixes
+
+Work Log:
+- Identified root cause: `.card-glow::before` pseudo-element had `position:absolute; inset:0` without `pointer-events:none`, creating an invisible overlay that blocked all inputs, selects, and textareas inside cards with the `card-glow` class
+- Added `pointer-events: none` to `.card-glow::before` in globals.css — this was the primary fix
+- Added `w-full` class to all SelectTrigger components in the project settings card to ensure proper sizing within the grid layout
+- Expanded pointer cursor CSS selectors to include `[data-slot="select-trigger"]`, `[data-slot="select-item"]`, `[data-slot="tabs-trigger"]`, `[data-slot="dialog-close"]`, and `[data-radix-select-item]`
+- Verified all 4 features from previous session are in place:
+  1. Pointer cursor — working (verified via getComputedStyle → "pointer")
+  2. Delete confirmation modal — already implemented (requestDelete/confirmDelete/cancelDelete with Dialog)
+  3. Hero image — already restored at /images/hero-bg.png (line 497 of page.tsx)
+  4. Project settings input — now fixed via pointer-events:none on .card-glow::before
+- Browser-verified: filled project title input, opened Style dropdown, selected options, filled textarea, confirmed Create & Generate button enables
+- Dev log shows clean 200 responses with no errors
+- Lint passes with 0 errors
+
+Stage Summary:
+- Project settings section now fully interactive — inputs, selects, textareas, and buttons all respond correctly
+- The invisible overlay from .card-glow::before was the sole cause of the input blocking issue
+- Pointer cursor verified working on all interactive elements
+---

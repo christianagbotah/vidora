@@ -145,8 +145,13 @@
   [cursor-pointer],
   [data-radix-collection-item],
   [data-radix-select-trigger],
+  [data-radix-select-item],
   [data-radix-tabs-trigger],
   [data-radix-dialog-close],
+  [data-slot="select-trigger"],
+  [data-slot="select-item"],
+  [data-slot="tabs-trigger"],
+  [data-slot="dialog-close"],
   input[type="checkbox"],
   input[type="radio"],
   input[type="range"],
@@ -301,6 +306,7 @@
   opacity: 0;
   transition: opacity 0.3s ease;
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), rgba(245, 158, 11, 0.08));
+  pointer-events: none;
 }
 
 .card-glow:hover::before {

@@ -1,0 +1,433 @@
+   730→                      <Badge variant="outline" className="text-[10px]">
+   731→                        <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
+   732→                      </Badge>
+   733→                    </div>
+   734→                  </div>
+   735→
+   736→                  {/* Style + Aspect + Transition */}
+   737→                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   738→                    <div className="space-y-1.5">
+   739→                      <Label className="text-sm font-medium">Style</Label>
+   740→                      <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+   741→                        <SelectTrigger><SelectValue /></SelectTrigger>
+   742→                        <SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
+   743→                      </Select>
+   744→                    </div>
+   745→                    <div className="space-y-1.5">
+   746→                      <Label className="text-sm font-medium">Aspect Ratio</Label>
+   747→                      <Select value={selectedAspect} onValueChange={setSelectedAspect}>
+   748→                        <SelectTrigger><SelectValue /></SelectTrigger>
+   749→                        <SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label} {a.desc}</SelectItem>)}</SelectContent>
+   750→                      </Select>
+   751→                    </div>
+   752→                    <div className="space-y-1.5">
+   753→                      <Label className="text-sm font-medium">Transition</Label>
+   754→                      <Select value="fade">
+   755→                        <SelectTrigger><SelectValue /></SelectTrigger>
+   756→                        <SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+   757→                      </Select>
+   758→                    </div>
+   759→                  </div>
+   760→                </CardContent>
+   761→              </Card>
+   762→
+   763→              {/* Input Tabs */}
+   764→              <Card className="border-0 shadow-lg shadow-black/5 bg-white">
+   765→                <CardContent className="pt-6">
+   766→                  <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
+   767→                    <TabsList className="grid w-full grid-cols-3 bg-slate-100 p-1">
+   768→                      <TabsTrigger value="text" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
+   769→                        <Wand2 className="h-4 w-4 mr-1.5" />Text
+   770→                      </TabsTrigger>
+   771→                      <TabsTrigger value="voice" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
+   772→                        <Mic className="h-4 w-4 mr-1.5" />Voice
+   773→                      </TabsTrigger>
+   774→                      <TabsTrigger value="video" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
+   775→                        <Upload className="h-4 w-4 mr-1.5" />Video
+   776→                      </TabsTrigger>
+   777→                    </TabsList>
+   778→
+   779→                    <TabsContent value="text" className="space-y-3 mt-4">
+   780→                      <Textarea
+   781→                        placeholder="Describe your video scene in detail. The more detail, the better the result..."
+   782→                        className="min-h-[150px] text-sm leading-relaxed resize-none"
+   783→                        value={textPrompt}
+   784→                        onChange={(e) => setTextPrompt(e.target.value)}
+   785→                      />
+   786→                      <div className="flex gap-2">
+   787→                        <Button variant="outline" size="sm" onClick={enhancePrompt} disabled={isEnhancing || !textPrompt.trim()} className="hover:bg-violet-50 hover:text-violet-700 hover:border-violet-200">
+   788→                          {isEnhancing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Palette className="h-4 w-4 mr-1.5" />}
+   789→                          {isEnhancing ? "Enhancing..." : "Enhance with AI"}
+   790→                        </Button>
+   791→                      </div>
+   792→                      {enhancedText && enhancedText !== textPrompt && (
+   793→                        <Card className="bg-gradient-to-r from-violet-50 to-fuchsia-50 border-violet-100"><CardContent className="p-4"><p className="text-xs font-semibold text-violet-600 mb-1">AI Enhanced Version:</p><p className="text-sm text-foreground leading-relaxed">{enhancedText}</p></CardContent></Card>
+   794→                      )}
+   795→                    </TabsContent>
+   796→
+   797→                    <TabsContent value="voice" className="space-y-3 mt-4">
+   798→                      <div className="flex flex-col items-center gap-4 py-10 border-2 border-dashed border-slate-200 rounded-xl">
+   799→                        <div className={`h-16 w-16 rounded-full flex items-center justify-center ${isRecording ? "bg-red-100 animate-pulse" : "bg-violet-100"}`}>
+   800→                          <Button
+   801→                            size="lg"
+   802→                            variant={isRecording ? "destructive" : "default"}
+   803→                            onClick={isRecording ? stopRecording : startRecording}
+   804→                            className={`rounded-full h-12 w-12 ${!isRecording ? "btn-gradient" : ""}`}
+   805→                          >
+   806→                            {isRecording ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+   807→                          </Button>
+   808→                        </div>
+   809→                        <p className="text-sm text-muted-foreground">{isRecording ? "Recording... speak now" : "Click to record your voice"}</p>
+   810→                      </div>
+   811→                    </TabsContent>
+   812→
+   813→                    <TabsContent value="video" className="space-y-3 mt-4">
+   814→                      <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center space-y-4">
+   815→                        {videoPreview ? (
+   816→                          <><video src={videoPreview} controls className="max-h-64 rounded-lg mx-auto" /><div className="flex gap-2 justify-center"><Button size="sm" className="btn-gradient">Analyze &amp; Use</Button><Button size="sm" variant="outline" onClick={() => { setVideoFile(null); setVideoPreview(null); }}>Remove</Button></div></>
+   817→                        ) : (
+   818→                          <><Upload className="h-10 w-10 mx-auto text-slate-300" /><p className="text-sm text-muted-foreground">Upload a video to analyze</p><input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoUpload} /><Button variant="outline" onClick={() => videoInputRef.current?.click()}>Choose File</Button></>
+   819→                        )}
+   820→                      </div>
+   821→                    </TabsContent>
+   822→                  </Tabs>
+   823→                </CardContent>
+   824→              </Card>
+   825→
+   826→              {/* Create Button */}
+   827→              <div className="flex gap-3">
+   828→                <Button
+   829→                  className="flex-1 btn-gradient text-base h-12"
+   830→                  onClick={() => createProject()}
+   831→                  disabled={isCreatingProject || (!textPrompt.trim() && !videoFile)}
+   832→                >
+   833→                  {isCreatingProject ? <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Creating...</> : <><Sparkles className="h-5 w-5 mr-2" />Create &amp; Generate</>}
+   834→                </Button>
+   835→              </div>
+   836→            </motion.div>
+   837→          )}
+   838→
+   839→          {/* ═══ GALLERY VIEW ═══ */}
+   840→          {currentView === "gallery" && (
+   841→            <motion.div key="gallery" {...fadeUp} className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+   842→              <div>
+   843→                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Scene Templates</h1>
+   844→                <p className="text-muted-foreground mt-1">Choose a template to get started quickly</p>
+   845→              </div>
+   846→              <div className="flex gap-2 flex-wrap">
+   847→                {["all", "nature", "sci-fi", "fantasy", "classic"].map((cat) => (
+   848→                  <button
+   849→                    key={cat}
+   850→                    onClick={() => setSceneFilter(cat)}
+   851→                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 ${
+   852→                      sceneFilter === cat
+   853→                        ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+   854→                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+   855→                    }`}
+   856→                  >
+   857→                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
+   858→                  </button>
+   859→                ))}
+   860→              </div>
+   861→              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+   862→                {CLASSIC_SCENES.filter((s) => sceneFilter === "all" || s.category === sceneFilter).map((scene) => (
+   863→                  <Card key={scene.id} className="card-glow overflow-hidden group border-0 shadow-lg shadow-black/5 bg-white cursor-pointer">
+   864→                    <div className="aspect-video bg-slate-100 relative overflow-hidden">
+   865→                      {scene.image ? (
+   866→                        <img src={scene.image} alt={scene.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+   867→                      ) : (
+   868→                        <div className="w-full h-full bg-gradient-to-br from-violet-100 to-fuchsia-100 flex items-center justify-center">
+   869→                          <ImageIcon className="h-12 w-12 text-violet-300" />
+   870→                        </div>
+   871→                      )}
+   872→                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end justify-center pb-4">
+   873→                        <Button size="sm" className="btn-gradient text-xs">
+   874→                          <Sparkles className="h-3.5 w-3.5 mr-1" />Use Template
+   875→                        </Button>
+   876→                      </div>
+   877→                      <Badge className="absolute top-2.5 right-2.5 text-[10px] font-semibold glass-card text-white">{scene.category}</Badge>
+   878→                    </div>
+   879→                    <CardHeader className="pb-2 pt-4">
+   880→                      <CardTitle className="text-base font-bold">{scene.title}</CardTitle>
+   881→                      <CardDescription className="text-xs leading-relaxed">{scene.description}</CardDescription>
+   882→                    </CardHeader>
+   883→                    <CardContent className="pt-0 pb-4">
+   884→                      <Button
+   885→                        variant="outline"
+   886→                        size="sm"
+   887→                        className="w-full hover:bg-violet-50 hover:text-violet-700 hover:border-violet-200"
+   888→                        onClick={() => handleSelectClassicScene(scene)}
+   889→                      >
+   890→                        <Copy className="h-3.5 w-3.5 mr-1.5" />Use Template
+   891→                      </Button>
+   892→                    </CardContent>
+   893→                  </Card>
+   894→                ))}
+   895→              </div>
+   896→            </motion.div>
+   897→          )}
+   898→
+   899→          {/* ═══ STUDIO VIEW ═══ */}
+   900→          {currentView === "studio" && currentProject && (
+   901→            <motion.div key="studio" {...fadeUp} className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+   902→              {/* Project Header */}
+   903→              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+   904→                <div>
+   905→                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{currentProject.title}</h1>
+   906→                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+   907→                    <Badge variant="outline" className="text-xs font-medium">{currentProject.aspectRatio}</Badge>
+   908→                    <Badge variant="outline" className="text-xs font-medium">{currentProject.style}</Badge>
+   909→                    <Badge variant="outline" className="text-xs font-medium"><Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(currentProject.targetDuration)}</Badge>
+   910→                    <Badge
+   911→                      className={`text-[10px] font-semibold px-2 ${
+   912→                        currentProject.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+   913→                        currentProject.status === "generating" ? "bg-violet-50 text-violet-700 border-violet-200" :
+   914→                        currentProject.status === "failed" ? "bg-red-50 text-red-700 border-red-200" :
+   915→                        "bg-slate-50 text-slate-600 border-slate-200"
+   916→                      }`}
+   917→                    >
+   918→                      {currentProject.status}
+   919→                    </Badge>
+   920→                  </div>
+   921→                </div>
+   922→                <div className="flex gap-2">
+   923→                  <Button variant="outline" onClick={exportFullVideo} disabled={isExporting || completedSceneCount === 0} className="hover:bg-violet-50 hover:text-violet-700">
+   924→                    {isExporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+   925→                    {isExporting ? "Exporting..." : "Export Video"}
+   926→                  </Button>
+   927→                  <Button onClick={() => generateVideo(currentProject)} disabled={isGenerating || isAnyGenerating || safeScenes.length === 0} className="btn-gradient">
+   928→                    {(isGenerating || isAnyGenerating) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
+   929→                    {(isGenerating || isAnyGenerating) ? "Generating..." : "Generate All"}
+   930→                  </Button>
+   931→                </div>
+   932→              </div>
+   933→
+   934→              {/* Progress bar */}
+   935→              {isAnyGenerating && (
+   936→                <Card className="border-0 shadow-md shadow-black/5 bg-gradient-to-r from-violet-50/50 to-fuchsia-50/50">
+   937→                  <CardContent className="p-4 sm:p-5">
+   938→                    <div className="flex items-center justify-between mb-2.5">
+   939→                      <div className="flex items-center gap-2">
+   940→                        <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+   941→                        <span className="text-sm font-semibold text-foreground">Generating scenes...</span>
+   942→                      </div>
+   943→                      <span className="text-sm text-muted-foreground font-medium">{completedSceneCount}/{safeScenes.length} completed</span>
+   944→                    </div>
+   945→                    <div className="relative h-2 bg-slate-200 rounded-full overflow-hidden">
+   946→                      <div
+   947→                        className="progress-gradient h-full rounded-full transition-all duration-700 ease-out"
+   948→                        style={{ width: `${(completedSceneCount / safeScenes.length) * 100}%` }}
+   949→                      />
+   950→                    </div>
+   951→                  </CardContent>
+   952→                </Card>
+   953→              )}
+   954→
+   955→              {/* Final Video */}
+   956→              {currentProject.finalVideoUrl && (
+   957→                <Card className="border-0 shadow-lg shadow-black/5 bg-white overflow-hidden">
+   958→                  <CardHeader>
+   959→                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+   960→                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
+   961→                        <Video className="h-3.5 w-3.5" />
+   962→                      </div>
+   963→                      Final Video
+   964→                    </CardTitle>
+   965→                  </CardHeader>
+   966→                  <CardContent>
+   967→                    <DeviceSimulator aspectRatio={currentProject.aspectRatio} showLabel={false}>
+   968→                      <video src={currentProject.finalVideoUrl} controls className="w-full h-full object-contain" />
+   969→                    </DeviceSimulator>
+   970→                  </CardContent>
+   971→                </Card>
+   972→              )}
+   973→
+   974→              {/* Add Scene */}
+   975→              <Card className="border-0 shadow-md shadow-black/5 bg-white">
+   976→                <CardHeader>
+   977→                  <CardTitle className="text-base font-bold flex items-center gap-2">
+   978→                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center text-white">
+   979→                      <Plus className="h-3.5 w-3.5" />
+   980→                    </div>
+   981→                    Add Scene
+   982→                  </CardTitle>
+   983→                </CardHeader>
+   984→                <CardContent>
+   985→                  <div className="flex flex-col sm:flex-row gap-2">
+   986→                    <Textarea placeholder="Describe a new scene..." className="min-h-[60px] flex-1 text-sm" value={newScenePrompt} onChange={(e) => setNewScenePrompt(e.target.value)} />
+   987→                    <div className="flex gap-2 sm:flex-col">
+   988→                      <Select value={newSceneTransition} onValueChange={setNewSceneTransition}>
+   989→                        <SelectTrigger className="w-[120px] text-xs"><SelectValue /></SelectTrigger>
+   990→                        <SelectContent>{TRANSITIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+   991→                      </Select>
+   992→                      <Button onClick={addScene} disabled={!newScenePrompt.trim()} className="btn-amber text-xs">
+   993→                        <Plus className="h-4 w-4 mr-1" />Add
+   994→                      </Button>
+   995→                    </div>
+   996→                  </div>
+   997→                </CardContent>
+   998→              </Card>
+   999→
+  1000→              {/* Scenes List */}
+  1001→              <div>
+  1002→                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+  1003→                  <Layers className="h-4 w-4 text-violet-500" />
+  1004→                  Scenes ({safeScenes.length})
+  1005→                </h3>
+  1006→                {safeScenes.length === 0 ? (
+  1007→                  <Card className="border-dashed border-2 bg-slate-50/50"><CardContent className="p-10 text-center"><Film className="h-10 w-10 mx-auto text-slate-300" /><p className="text-muted-foreground mt-3 font-medium">No scenes yet. Add your first scene above.</p></CardContent></Card>
+  1008→                ) : (
+  1009→                  <div className="space-y-3">
+  1010→                    {safeScenes.map((scene) => (
+  1011→                      <Card key={scene.id} className="card-glow overflow-hidden bg-white border-0 shadow-md shadow-black/5">
+  1012→                        <div className="flex flex-col sm:flex-row">
+  1013→                          {/* Thumbnail */}
+  1014→                          <div className="sm:w-64 aspect-video sm:aspect-auto bg-slate-100 relative shrink-0 cursor-pointer" onClick={() => scene.videoUrl ? openVideoPreview(scene.videoUrl) : scene.imageUrl ? openImagePreview(scene.imageUrl) : null}>
+  1015→                            {scene.videoUrl ? (
+  1016→                              <DeviceSimulator aspectRatio={currentProject.aspectRatio} compact showLabel={false}>
+  1017→                                <video src={scene.videoUrl} className="w-full h-full object-cover" muted />
+  1018→                              </DeviceSimulator>
+  1019→                            ) : scene.imageUrl ? (
+  1020→                              <img src={scene.imageUrl} alt={"Scene " + scene.sceneNumber} className="w-full h-full object-cover" />
+  1021→                            ) : (
+  1022→                              <div className="w-full h-full bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+  1023→                                <ImageIcon className="h-8 w-8 text-slate-300" />
+  1024→                              </div>
+  1025→                            )}
+  1026→                            {scene.status === "generating" && (
+  1027→                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/60 backdrop-blur-sm">
+  1028→                                <Loader2 className="h-8 w-8 animate-spin text-white" />
+  1029→                                <span className="text-xs text-white font-semibold">Generating...</span>
+  1030→                              </div>
+  1031→                            )}
+  1032→                            <Badge className="absolute top-2 left-2 text-[10px] font-bold shadow-sm">#{scene.sceneNumber}</Badge>
+  1033→                            {scene.videoUrl && scene.status !== "generating" && (
+  1034→                              <div className="absolute inset-0 flex items-center justify-center bg-black/0 hover:bg-black/30 transition-colors duration-200">
+  1035→                                <div className="h-10 w-10 rounded-full bg-white/90 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity shadow-lg">
+  1036→                                  <Play className="h-5 w-5 text-black ml-0.5" />
+  1037→                                </div>
+  1038→                              </div>
+  1039→                            )}
+  1040→                          </div>
+  1041→                          {/* Info */}
+  1042→                          <CardContent className="p-4 flex-1 min-w-0">
+  1043→                            <div className="flex items-start justify-between gap-2">
+  1044→                              <div className="min-w-0 flex-1">
+  1045→                                <p
+  1046→                                  className={`text-sm cursor-pointer hover:text-violet-600 transition-colors ${expandedSceneId === scene.id ? "" : "line-clamp-2"}`}
+  1047→                                  onClick={() => setExpandedSceneId(expandedSceneId === scene.id ? null : scene.id)}
+  1048→                                >
+  1049→                                  {scene.enhancedPrompt || scene.prompt}
+  1050→                                </p>
+  1051→                                {expandedSceneId === scene.id && (
+  1052→                                  <button onClick={() => setExpandedSceneId(null)} className="text-[10px] text-violet-500 hover:text-violet-700 mt-1 font-medium">Show less</button>
+  1053→                                )}
+  1054→                                <div className="flex items-center gap-2.5 mt-2.5 text-xs flex-wrap">
+  1055→                                  <span className="flex items-center gap-1 text-muted-foreground"><Clock className="h-3 w-3" />{scene.duration}s</span>
+  1056→                                  <Badge variant="outline" className="text-[10px]">{scene.transition}</Badge>
+  1057→                                  {scene.videoUrl ? (
+  1058→                                    <Badge className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200"><Video className="h-2.5 w-2.5 mr-1" />Ready</Badge>
+  1059→                                  ) : scene.status === "generating" ? (
+  1060→                                    <Badge className="text-[10px] font-semibold bg-violet-50 text-violet-700 border-violet-200"><Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />Generating</Badge>
+  1061→                                  ) : scene.status === "failed" ? (
+  1062→                                    <Badge className="text-[10px] font-semibold bg-red-50 text-red-700 border-red-200">Failed</Badge>
+  1063→                                  ) : (
+  1064→                                    <Badge className="text-[10px] font-semibold bg-slate-50 text-slate-600 border-slate-200 capitalize">{scene.status}</Badge>
+  1065→                                  )}
+  1066→                                </div>
+  1067→                              </div>
+  1068→                              <div className="flex items-center gap-1 shrink-0">
+  1069→                                {scene.status === "failed" && (
+  1070→                                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-amber-50" onClick={() => retryScene(scene)} title="Retry"><RefreshCw className="h-4 w-4 text-amber-500" /></Button>
+  1071→                                )}
+  1072→                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-violet-50" onClick={() => generateSceneVideo(scene.id, scene.enhancedPrompt || scene.prompt)} disabled={scene.status === "generating"} title="Generate"><Eye className="h-4 w-4 text-violet-500" /></Button>
+  1073→                                <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-red-50" onClick={() => requestDelete("scene", scene.id, "Scene #" + scene.sceneNumber)}><Trash2 className="h-4 w-4 text-red-400" /></Button>
+  1074→                              </div>
+  1075→                            </div>
+  1076→                          </CardContent>
+  1077→                        </div>
+  1078→                      </Card>
+  1079→                    ))}
+  1080→                  </div>
+  1081→                )}
+  1082→              </div>
+  1083→
+  1084→              {/* Delete project */}
+  1085→              <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+  1086→                <Button variant="ghost" onClick={() => requestDelete("project", currentProject.id, currentProject.title)} className="text-red-500 hover:text-red-600 hover:bg-red-50">
+  1087→                  <Trash2 className="h-4 w-4 mr-2" />Delete Project
+  1088→                </Button>
+  1089→              </div>
+  1090→            </motion.div>
+  1091→          )}
+  1092→        </AnimatePresence>
+  1093→      </main>
+  1094→
+  1095→      {/* ── Create Dialog ── */}
+  1096→      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+  1097→        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Create from Template</DialogTitle><DialogDescription>Customize and create a new project from this template</DialogDescription></DialogHeader>
+  1098→          <div className="space-y-4 py-2">
+  1099→            <div className="space-y-1.5"><Label>Title</Label><Input value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} /></div>
+  1100→            <div className="space-y-1.5"><Label>Prompt</Label><Textarea className="min-h-[100px]" value={textPrompt} onChange={(e) => setTextPrompt(e.target.value)} /></div>
+  1101→            <div className="grid grid-cols-2 gap-3">
+  1102→              <div className="space-y-1.5"><Label>Style</Label><Select value={selectedStyle} onValueChange={setSelectedStyle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent></Select></div>
+  1103→              <div className="space-y-1.5"><Label>Aspect</Label><Select value={selectedAspect} onValueChange={setSelectedAspect}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ASPECTS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label} {a.desc}</SelectItem>)}</SelectContent></Select></div>
+  1104→            </div>
+  1105→          </div>
+  1106→          <DialogFooter><Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button><Button onClick={() => createProject()} className="btn-gradient"><Sparkles className="h-4 w-4 mr-2" />Create</Button></DialogFooter>
+  1107→        </DialogContent>
+  1108→      </Dialog>
+  1109→
+  1110→      {/* ── Media Preview Dialog ── */}
+  1111→      <Dialog open={!!previewVideoUrl || !!previewImage} onOpenChange={closePreview}>
+  1112→        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden"><DialogTitle className="sr-only">Preview</DialogTitle>
+  1113→          <div className="bg-black">
+  1114→            {previewVideoUrl ? (
+  1115→              <DeviceSimulator aspectRatio={currentProject?.aspectRatio || "16:9"} showLabel={false}>
+  1116→                <video src={previewVideoUrl} controls autoPlay className="w-full h-full object-contain" />
+  1117→              </DeviceSimulator>
+  1118→            ) : previewImage ? (
+  1119→              <img src={previewImage} alt="Preview" className="w-full h-auto max-h-[80vh] object-contain" />
+  1120→            ) : null}
+  1121→          </div>
+  1122→        </DialogContent>
+  1123→      </Dialog>
+  1124→
+  1125→      {/* ── Delete Confirmation Dialog ── */}
+  1126→      <Dialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+  1127→        <DialogContent className="sm:max-w-md">
+  1128→          <DialogHeader>
+  1129→            <DialogTitle className="flex items-center gap-2">
+  1130→              <div className="h-8 w-8 rounded-lg bg-red-100 flex items-center justify-center">
+  1131→                <Trash2 className="h-4 w-4 text-red-600" />
+  1132→              </div>
+  1133→              Delete {pendingDeleteAction?.type === "project" ? "Project" : "Scene"}
+  1134→            </DialogTitle>
+  1135→            <DialogDescription>
+  1136→              Are you sure you want to delete <span className="font-semibold text-foreground">{pendingDeleteAction?.label}</span>? This action cannot be undone.
+  1137→            </DialogDescription>
+  1138→          </DialogHeader>
+  1139→          <DialogFooter className="gap-2">
+  1140→            <Button variant="outline" onClick={cancelDelete}>Cancel</Button>
+  1141→            <Button variant="destructive" onClick={confirmDelete}>Delete</Button>
+  1142→          </DialogFooter>
+  1143→        </DialogContent>
+  1144→      </Dialog>
+  1145→
+  1146→      {/* ── Footer ── */}
+  1147→      <footer className="border-t bg-background mt-auto">
+  1148→        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+  1149→          <div className="flex items-center gap-2">
+  1150→            <div className="h-6 w-6 rounded-md bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+  1151→              <Clapperboard className="h-3 w-3 text-white" />
+  1152→            </div>
+  1153→            <span className="text-sm font-semibold bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">Vidora</span>
+  1154→            <span className="text-xs text-muted-foreground">— Professional AI Video Creator</span>
+  1155→          </div>
+  1156→          <p className="text-xs text-muted-foreground">Powered by AI · Create cinematic videos in seconds</p>
+  1157→        </div>
+  1158→      </footer>
+  1159→    </div>
+  1160→  );
+  1161→}
+  1162→
