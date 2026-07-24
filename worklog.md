@@ -228,3 +228,19 @@ Stage Summary:
 - Script parser detects scenes, characters, dialogue, and visual descriptions automatically
 - Production templates: Birthday, Commercial/Ad, Event/Promo, Custom/Creative
 ---
+Task ID: 10
+Agent: main
+Task: Set up GitHub remote, auto-commit/push, and worklog
+
+Work Log:
+- Connected local git repo to GitHub remote: https://github.com/christianagbotah/vidora.git
+- Updated .gitignore to exclude: /db/, /tool-results/, /tests/, /examples/, /screenshots/, /download/, screenshot*.png, /public/generated/, /mini-services/, *.log, auto-git.log
+- Created auto-git.sh watcher script that checks for changes every 10 seconds, stages all files, commits with descriptive message, and pushes to origin
+- Added "auto-git" npm script to package.json
+- Added this worklog entry
+
+Stage Summary:
+- GitHub remote configured and ready for push
+- Auto-commit/push system active via auto-git.sh (runs every 10s)
+- Worklog maintained at /home/z/my-project/worklog.md
+---

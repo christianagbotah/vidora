@@ -36,19 +36,42 @@ yarn-error.log*
 # vercel
 .vercel
 
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 local-*
+
+# AI/Sandbox configs
 .claude
 .z-ai-config
+
+# Logs
 *.log
 dev.log
 dev.out.log
-test
-prompt
-
 server.log
+
 # Skills directory
 /skills/
+
+# Vidora-specific ignores
+/db/
+/tool-results/
+/tests/
+/examples/
+/screenshots/
+/download/
+/write_page.py
+
+# Screenshots and generated assets (too large for git)
+screenshot*.png
+
+# AI generated images/videos (regenerated at runtime)
+/public/generated/
+
+# Mini services (if any)
+/mini-services/
+
+# Auto-commit script log
+/auto-git.log
+~/.github_token
