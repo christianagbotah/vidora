@@ -35,6 +35,7 @@ model VideoScene {
   dialogue       String?                       // extracted dialogue/narration
   characterIds   String?                       // JSON array of character IDs involved in scene
   referenceImageUrl String?                   // uploaded/generared reference image for scene
+  narrationUrl   String?                       // generated TTS narration audio URL
   imageUrl       String?
   imageBase64    String?
   videoUrl       String?

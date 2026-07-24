@@ -22,6 +22,7 @@ export interface VideoScene {
   dialogue?: string | null;
   characterIds?: string | null;
   referenceImageUrl?: string | null;
+  narrationUrl?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
   videoUrl?: string | null;
@@ -70,6 +71,7 @@ export interface DetectedCharacter {
   name: string;
   role: string;
   description: string;
+  stylePrompt?: string;
 }
 
 export type InputMode = "text" | "voice" | "video" | "script";

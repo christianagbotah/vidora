@@ -1,6 +1,85 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 
+const KNOWN_CHARACTERS: Record<string, { description: string; stylePrompt: string }> = {
+  // PAW Patrol
+  "chase": { description: "Chase, a German Shepherd police pup from PAW Patrol, blue police uniform with badge, police hat, blue eyes", stylePrompt: "Chase PAW Patrol German Shepherd police dog, blue uniform, official character design, 3D animated style matching the show" },
+  "marshall": { description: "Marshall, a Dalmatian fire pup from PAW Patrol, red fire uniform with fire hat, spotted white fur, clumsy and cute", stylePrompt: "Marshall PAW Patrol Dalmatian fire dog, red uniform, official character design, 3D animated style" },
+  "skye": { description: "Skye, a cockapoo aviator pup from PAW Patrol, pink aviator goggles and uniform, fluffy ears, adventurous", stylePrompt: "Skye PAW Patrol cockapoo pilot dog, pink aviator uniform, official character design, 3D animated style" },
+  "rubble": { description: "Rubble, an English Bulldog construction pup from PAW Patrol, yellow construction uniform and hat, sturdy build", stylePrompt: "Rubble PAW Patrol bulldog construction dog, yellow uniform, official character design, 3D animated style" },
+  "rocky": { description: "Rocky, a mixed breed recycling pup from PAW Patrol, green recycling uniform, eco-friendly, clever", stylePrompt: "Rocky PAW Patrol recycling dog, green uniform, official character design, 3D animated style" },
+  "zuma": { description: "Zuma, a Chocolate Labrador water rescue pup from PAW Patrol, orange water rescue uniform", stylePrompt: "Zuma PAW Patrol Labrador water rescue dog, orange uniform, official character design, 3D animated style" },
+  "everest": { description: "Everest, a Siberian Husky snow rescue pup from PAW Patrol, teal snow rescue uniform", stylePrompt: "Everest PAW Patrol husky snow rescue dog, teal uniform, official character design, 3D animated style" },
+  // Bluey
+  "bluey": { description: "Bluey, a blue heeler puppy from the show Bluey, light blue fur, dark blue spots, playful and energetic, Australian family", stylePrompt: "Bluey blue heeler puppy, light blue with dark blue spots, official character design, 2D animated style matching the show" },
+  "bingo": { description: "Bingo, a red heeler puppy from the show Bluey, orange-red fur, darker orange spots, Bluey's younger sister", stylePrompt: "Bingo red heeler puppy, orange-red with darker spots, official character design, 2D animated style matching Bluey show" },
+  // SuperKitties
+  "gwen": { description: "Gwen, a cat from SuperKitties, pink outfit, brave leader with magical powers", stylePrompt: "Gwen SuperKitties cat, pink superhero outfit, magical sparkles, official character design, 3D animated style" },
+  "buddy": { description: "Buddy, a cat from SuperKitties, blue outfit, strong and loyal team member", stylePrompt: "Buddy SuperKitties cat, blue superhero outfit, official character design, 3D animated style" },
+  "bitsy": { description: "Bitsy, a cat from SuperKitties, yellow/green outfit, small and energetic", stylePrompt: "Bitsy SuperKitties cat, yellow-green superhero outfit, small cute cat, official character design, 3D animated style" },
+  // Spider-Man / Marvel
+  "spidey": { description: "Spider-Man, a superhero in red and blue web-patterned suit with spider emblem, mask with large white eyes, web-shooters", stylePrompt: "Spider-Man Marvel superhero, red and blue suit with web pattern, spider emblem, full mask with white eyes, official character design" },
+  "spider-man": { description: "Spider-Man, a superhero in red and blue web-patterned suit with spider emblem, mask with large white eyes, web-shooters", stylePrompt: "Spider-Man Marvel superhero, red and blue suit with web pattern, spider emblem, full mask with white eyes, official character design" },
+  // CoComelon
+  "cocomelon": { description: "CoComelon characters, colorful 3D animated family with JJ as the toddler star, bright and cheerful", stylePrompt: "CoComelon 3D animated style, bright colors, cute toddler JJ, cheerful family, official character design" },
+  "jj": { description: "JJ, the toddler star of CoComelon, adorable round face, curious expression, colorful outfits", stylePrompt: "JJ CoComelon toddler, round cute face, curious expression, colorful outfit, official 3D animated character design" },
+  // Disney
+  "mickey mouse": { description: "Mickey Mouse, classic Disney character, black round ears, red shorts with white buttons, white gloves, yellow shoes", stylePrompt: "Mickey Mouse Disney, black round ears, red shorts, white gloves, yellow shoes, official character design" },
+  "minnie mouse": { description: "Minnie Mouse, classic Disney character, red polka-dot dress, large bow on head, mouse ears", stylePrompt: "Minnie Mouse Disney, red polka-dot dress, large bow, mouse ears, official character design" },
+  "elsa": { description: "Elsa from Disney's Frozen, platinum blonde braid, ice blue gown, elegant and regal", stylePrompt: "Elsa Frozen Disney, platinum blonde braid, ice blue gown, ice powers, official character design" },
+  "anna": { description: "Anna from Disney's Frozen, red-brown braided hair, green dress, adventurous and optimistic", stylePrompt: "Anna Frozen Disney, red-brown braided hair, green dress, official character design" },
+  // More popular characters
+  "spongebob": { description: "SpongeBob SquarePants, yellow square sponge character, brown pants, white shirt, red tie, big blue eyes", stylePrompt: "SpongeBob SquarePants, yellow square sponge, brown pants, white shirt, red tie, official character design" },
+  "peppa pig": { description: "Peppa Pig, a pink pig character, red dress, black shoes, lives in a house on a hill", stylePrompt: "Peppa Pig, pink pig, red dress, black shoes, official character design, 2D animated style" },
+  "dora": { description: "Dora the Explorer, young Latina girl with short brown hair, pink shirt, orange shorts, purple backpack, talking map", stylePrompt: "Dora the Explorer, young girl, pink shirt, orange shorts, purple backpack, official character design" },
+  "barney": { description: "Barney the purple dinosaur, large purple T-Rex, friendly smile, green belly", stylePrompt: "Barney purple dinosaur, large friendly T-Rex, green belly, official character design" },
+  "thomas": { description: "Thomas the Tank Engine, blue steam locomotive with number 1, friendly face on the front, anthropomorphic train", stylePrompt: "Thomas the Tank Engine, blue locomotive, number 1, friendly face, official character design" },
+  "daniel tiger": { description: "Daniel Tiger from Daniel Tiger's Neighborhood, young tiger cub, red sweater, red sneakers, friendly and curious", stylePrompt: "Daniel Tiger young tiger cub, red sweater, red sneakers, official character design, 2D animated style" },
+  "super wings": { description: "Super Wings, a transforming delivery plane named Jett, red and white airplane, can transform into a robot", stylePrompt: "Jett Super Wings, red and white transforming airplane/robot, official character design, 3D animated style" },
+  "paw patrol": { description: "PAW Patrol team, a group of rescue pups led by Ryder, each with unique uniforms and vehicles", stylePrompt: "PAW Patrol team, rescue pups in colorful uniforms, Adventure Bay, official character design, 3D animated style" },
+};
+
+// Multi-word character name aliases for matching (sorted longest first)
+const CHARACTER_ALIASES: string[] = Object.keys(KNOWN_CHARACTERS).sort((a, b) => b.length - a.length);
+
+// Case-insensitive multi-word known character lookup
+function findKnownCharacter(name: string): { description: string; stylePrompt: string } | null {
+  const normalizedName = name.toLowerCase().trim();
+  // Exact single-word or multi-word match
+  if (KNOWN_CHARACTERS[normalizedName]) {
+    return KNOWN_CHARACTERS[normalizedName];
+  }
+  // Partial match for multi-word names (e.g., "Paw Patrol pups" contains "paw patrol")
+  for (const alias of CHARACTER_ALIASES) {
+    if (alias.includes(" ") && normalizedName.includes(alias)) {
+      return KNOWN_CHARACTERS[alias];
+    }
+  }
+  // Single-word token match (e.g., "SuperKitties" contains "gwen")
+  const tokens = normalizedName.split(/\s+/);
+  for (const token of tokens) {
+    if (KNOWN_CHARACTERS[token]) {
+      return KNOWN_CHARACTERS[token];
+    }
+  }
+  return null;
+}
+
+// Enrich character list with known brand character data
+function enrichWithKnownCharacters(characters: DetectedCharacter[]): DetectedCharacter[] {
+  return characters.map((char) => {
+    const known = findKnownCharacter(char.name);
+    if (known) {
+      return {
+        ...char,
+        description: known.description,
+        stylePrompt: known.stylePrompt,
+      };
+    }
+    return char;
+  });
+}
+
 const CLIP_DURATION = 10;
 
 interface ParsedScene {
@@ -15,6 +94,7 @@ interface DetectedCharacter {
   name: string;
   role: string;
   description: string;
+  stylePrompt?: string;
 }
 
 // Extract pre-defined scenes from structured scripts
@@ -154,6 +234,24 @@ function detectCharacterNames(text: string): string[] {
 // Detect characters across entire script with AI-enhanced descriptions
 function buildCharacterDescriptions(characters: string[], fullPrompt: string): DetectedCharacter[] {
   return characters.map((name) => {
+    // Check if this is a known brand character FIRST
+    const known = findKnownCharacter(name);
+    if (known) {
+      let role = "supporting";
+      if (name.toLowerCase().includes("narrator")) {
+        role = "narrator";
+      } else if (
+        name.toLowerCase().includes("hero") ||
+        name.toLowerCase().includes("spidey") ||
+        name.toLowerCase().includes("super") ||
+        name.toLowerCase().includes("chase") ||
+        name.toLowerCase().includes("spider")
+      ) {
+        role = "protagonist";
+      }
+      return { name, role, description: known.description, stylePrompt: known.stylePrompt };
+    }
+
     // Try to extract description from context
     const descPattern = new RegExp(`${name}[^\\n]*?(?:"([^"]*)"[\\s\\n])`, "gi");
     const descMatch = descPattern.exec(fullPrompt);
@@ -256,11 +354,13 @@ export async function POST(req: NextRequest) {
       visualNote: (s.visualNote || (s.prompt || "") as string) as string | undefined,
     })).filter((s: ParsedScene) => s.prompt.length > 0);
 
-    const characters: DetectedCharacter[] = (parsed.characters || []).map((c: Record<string, unknown>) => ({
-      name: (c.name || "") as string,
-      role: (c.role || "supporting") as string,
-      description: (c.description || "") as string,
-    })).filter((c: DetectedCharacter) => c.name.length > 0);
+    const characters: DetectedCharacter[] = enrichWithKnownCharacters(
+      (parsed.characters || []).map((c: Record<string, unknown>) => ({
+        name: (c.name || "") as string,
+        role: (c.role || "supporting") as string,
+        description: (c.description || "") as string,
+      })).filter((c: DetectedCharacter) => c.name.length > 0)
+    );
 
     // Pad if AI returned fewer scenes
     while (scenes.length < desiredSceneCount && scenes.length > 0) {
