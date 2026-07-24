@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  return NextResponse.json({ message: "SceneForge AI API is running" });
+  return NextResponse.json({ message: "Vidora API is running" });
 }

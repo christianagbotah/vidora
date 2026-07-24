@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
-function extractVideoUrl(result: Record<string, unknown>): string | null {
-  if (result.video_result && Array.isArray(result.video_result) && result.video_result.length > 0) {
-    const first = result.video_result[0] as Record<string, unknown>;
-    if (first.url && typeof first.url === "string") return first.url;
-  }
-  if (result.video_url && typeof result.video_url === "string") return result.video_url;
-  if (result.url && typeof result.url === "string") return result.url;
-  if (result.video && typeof result.video === "string") return result.video;
-  return null;
-}
-
+/**
+ * DB-only scene status check.
+ * Does NOT call the z-ai API — the backend handles all polling internally.
+ * The frontend calls this to see if a scene has completed since last check.
+ */
 export async function POST(req: NextRequest) {
   try {
     const { sceneId } = await req.json();
@@ -33,76 +26,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Already completed
-    if (scene.videoUrl) {
-      return NextResponse.json({
-        success: true,
-        status: "completed",
-        videoUrl: scene.videoUrl,
-        imageUrl: scene.imageUrl,
-      });
-    }
-
-    // Failed
-    if (scene.status === "failed") {
-      return NextResponse.json({
-        success: true,
-        status: "failed",
-      });
-    }
-
-    // No task started
-    if (!scene.taskId) {
-      return NextResponse.json({
-        success: true,
-        status: "no_task",
-      });
-    }
-
-    // Poll the async result
-    const zai = await ZAI.create();
-    const result = await zai.async.result.query(scene.taskId);
-    const taskStatus = result.task_status;
-
-    if (taskStatus === "SUCCESS") {
-      const videoUrl = extractVideoUrl(result as unknown as Record<string, unknown>);
-      if (videoUrl) {
-        await db.videoScene.update({
-          where: { id: sceneId },
-          data: { videoUrl, status: "completed" },
-        });
-        return NextResponse.json({
-          success: true,
-          status: "completed",
-          videoUrl,
-          imageUrl: scene.imageUrl,
-        });
-      }
-      await db.videoScene.update({
-        where: { id: sceneId },
-        data: { status: "failed" },
-      });
-      return NextResponse.json({
-        success: true,
-        status: "failed",
-      });
-    }
-
-    if (taskStatus === "FAIL") {
-      await db.videoScene.update({
-        where: { id: sceneId },
-        data: { status: "failed" },
-      });
-      return NextResponse.json({
-        success: true,
-        status: "failed",
-      });
-    }
-
-    // Still processing
+    // Return current DB status — no external API calls
     return NextResponse.json({
       success: true,
-      status: "processing",
+      status: scene.videoUrl ? "completed" : scene.status,
+      videoUrl: scene.videoUrl,
+      imageUrl: scene.imageUrl,
       taskId: scene.taskId,
     });
   } catch (error) {

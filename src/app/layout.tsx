@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SceneForge AI — Professional AI Video Creator",
+  title: "Vidora — Professional AI Video Creator",
   description:
     "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
   keywords: [

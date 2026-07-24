@@ -22,6 +22,8 @@ export interface VideoProject {
   style: string;
   aspectRatio: string;
   status: string;
+  targetDuration: number;
+  finalVideoUrl?: string | null;
   createdAt: string;
   updatedAt: string;
   scenes: VideoScene[];
