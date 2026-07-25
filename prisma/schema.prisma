@@ -7,8 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String?   // bcrypt hash for credentials auth
+  image         String?
+  role          String    @default("user")  // "user" | "admin"
+  tokens        Int       @default(0)      // credit/token balance
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  projects      VideoProject[]
+  payments      Payment[]
+  transactions  TokenTransaction[]
+}
+
 model VideoProject {
   id             String     @id @default(cuid())
+  userId         String?
+  user           User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   title          String
   description    String?
   style          String     @default("cinematic")
@@ -21,6 +39,7 @@ model VideoProject {
   updatedAt      DateTime   @updatedAt
   scenes         VideoScene[]
   characters     Character[]
+  @@index([userId])
 }
 
 model VideoScene {
@@ -74,4 +93,40 @@ model GenerationHistory {
   inputType   String   @default("text")
   style       String?
   createdAt   DateTime @default(now())
+}
+
+model Payment {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gateway         String    // "paystack" | "hubtel" | "stripe"
+  gatewayRef      String?   // reference/transaction ID from payment gateway
+  amount          Float     // amount paid
+  currency        String    @default("GHS")  // "GHS" | "USD"
+  tokensPurchased Int       // number of tokens bought
+  status          String    @default("pending")  // "pending" | "completed" | "failed" | "refunded"
+  metadata        String?   // JSON string for gateway-specific data
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  @@index([userId])
+}
+
+model TokenTransaction {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type          String    // "purchase" | "spend" | "refund" | "bonus"
+  amount        Int       // positive = credit, negative = debit
+  description   String
+  referenceId   String?   // payment ID or project ID
+  createdAt     DateTime  @default(now())
+  @@index([userId])
+}
+
+model SystemConfig {
+  id            String    @id @default(cuid())
+  key           String    @unique
+  value         String
+  description   String?
+  updatedAt     DateTime  @updatedAt
 }

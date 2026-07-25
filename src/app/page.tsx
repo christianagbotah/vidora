@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useToast } from "@/hooks/use-toast";
+import { signIn, signOut, useSession, SessionProvider } from "next-auth/react";
 import type {
   VideoProject, VideoScene, ClassicScene, InputMode,
   Character, ParsedSceneResult, DetectedCharacter, ContinuityIssue,
@@ -19,6 +20,9 @@ import {
   GripVertical, Quote, ArrowDownToLine, Music,
   CheckCircle, AlertTriangle, Shield, Search, Settings,
   Lightbulb, RotateCcw, Shrink,
+  LogIn, LogOut, User, CreditCard, Wallet, Coins, ShieldCheck,
+  Building2, DollarSign, BarChart3, TrendingUp, KeyRound,
+  Package, ShoppingBag, Bell, Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -481,6 +485,14 @@ function SortableSceneCard({
    ════════════════════════════════════════════════════════════════ */
 
 export default function HomePage() {
+  return (
+    <SessionProvider session={undefined}>
+      <VidoraApp />
+    </SessionProvider>
+  );
+}
+
+function VidoraApp() {
   const {
     currentView, projects, currentProject, isGenerating, isEnhancing, isRecording,
     setCurrentView, setProjects, setCurrentProject, setIsGenerating,
@@ -540,6 +552,29 @@ export default function HomePage() {
   const [editableTitle, setEditableTitle] = useState("");
   const [showProjectSettings, setShowProjectSettings] = useState(true);
   const [updatingSettings, setUpdatingSettings] = useState(false);
+
+  /* ── Auth State ── */
+  const { data: session, status: authStatus } = useSession();
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [userTokens, setUserTokens] = useState(0);
+  const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
+
+  /* ── Admin State ── */
+  const [adminUsers, setAdminUsers] = useState<unknown[]>([]);
+  const [adminPayments, setAdminPayments] = useState<unknown[]>([]);
+  const [adminAnalytics, setAdminAnalytics] = useState<Record<string, unknown> | null>(null);
+  const [adminConfigs, setAdminConfigs] = useState<Record<string, { value: string; description: string }>>({});
+  const [adminLoading, setAdminLoading] = useState(false);
+
+  /* ── Payment State ── */
+  const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1268,6 +1303,168 @@ export default function HomePage() {
     }
   };
 
+  /* ── Auth Handlers ── */
+  const handleLogin = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const res = await signIn("credentials", {
+        email: authEmail,
+        password: authPassword,
+        redirect: false,
+      });
+      if (res?.error) {
+        setAuthError("Invalid email or password");
+      } else {
+        setAuthDialogOpen(false);
+        toast({ title: "Welcome back!" });
+      }
+    } catch {
+      setAuthError("Login failed. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, name: authName, password: authPassword }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await signIn("credentials", {
+          email: authEmail,
+          password: authPassword,
+          redirect: false,
+        });
+        setAuthDialogOpen(false);
+        toast({ title: "Account created successfully!" });
+      } else {
+        setAuthError(data.error || "Registration failed");
+      }
+    } catch {
+      setAuthError("Registration failed. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut({ redirect: false });
+    setUserProfile(null);
+    setUserTokens(0);
+    setCurrentView("home");
+    toast({ title: "Signed out" });
+  };
+
+  const fetchUserProfile = useCallback(async () => {
+    if (!session?.user) return;
+    try {
+      const res = await fetch("/api/auth/user");
+      const data = await res.json();
+      if (data.success) {
+        setUserProfile(data.user);
+        setUserTokens(data.user.tokens);
+      }
+    } catch { /* ignore */ }
+  }, [session?.user]);
+
+  const handleBuyTokens = async (pkgId: string, amount: number, tokens: number, currency: string) => {
+    try {
+      const res = await fetch("/api/payments/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount, tokensPurchased: tokens, currency, packageId: pkgId }),
+      });
+      const data = await res.json();
+      if (data.success && data.authorizationUrl) {
+        window.open(data.authorizationUrl, "_blank");
+        toast({ title: "Redirecting to payment..." });
+      } else {
+        toast({ title: data.error || "Payment initialization failed", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Payment failed", variant: "destructive" });
+    }
+  };
+
+  const handleAdminLoadData = useCallback(async () => {
+    setAdminLoading(true);
+    try {
+      const [usersRes, paymentsRes, analyticsRes, configRes] = await Promise.all([
+        fetch("/api/admin/users"),
+        fetch("/api/admin/payments"),
+        fetch("/api/admin/analytics"),
+        fetch("/api/admin/config"),
+      ]);
+      const [usersData, paymentsData, analyticsData, configData] = await Promise.all([
+        usersRes.json(), paymentsRes.json(), analyticsRes.json(), configRes.json(),
+      ]);
+      if (usersData.success) setAdminUsers(usersData.users);
+      if (paymentsData.success) setAdminPayments(paymentsData.payments);
+      if (analyticsData.success) setAdminAnalytics(analyticsData.analytics);
+      if (configData.success) setAdminConfigs(configData.configs);
+    } catch { /* ignore */ }
+    finally { setAdminLoading(false); }
+  }, []);
+
+  const handleAdminSaveConfig = async (configs: Record<string, string>) => {
+    try {
+      const res = await fetch("/api/admin/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ configs }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Configuration saved" });
+        handleAdminLoadData();
+      }
+    } catch {
+      toast({ title: "Failed to save config", variant: "destructive" });
+    }
+  };
+
+  const handleAdminUpdateUser = async (userId: string, updates: Record<string, unknown>) => {
+    try {
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "User updated" });
+        handleAdminLoadData();
+      }
+    } catch {
+      toast({ title: "Failed to update user", variant: "destructive" });
+    }
+  };
+
+  // Fetch user data and token packages when session changes
+  useEffect(() => {
+    if (session?.user) {
+      fetchUserProfile();
+    }
+  }, [session, fetchUserProfile]);
+
+  useEffect(() => {
+    fetch("/api/payments/packages")
+      .then((r) => r.json())
+      .then((d) => d.success && setTokenPackages(d.packages))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (currentView === "admin" && session) handleAdminLoadData();
+  }, [currentView, session, handleAdminLoadData]);
+
   const formatDuration = (sec: number) => {
     if (sec < 60) return sec + "s";
     const m = Math.floor(sec / 60);
@@ -1319,6 +1516,26 @@ export default function HomePage() {
             {currentView !== "home" && (
               <Button variant="ghost" size="sm" onClick={() => setCurrentView("home")} className="hover:bg-violet-50">
                 <ArrowLeft className="h-4 w-4 mr-1" />Back
+              </Button>
+            )}
+            {/* Auth / User controls */}
+            {session?.user ? (
+              <div className="flex items-center gap-2">
+                {userProfile?.role === "admin" && (
+                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
+                    <ShieldCheck className="h-4 w-4 mr-1" />Admin
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
+                  <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
+                  <LogOut className="h-4 w-4 mr-1" />{userProfile?.name || "Sign Out"}
+                </Button>
+              </div>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hover:bg-violet-50">
+                <LogIn className="h-4 w-4 mr-1.5" />Sign In
               </Button>
             )}
           </div>
@@ -2496,6 +2713,308 @@ export default function HomePage() {
               </div>
             </motion.div>
           )}
+
+          {/* ═══════════════════════════════════════════════════════
+              BUY TOKENS VIEW
+              ═══════════════════════════════════════════════════════ */}
+          {currentView === "buy-tokens" && (
+            <motion.div key="buy-tokens" {...fadeUp} className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+              <div className="text-center space-y-2">
+                <div className="flex items-center justify-center gap-2 mb-2">
+                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
+                    <Coins className="h-5 w-5" />
+                  </div>
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Buy Tokens</h1>
+                <p className="text-muted-foreground max-w-lg mx-auto">
+                  Purchase tokens to download your AI-generated videos. Each download costs 1 token.
+                </p>
+                <div className="flex items-center justify-center gap-2 mt-2">
+                  <Badge variant="outline" className="text-sm px-3 py-1 bg-amber-50 border-amber-200 text-amber-700">
+                    <Wallet className="h-3.5 w-3.5 mr-1" />Current Balance: <strong>{userTokens} tokens</strong>
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                {tokenPackages.map((pkg: Record<string, unknown>) => (
+                  <Card
+                    key={pkg.id as string}
+                    className={`relative border-2 transition-all hover:shadow-lg ${
+                      pkg.popular
+                        ? "border-violet-300 shadow-lg shadow-violet-500/10"
+                        : "border-slate-100 hover:border-violet-200"
+                    }`}
+                  >
+                    {pkg.popular && (
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                        <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[10px] px-2.5 shadow-md">
+                          <Star className="h-3 w-3 mr-1" />Popular
+                        </Badge>
+                      </div>
+                    )}
+                    <CardHeader className="text-center pb-2 pt-5">
+                      <CardTitle className="text-lg font-bold">{pkg.name as string}</CardTitle>
+                      <CardDescription className="text-xs">{pkg.tokens} tokens</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="text-center">
+                        <div className="flex items-baseline justify-center gap-1">
+                          <span className="text-3xl font-extrabold text-slate-900">
+                            {typeof pkg.priceGHS === "number" && pkg.priceGHS < 100 ? `GH₵${pkg.priceGHS}` : `$${pkg.priceUSD}`}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          or ${pkg.priceUSD} USD
+                        </p>
+                      </div>
+                      <Button
+                        className="w-full btn-gradient"
+                        onClick={() => handleBuyTokens(pkg.id as string, pkg.priceGHS as number, pkg.tokens as number, "GHS")}
+                      >
+                        <ShoppingBag className="h-4 w-4 mr-1.5" />Buy Now
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground">
+                  <CreditCard className="h-3 w-3 inline mr-1" />
+                  Pay with MTN MoMo, Vodafone Cash, Visa, Mastercard via Paystack
+                </p>
+              </div>
+
+              <div className="text-center pt-4">
+                <Button variant="outline" onClick={() => setCurrentView("home")}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+              ADMIN DASHBOARD VIEW
+              ═══════════════════════════════════════════════════════ */}
+          {currentView === "admin" && userProfile?.role === "admin" && (
+            <motion.div key="admin" {...fadeUp} className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-violet-500/20">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div>
+                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Admin Dashboard</h1>
+                  <p className="text-muted-foreground text-sm">Manage users, payments, and system configuration</p>
+                </div>
+              </div>
+
+              {adminLoading && !adminAnalytics && (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                </div>
+              )}
+
+              {adminAnalytics && (
+                <>
+                  {/* Analytics Cards */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {[
+                      { label: "Total Users", value: ((adminAnalytics.users as Record<string, unknown>)?.total as number) || 0, icon: Users, color: "from-violet-500 to-purple-500" },
+                      { label: "Active Users", value: ((adminAnalytics.users as Record<string, unknown>)?.active as number) || 0, icon: User, color: "from-emerald-500 to-teal-500" },
+                      { label: "Total Revenue", value: `GH₵${((adminAnalytics.revenue as Record<string, unknown>)?.totalRevenue as number) || 0}`, icon: DollarSign, color: "from-amber-500 to-orange-500" },
+                      { label: "Tokens Sold", value: ((adminAnalytics.revenue as Record<string, unknown>)?.totalTokensSold as number) || 0, icon: Coins, color: "from-rose-500 to-pink-500" },
+                    ].map((stat) => (
+                      <Card key={stat.label} className="border-0 shadow-lg shadow-black/5">
+                        <CardContent className="p-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`h-10 w-10 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center text-white`}>
+                              <stat.icon className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">{stat.label}</p>
+                              <p className="text-xl font-bold">{stat.value}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+
+                  {/* Users Table */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <Users className="h-4 w-4 text-violet-500" />
+                        Users ({adminUsers.length})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="max-h-96 overflow-y-auto custom-scrollbar">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-white">
+                            <tr className="border-b text-left text-xs text-muted-foreground">
+                              <th className="pb-2 pr-3">Name</th>
+                              <th className="pb-2 pr-3">Email</th>
+                              <th className="pb-2 pr-3">Role</th>
+                              <th className="pb-2 pr-3">Tokens</th>
+                              <th className="pb-2 pr-3">Status</th>
+                              <th className="pb-2">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {adminUsers.map((u: Record<string, unknown>) => (
+                              <tr key={u.id as string} className="border-b last:border-0 hover:bg-slate-50">
+                                <td className="py-2 pr-3 font-medium truncate max-w-[120px]">{u.name as string}</td>
+                                <td className="py-2 pr-3 truncate max-w-[180px] text-muted-foreground">{u.email as string}</td>
+                                <td className="py-2 pr-3">
+                                  <Badge variant="outline" className={`text-[10px] ${
+                                    u.role === "admin" ? "bg-violet-50 text-violet-600 border-violet-200" : "bg-slate-50"
+                                  }`}>{u.role as string}</Badge>
+                                </td>
+                                <td className="py-2 pr-3 font-semibold">{u.tokens as number}</td>
+                                <td className="py-2 pr-3">
+                                  <Badge variant="outline" className={`text-[10px] ${u.isActive ? "bg-emerald-50 text-emerald-600 border-emerald-200" : "bg-red-50 text-red-600"}`}>
+                                    {u.isActive ? "Active" : "Inactive"}
+                                  </Badge>
+                                </td>
+                                <td className="py-2">
+                                  <div className="flex gap-1">
+                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                                      onClick={() => handleAdminUpdateUser(u.id as string, { tokens: (u.tokens as number) + 10 })}>
+                                      +10
+                                    </Button>
+                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs"
+                                      onClick={() => handleAdminUpdateUser(u.id as string, { role: u.role === "admin" ? "user" : "admin" })}>
+                                      {u.role === "admin" ? "User" : "Admin"}
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Payment Gateway Config */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <Building2 className="h-4 w-4 text-violet-500" />
+                        Payment Gateway Configuration
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">Active Gateway</Label>
+                        <div className="flex flex-wrap gap-2">
+                          {["paystack", "hubtel", "stripe"].map((gw) => (
+                            <button
+                              key={gw}
+                              onClick={() => handleAdminSaveConfig({ payment_gateway: gw })}
+                              className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all capitalize ${
+                                adminConfigs.payment_gateway?.value === gw
+                                  ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >
+                              {gw === "paystack" && "🇬🇭 "}{gw}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Gateway API Key Fields */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                        {Object.entries(adminConfigs).map(([key, cfg]) => {
+                          if (!key.includes("_key") && !key.includes("_id") && !key.includes("_secret")) return null;
+                          return (
+                            <div key={key} className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">{cfg.description || key}</Label>
+                              <Input
+                                type="password"
+                                value={cfg.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, [key]: { ...cfg, value: e.target.value } })}
+                                placeholder={`Enter ${key.replace(/_/g, " ")}`}
+                                className="h-8 text-xs"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <Button onClick={() => {
+                        const updates: Record<string, string> = {};
+                        Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
+                        handleAdminSaveConfig(updates);
+                      }} className="btn-gradient">
+                        <KeyRound className="h-4 w-4 mr-1.5" />Save Configuration
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {/* Recent Payments */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <CreditCard className="h-4 w-4 text-violet-500" />
+                        Recent Payments ({adminPayments.length})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="max-h-72 overflow-y-auto custom-scrollbar">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-white">
+                            <tr className="border-b text-left text-xs text-muted-foreground">
+                              <th className="pb-2 pr-3">Date</th>
+                              <th className="pb-2 pr-3">User</th>
+                              <th className="pb-2 pr-3">Gateway</th>
+                              <th className="pb-2 pr-3">Amount</th>
+                              <th className="pb-2 pr-3">Tokens</th>
+                              <th className="pb-2">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {adminPayments.slice(0, 20).map((p: Record<string, unknown>) => (
+                              <tr key={p.id as string} className="border-b last:border-0 hover:bg-slate-50">
+                                <td className="py-2 pr-3 text-muted-foreground text-xs">
+                                  {new Date(p.createdAt as string).toLocaleDateString()}
+                                </td>
+                                <td className="py-2 pr-3 truncate max-w-[150px]">
+                                  {(p.user as Record<string, unknown>)?.name || (p.user as Record<string, unknown>)?.email || "-"}
+                                </td>
+                                <td className="py-2 pr-3 capitalize text-xs">{p.gateway as string}</td>
+                                <td className="py-2 pr-3 font-semibold">GH₵{p.amount as number}</td>
+                                <td className="py-2 pr-3">{p.tokensPurchased as number}</td>
+                                <td className="py-2">
+                                  <Badge variant="outline" className={`text-[10px] ${
+                                    p.status === "completed" ? "bg-emerald-50 text-emerald-600 border-emerald-200" :
+                                    p.status === "pending" ? "bg-amber-50 text-amber-600 border-amber-200" :
+                                    "bg-red-50 text-red-600"
+                                  }`}>{p.status as string}</Badge>
+                                </td>
+                              </tr>
+                            ))}
+                            {adminPayments.length === 0 && (
+                              <tr><td colSpan={6} className="py-8 text-center text-muted-foreground">No payments yet</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <div className="text-center pt-2">
+                    <Button variant="outline" onClick={() => setCurrentView("home")}>
+                      <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                    </Button>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -2776,6 +3295,60 @@ export default function HomePage() {
               </Button>
             </TabsContent>
           </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════
+          AUTH DIALOG (Login / Register)
+          ═══════════════════════════════════════════════════════ */}
+      <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                <User className="h-4 w-4" />
+              </div>
+              {authMode === "login" ? "Welcome Back" : "Create Account"}
+            </DialogTitle>
+            <DialogDescription>
+              {authMode === "login" ? "Sign in to your Vidora account" : "Join Vidora and start creating AI videos"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            {authError && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-600 text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {authError}
+              </div>
+            )}
+            {authMode === "register" && (
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">Full Name</Label>
+                <Input placeholder="John Doe" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Email</Label>
+              <Input type="email" placeholder="you@example.com" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Password</Label>
+              <Input type="password" placeholder="••••••••" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} />
+            </div>
+            <Button
+              className="w-full btn-gradient"
+              disabled={authLoading || !authEmail || !authPassword}
+              onClick={authMode === "login" ? handleLogin : handleRegister}
+            >
+              {authLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{authMode === "login" ? "Signing in..." : "Creating account..."}</> : authMode === "login" ? "Sign In" : "Create Account"}
+            </Button>
+            <div className="text-center text-sm text-muted-foreground">
+              {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }} className="text-violet-600 font-semibold hover:underline">
+                {authMode === "login" ? "Sign Up" : "Sign In"}
+              </button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

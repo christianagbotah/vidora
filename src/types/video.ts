@@ -88,4 +88,4 @@ export interface ContinuityIssue {
 }
 
 export type InputMode = "text" | "voice" | "video" | "script";
-export type AppView = "home" | "create" | "studio" | "gallery";
+export type AppView = "home" | "create" | "studio" | "gallery" | "admin" | "buy-tokens";
