@@ -22,7 +22,7 @@ import {
   Lightbulb, RotateCcw, Shrink,
   LogIn, LogOut, User, CreditCard, Wallet, Coins, ShieldCheck,
   Building2, DollarSign, BarChart3, TrendingUp, KeyRound,
-  Package, ShoppingBag, Bell, Mail,
+  Package, ShoppingBag, Bell, Mail, History, ArrowRight, UserCircle, Calendar, TrendingDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -574,6 +574,24 @@ function VidoraApp() {
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
+
+  /* ── Dashboard / Profile State ── */
+  const [tokenHistory, setTokenHistory] = useState<Record<string, unknown>[]>([]);
+  const [profileData, setProfileData] = useState<{ id: string; email: string; name: string; role: string; tokens: number; createdAt: string } | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [profileOldPassword, setProfileOldPassword] = useState("");
+  const [profileNewPassword, setProfileNewPassword] = useState("");
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [profileHistoryPage, setProfileHistoryPage] = useState(1);
+
+  /* ── Download Gate State ── */
+  const [downloadGateOpen, setDownloadGateOpen] = useState(false);
+  const [downloadCost, setDownloadCost] = useState(0);
+  const [downloadBreakdown, setDownloadBreakdown] = useState<{ quality: number; duration: number } | null>(null);
+  const [downloadInsufficient, setDownloadInsufficient] = useState(false);
+  const [downloadQuality, setDownloadQuality] = useState("standard");
+  const [downloadProjectId, setDownloadProjectId] = useState("");
+  const [isRequestingDownload, setIsRequestingDownload] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -1465,6 +1483,35 @@ function VidoraApp() {
     if (currentView === "admin" && session) handleAdminLoadData();
   }, [currentView, session, handleAdminLoadData]);
 
+  // Load dashboard data
+  useEffect(() => {
+    if (currentView === "dashboard" && session) {
+      fetch("/api/tokens/history")
+        .then((r) => r.json())
+        .then((d) => d.success && setTokenHistory(d.transactions || []))
+        .catch(() => {});
+    }
+  }, [currentView, session]);
+
+  // Load profile data
+  useEffect(() => {
+    if (currentView === "profile" && session) {
+      fetchUserProfile();
+      fetch("/api/tokens/history")
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.success) {
+            setTokenHistory(d.transactions || []);
+            if (d.user) {
+              setProfileData(d.user);
+              setProfileName(d.user.name || "");
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [currentView, session, fetchUserProfile]);
+
   const formatDuration = (sec: number) => {
     if (sec < 60) return sec + "s";
     const m = Math.floor(sec / 60);
@@ -1482,6 +1529,86 @@ function VidoraApp() {
     setCurrentProject(p);
     if (p.characters) setCharacters(p.characters);
     setCurrentView("studio");
+  };
+
+  const openDownloadGate = async (projectId: string, quality: string) => {
+    setDownloadProjectId(projectId);
+    setDownloadQuality(quality);
+    try {
+      const res = await fetch("/api/download/calculate-cost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, quality }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDownloadCost(data.tokenCost);
+        setDownloadBreakdown(data.breakdown);
+        setDownloadInsufficient(data.tokenCost > userTokens);
+        setDownloadGateOpen(true);
+      } else {
+        toast({ title: "Error calculating cost", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to calculate download cost", variant: "destructive" });
+    }
+  };
+
+  const confirmDownload = async () => {
+    if (!currentProject || !downloadProjectId) return;
+    setIsRequestingDownload(true);
+    try {
+      const res = await fetch("/api/download/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: downloadProjectId, quality: downloadQuality }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Download ready!", description: "Your video is being prepared." });
+        if (data.downloadUrl) {
+          window.open(data.downloadUrl, "_blank");
+        }
+        setUserTokens((prev) => prev - downloadCost);
+        setDownloadGateOpen(false);
+      } else {
+        toast({ title: "Download failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to request download", variant: "destructive" });
+    } finally {
+      setIsRequestingDownload(false);
+    }
+  };
+
+  const handleUpdateProfile = async () => {
+    setIsUpdatingProfile(true);
+    try {
+      const body: Record<string, string> = {};
+      if (profileName.trim()) body.name = profileName.trim();
+      if (profileOldPassword && profileNewPassword) {
+        body.oldPassword = profileOldPassword;
+        body.newPassword = profileNewPassword;
+      }
+      const res = await fetch("/api/auth/user", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Profile updated" });
+        fetchUserProfile();
+        setProfileOldPassword("");
+        setProfileNewPassword("");
+      } else {
+        toast({ title: "Update failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error updating profile", variant: "destructive" });
+    } finally {
+      setIsUpdatingProfile(false);
+    }
   };
 
   /* ════════════════════════════════════════════════════════════════
@@ -1521,6 +1648,9 @@ function VidoraApp() {
             {/* Auth / User controls */}
             {session?.user ? (
               <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
+                  <BarChart3 className="h-4 w-4 mr-1" />Dashboard
+                </Button>
                 {userProfile?.role === "admin" && (
                   <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
                     <ShieldCheck className="h-4 w-4 mr-1" />Admin
@@ -1529,8 +1659,11 @@ function VidoraApp() {
                 <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
                   <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
                 </Button>
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
+                  <User className="h-4 w-4 mr-1" />Profile
+                </Button>
                 <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
-                  <LogOut className="h-4 w-4 mr-1" />{userProfile?.name || "Sign Out"}
+                  <LogOut className="h-4 w-4 mr-1" />
                 </Button>
               </div>
             ) : (
@@ -2623,11 +2756,9 @@ function VidoraApp() {
                       <video src={currentProject.finalVideoUrl} controls className="w-full h-full object-contain bg-black" preload="metadata" />
                     </DeviceSimulator>
                     <div className="mt-4 flex items-center gap-3">
-                      <a href={currentProject.finalVideoUrl} download>
-                        <Button className="btn-amber">
-                          <Download className="h-4 w-4 mr-1.5" />Download Video
-                        </Button>
-                      </a>
+                      <Button className="btn-amber" onClick={() => openDownloadGate(currentProject.id, "high")}>
+                        <Download className="h-4 w-4 mr-1.5" />Download Video
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -2787,6 +2918,414 @@ function VidoraApp() {
               </div>
 
               <div className="text-center pt-4">
+                <Button variant="outline" onClick={() => setCurrentView("home")}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+              USER DASHBOARD VIEW
+              ═══════════════════════════════════════════════════════ */}
+          {currentView === "dashboard" && (
+            <motion.div key="dashboard" {...fadeUp} className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+              {/* Header */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white shadow-lg shadow-violet-500/20">
+                  <BarChart3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Dashboard</h1>
+                  <p className="text-muted-foreground text-sm">Welcome back, {userProfile?.name || "User"}</p>
+                </div>
+              </div>
+
+              {/* Stats Row */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { icon: Film, label: "Total Projects", value: safeProjects.length, color: "from-violet-500 to-purple-500" },
+                  { icon: CheckCircle, label: "Completed Videos", value: safeProjects.filter((p: VideoProject) => p.status === "completed").length, color: "from-emerald-500 to-teal-500" },
+                  { icon: TrendingDown, label: "Tokens Spent", value: tokenHistory.filter((t: Record<string, unknown>) => t.type === "spend").reduce((sum: number, t: Record<string, unknown>) => sum + (Number(t.amount) || 0), 0), color: "from-rose-500 to-red-500" },
+                  { icon: Wallet, label: "Current Balance", value: userTokens, color: "from-amber-400 to-orange-500" },
+                ].map((stat) => (
+                  <Card key={stat.label} className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-9 w-9 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center text-white shadow-md`}>
+                          <stat.icon className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground font-medium">{stat.label}</p>
+                          <p className="text-xl font-extrabold">{stat.value}</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* My Projects */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-white">
+                      <Layers className="h-3.5 w-3.5" />
+                    </div>
+                    My Projects
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {safeProjects.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Film className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No projects yet</p>
+                      <Button size="sm" className="mt-3 btn-gradient" onClick={() => setCurrentView("create")}>
+                        <Plus className="h-4 w-4 mr-1" />Create Your First Video
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
+                      {safeProjects.map((project: VideoProject) => {
+                        const statusColors: Record<string, string> = {
+                          completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                          generating: "bg-violet-50 text-violet-700 border-violet-200",
+                          failed: "bg-red-50 text-red-700 border-red-200",
+                          pending: "bg-amber-50 text-amber-700 border-amber-200",
+                        };
+                        return (
+                          <Card
+                            key={project.id}
+                            className="border border-slate-100 hover:border-violet-200 hover:shadow-md transition-all cursor-pointer group"
+                            onClick={() => openProject(project)}
+                          >
+                            <CardContent className="p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-bold truncate">{project.title || "Untitled"}</span>
+                                <Badge className={`text-[10px] px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
+                                  {project.status}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDuration(project.targetDuration || 0)}</span>
+                                <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{project.scenes?.length || 0} scenes</span>
+                              </div>
+                              <div className="flex items-center justify-end mt-2">
+                                <span className="text-xs text-violet-500 group-hover:text-violet-700 flex items-center gap-0.5">
+                                  Open <ArrowRight className="h-3 w-3" />
+                                </span>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Recent Activity */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white">
+                      <History className="h-3.5 w-3.5" />
+                    </div>
+                    Recent Activity
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {tokenHistory.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground">
+                      <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No recent transactions</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {tokenHistory.slice(0, 5).map((tx: Record<string, unknown>, i: number) => {
+                        const typeColors: Record<string, string> = {
+                          purchase: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                          spend: "bg-red-50 text-red-700 border-red-200",
+                          refund: "bg-blue-50 text-blue-700 border-blue-200",
+                          bonus: "bg-purple-50 text-purple-700 border-purple-200",
+                        };
+                        return (
+                          <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <Badge className={`text-[10px] px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
+                                {String(tx.type)}
+                              </Badge>
+                              <div>
+                                <p className="text-sm font-medium">{String(tx.description || tx.type)}</p>
+                                <p className="text-xs text-muted-foreground">{tx.createdAt ? new Date(String(tx.createdAt)).toLocaleDateString() : ""}</p>
+                              </div>
+                            </div>
+                            <span className={`text-sm font-bold ${(tx.type as string) === "spend" ? "text-red-600" : "text-emerald-600"}`}>
+                              {(tx.type as string) === "spend" ? "-" : "+"}{Number(tx.amount) || 0} tokens
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Quick Actions */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-fuchsia-500 to-pink-500 flex items-center justify-center text-white">
+                      <Zap className="h-3.5 w-3.5" />
+                    </div>
+                    Quick Actions
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Button className="btn-gradient h-12" onClick={() => setCurrentView("create")}>
+                      <Sparkles className="h-4 w-4 mr-2" />Create Video
+                    </Button>
+                    <Button className="btn-amber h-12" onClick={() => setCurrentView("buy-tokens")}>
+                      <Coins className="h-4 w-4 mr-2" />Buy Tokens
+                    </Button>
+                    <Button variant="outline" className="h-12 border-slate-200" onClick={() => setCurrentView("profile")}>
+                      <Settings className="h-4 w-4 mr-2" />Profile
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="text-center pt-2">
+                <Button variant="outline" onClick={() => setCurrentView("home")}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+              PROFILE VIEW
+              ═══════════════════════════════════════════════════════ */}
+          {currentView === "profile" && (
+            <motion.div key="profile" {...fadeUp} className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
+              {/* Header */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-slate-500 to-slate-700 flex items-center justify-center text-white shadow-lg shadow-slate-500/20">
+                  <User className="h-5 w-5" />
+                </div>
+                <div>
+                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">My Profile</h1>
+                  <p className="text-muted-foreground text-sm">Manage your account and view activity</p>
+                </div>
+              </div>
+
+              {/* Profile Card */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardContent className="p-6">
+                  <div className="flex items-center gap-4">
+                    <div className="h-16 w-16 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg">
+                      {userProfile?.name?.charAt(0)?.toUpperCase() || "U"}
+                    </div>
+                    <div className="flex-1">
+                      <h2 className="text-lg font-bold">{userProfile?.name || "User"}</h2>
+                      <p className="text-sm text-muted-foreground">{userProfile?.email || ""}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge className="text-[10px] px-2 bg-violet-50 text-violet-700 border-violet-200">
+                          {userProfile?.role === "admin" ? "🛡️ Admin" : "✨ Member"}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {profileData?.createdAt ? `Member since ${new Date(profileData.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}` : "Member"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Edit Profile Form */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-500 flex items-center justify-center text-white">
+                      <Settings className="h-3.5 w-3.5" />
+                    </div>
+                    Edit Profile
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Display Name</Label>
+                    <Input
+                      placeholder="Your name"
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Email</Label>
+                    <Input
+                      placeholder="Email"
+                      value={userProfile?.email || ""}
+                      disabled
+                      className="bg-slate-50 text-muted-foreground"
+                    />
+                    <p className="text-xs text-muted-foreground">Email cannot be changed</p>
+                  </div>
+                  <Separator className="my-4" />
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">Change Password</Label>
+                    <Input
+                      type="password"
+                      placeholder="Current password"
+                      value={profileOldPassword}
+                      onChange={(e) => setProfileOldPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Input
+                      type="password"
+                      placeholder="New password"
+                      value={profileNewPassword}
+                      onChange={(e) => setProfileNewPassword(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    className="btn-gradient"
+                    onClick={handleUpdateProfile}
+                    disabled={isUpdatingProfile || (!profileName.trim() && !profileOldPassword)}
+                  >
+                    {isUpdatingProfile ? (
+                      <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Saving...</>
+                    ) : (
+                      <><CheckCircle className="h-4 w-4 mr-1.5" />Save Changes</>
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Token History */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white">
+                      <History className="h-3.5 w-3.5" />
+                    </div>
+                    Token History
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {tokenHistory.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No transactions yet</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {tokenHistory.slice((profileHistoryPage - 1) * 10, profileHistoryPage * 10).map((tx: Record<string, unknown>, i: number) => {
+                          const typeColors: Record<string, string> = {
+                            purchase: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                            spend: "bg-red-50 text-red-700 border-red-200",
+                            refund: "bg-blue-50 text-blue-700 border-blue-200",
+                            bonus: "bg-purple-50 text-purple-700 border-purple-200",
+                          };
+                          return (
+                            <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                              <div className="flex items-center gap-3">
+                                <Badge className={`text-[10px] px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
+                                  {String(tx.type)}
+                                </Badge>
+                                <div>
+                                  <p className="text-sm font-medium">{String(tx.description || tx.type)}</p>
+                                  <p className="text-xs text-muted-foreground">{tx.createdAt ? new Date(String(tx.createdAt)).toLocaleString() : ""}</p>
+                                </div>
+                              </div>
+                              <span className={`text-sm font-bold ${(tx.type as string) === "spend" ? "text-red-600" : "text-emerald-600"}`}>
+                                {(tx.type as string) === "spend" ? "-" : "+"}{Number(tx.amount) || 0} tokens
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {tokenHistory.length > 10 && (
+                        <div className="flex items-center justify-center gap-2 mt-4">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={profileHistoryPage <= 1}
+                            onClick={() => setProfileHistoryPage((p) => p - 1)}
+                          >
+                            <ArrowLeft className="h-3 w-3 mr-1" />Prev
+                          </Button>
+                          <span className="text-xs text-muted-foreground">Page {profileHistoryPage} of {Math.ceil(tokenHistory.length / 10)}</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={profileHistoryPage >= Math.ceil(tokenHistory.length / 10)}
+                            onClick={() => setProfileHistoryPage((p) => p + 1)}
+                          >
+                            Next<ArrowRight className="h-3 w-3 ml-1" />
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Archived Projects */}
+              <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-slate-400 to-slate-600 flex items-center justify-center text-white">
+                      <FileText className="h-3.5 w-3.5" />
+                    </div>
+                    Archived Projects
+                  </CardTitle>
+                  <CardDescription className="text-xs">Completed and failed projects</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {safeProjects.filter((p: VideoProject) => p.status === "completed" || p.status === "failed").length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <FileText className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No archived projects</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-64 overflow-y-auto">
+                      {safeProjects
+                        .filter((p: VideoProject) => p.status === "completed" || p.status === "failed")
+                        .map((project: VideoProject) => (
+                          <Card
+                            key={project.id}
+                            className="border border-slate-100 hover:border-violet-200 hover:shadow-md transition-all cursor-pointer"
+                            onClick={() => openProject(project)}
+                          >
+                            <CardContent className="p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-bold truncate">{project.title || "Untitled"}</span>
+                                <Badge className={`text-[10px] px-2 ${
+                                  project.status === "completed"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    : "bg-red-50 text-red-700 border-red-200"
+                                }`}>
+                                  {project.status}
+                                </Badge>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDuration(project.targetDuration || 0)}</span>
+                                <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{project.scenes?.length || 0} scenes</span>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <div className="text-center pt-2">
                 <Button variant="outline" onClick={() => setCurrentView("home")}>
                   <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
                 </Button>
@@ -3323,12 +3862,93 @@ function VidoraApp() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setExportDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleExport} disabled={isExporting} className="btn-gradient">
+            <Button onClick={() => { setExportDialogOpen(false); openDownloadGate(currentProject.id, exportQuality); }} disabled={isExporting} className="btn-gradient">
               {isExporting ? (
                 <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Exporting...</>
               ) : (
                 <><Download className="h-4 w-4 mr-1.5" />Export Full Video</>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Download Gate Dialog */}
+      <Dialog open={downloadGateOpen} onOpenChange={setDownloadGateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white">
+                <Coins className="h-4 w-4" />
+              </div>
+              Download Requires Tokens
+            </DialogTitle>
+            <DialogDescription>
+              This download costs <strong className="text-amber-600">{downloadCost} tokens</strong>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {/* Cost Breakdown */}
+            {downloadBreakdown && (
+              <div className="rounded-lg bg-slate-50 p-4 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cost Breakdown</p>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Quality base</span>
+                  <span className="font-semibold">{downloadBreakdown.quality} tokens</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Duration bonus</span>
+                  <span className="font-semibold">{downloadBreakdown.duration} tokens</span>
+                </div>
+                <Separator className="my-2" />
+                <div className="flex items-center justify-between text-sm font-bold">
+                  <span>Total</span>
+                  <span className="text-amber-600">{downloadCost} tokens</span>
+                </div>
+              </div>
+            )}
+
+            {/* Token Balance Info */}
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-violet-50 border border-violet-100">
+              <Wallet className="h-4 w-4 text-violet-600 shrink-0" />
+              <span className="text-sm text-violet-700">
+                Your balance: <strong>{userTokens} tokens</strong>
+              </span>
+            </div>
+
+            {/* Insufficient Warning */}
+            {downloadInsufficient && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 border border-red-100">
+                <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+                <span className="text-sm text-red-700">
+                  You need <strong>{downloadCost - userTokens} more tokens</strong> to download this video.
+                </span>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            {!downloadInsufficient ? (
+              <Button
+                onClick={confirmDownload}
+                disabled={isRequestingDownload}
+                className="btn-gradient flex-1"
+              >
+                {isRequestingDownload ? (
+                  <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Processing...</>
+                ) : (
+                  <><Coins className="h-4 w-4 mr-1.5" />Use My Tokens ({userTokens} remaining)</>
+                )}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => { setDownloadGateOpen(false); setCurrentView("buy-tokens"); }}
+                className="btn-amber flex-1"
+              >
+                <Coins className="h-4 w-4 mr-1.5" />Buy Tokens
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setDownloadGateOpen(false)}>
+              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>
