@@ -446,3 +446,28 @@ Stage Summary:
 - ffmpeg missing gives clear error: "ffmpeg is not installed on the server. Please install ffmpeg..."
 - All lint checks pass
 ---
+
+---
+Task ID: final-vps-env-fix
+Agent: main
+Task: Fix VPS Prisma P1012 error (DATABASE_URL must start with postgresql://) and verify AI Enhance + mobile header fixes
+
+Work Log:
+- Diagnosed root cause: committed .env had SQLite URL (file:/home/z/my-project/db/custom.db) but schema.prisma uses provider=postgresql → Prisma P1012 on VPS
+- Updated /home/z/my-project/.env to use PostgreSQL connection string matching .env.example (postgresql://lightworld_db_user:...@localhost:5432/lightworld_vidora_db)
+- Fixed typo in .env.example: HUBTL_CLIENT_SECRET → HUBTEL_CLIENT_SECRET
+- Committed and pushed to GitHub (commit 72d0f6a) so VPS git pull picks up the fix
+- Verified AI Enhance button end-to-end via Agent Browser:
+  * Navigated to Text-to-Video creator, filled prompt field
+  * AI Enhance button enabled after text entered
+  * Clicked button → POST /api/enhance-prompt returned 200 in 1151ms
+  * Direct curl test confirmed valid response: {"success":true,"enhancedPrompt":"Low-angle wide shot..."}
+  * Confirmed enhanced prompt text renders in UI (document.body.innerText.includes('Low-angle') === true)
+- Verified mobile header uses compact DropdownMenu (md:hidden icon button) — no overflow on mobile
+- Verified sticky footer: min-h-screen flex flex-col wrapper + footer mt-auto
+
+Stage Summary:
+- VPS deploy blocker RESOLVED: .env now has correct PostgreSQL DATABASE_URL, pushed to origin/main
+- AI Enhance button CONFIRMED WORKING: API returns enhanced prompt, text appears in violet box in UI
+- Mobile header CONFIRMED: compact dropdown menu on mobile, inline buttons on desktop
+- VPS next steps for user: git pull && bun install && bun run db:generate && bun run db:push && bun run build && pm2 restart vidora
