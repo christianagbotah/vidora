@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -29,13 +29,13 @@ model VideoProject {
   userId         String?
   user           User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   title          String
-  description    String?    @db.Text
+  description    String?    
   style          String     @default("cinematic")
   aspectRatio    String     @default("16:9")
   status         String     @default("draft")
   targetDuration  Int        @default(60)
   projectType    String     @default("custom")   // custom, birthday, commercial, event, social
-  finalVideoUrl  String?    @db.Text
+  finalVideoUrl  String?    
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   scenes         VideoScene[]
@@ -49,20 +49,20 @@ model VideoScene {
   project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sceneNumber    Int
   title          String?
-  prompt         String    @db.Text
-  enhancedPrompt String?  @db.Text
-  visualNote     String?                       @db.Text // extracted visual direction
-  dialogue       String?                       @db.Text // extracted dialogue/narration
-  characterIds   String?                       @db.Text // JSON array of character IDs involved in scene
-  referenceImageUrl String?                   @db.Text // uploaded/generated reference image for scene
-  narrationUrl   String?                       @db.Text // generated TTS narration audio URL
+  prompt         String    
+  enhancedPrompt String?  
+  visualNote     String?                        // extracted visual direction
+  dialogue       String?                        // extracted dialogue/narration
+  characterIds   String?                        // JSON array of character IDs involved in scene
+  referenceImageUrl String?                    // uploaded/generated reference image for scene
+  narrationUrl   String?                        // generated TTS narration audio URL
   narrationVoice String?                       // which TTS voice was used
   mood           String?                       // emotional mood of the scene (dramatic, happy, dark, etc.)
   cameraMove     String?                       // camera movement directive (zoom_in, pan_left, tracking, etc.)
   musicMood      String?                       // background music mood (epic, calm, tense, joyful)
-  imageUrl       String?                       @db.Text
-  imageBase64    String?                       @db.Text
-  videoUrl       String?                       @db.Text
+  imageUrl       String?                       
+  imageBase64    String?                       
+  videoUrl       String?                       
   taskId         String?
   duration       Int      @default(10)
   transition     String   @default("fade")
@@ -78,11 +78,11 @@ model Character {
   project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name           String
   role           String?                       // protagonist, supporting, narrator, background
-  description    String?                       @db.Text // physical appearance, clothing, personality
-  stylePrompt    String?                       @db.Text // AI-optimized character description for consistency
+  description    String?                        // physical appearance, clothing, personality
+  stylePrompt    String?                        // AI-optimized character description for consistency
   voiceId        String?                       // assigned TTS voice ID for this character
-  imageUrl       String?                       @db.Text // reference image (uploaded or AI-generated)
-  imageBase64    String?                       @db.Text // for uploaded images stored as base64
+  imageUrl       String?                        // reference image (uploaded or AI-generated)
+  imageBase64    String?                        // for uploaded images stored as base64
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   @@index([projectId])
@@ -90,7 +90,7 @@ model Character {
 
 model GenerationHistory {
   id          String   @id @default(cuid())
-  prompt      String   @db.Text
+  prompt      String   
   inputType   String   @default("text")
   style       String?
   createdAt   DateTime @default(now())
@@ -106,7 +106,7 @@ model Payment {
   currency        String    @default("GHS")  // "GHS" | "USD"
   tokensPurchased Int       // number of tokens bought
   status          String    @default("pending")  // "pending" | "completed" | "failed" | "refunded"
-  metadata        String?   @db.Text // JSON string for gateway-specific data
+  metadata        String?    // JSON string for gateway-specific data
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   @@index([userId])
@@ -127,7 +127,7 @@ model TokenTransaction {
 model SystemConfig {
   id            String    @id @default(cuid())
   key           String    @unique
-  value         String    @db.Text
-  description   String?   @db.Text
+  value         String    
+  description   String?   
   updatedAt     DateTime  @updatedAt
 }

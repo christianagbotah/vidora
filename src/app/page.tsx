@@ -1406,13 +1406,24 @@ function VidoraApp() {
       });
       const data = await res.json();
       if (data.success) {
-        await signIn("credentials", {
-          email: authEmail,
-          password: authPassword,
-          redirect: false,
-        });
         setAuthDialogOpen(false);
-        toast({ title: "Account created successfully!" });
+        setAuthEmail("");
+        setAuthPassword("");
+        setAuthName("");
+        toast({
+          title: "Account created successfully!",
+          description: "Please sign in with your new credentials.",
+        });
+        // Attempt auto-login (non-blocking)
+        try {
+          await signIn("credentials", {
+            email: authEmail,
+            password: authPassword,
+            redirect: false,
+          });
+        } catch {
+          // Auto-login may fail in dialog context — user can sign in manually
+        }
       } else {
         setAuthError(data.error || "Registration failed. Please try again.");
         setAuthFieldError(data.field || "");
