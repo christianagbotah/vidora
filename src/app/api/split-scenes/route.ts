@@ -312,7 +312,7 @@ export async function POST(req: NextRequest) {
     const completion = await zai.chat.completions.create({
       messages: [
         {
-          role: "assistant",
+          role: "system",
           content: [
             "You are a professional film storyboard assistant and character designer.",
             "The user will give you a video concept, story, or script.",

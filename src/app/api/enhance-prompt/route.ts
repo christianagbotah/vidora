@@ -25,26 +25,31 @@ export async function POST(req: NextRequest) {
 
     const completion = await zai.chat.completions.create({
       messages: [
-        { role: "assistant", content: systemPrompt },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
       thinking: { type: "disabled" },
     });
 
-    const enhancedPrompt = completion.choices[0]?.message?.content;
+    const enhancedPrompt = completion.choices[0]?.message?.content?.trim()
+      .replace(/^```[a-z]*\n?/g, "")
+      .replace(/```$/g, "")
+      .replace(/^["']|["']$/g, "")
+      .trim();
 
     if (!enhancedPrompt) {
       return NextResponse.json(
-        { success: false, error: "Failed to enhance prompt" },
+        { success: false, error: "The AI could not enhance your prompt. Please try again or rephrase your input." },
         { status: 500 }
       );
     }
 
     return NextResponse.json({ success: true, enhancedPrompt });
   } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to enhance prompt:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to enhance prompt" },
+      { success: false, error: "Could not enhance your prompt: " + message },
       { status: 500 }
     );
   }

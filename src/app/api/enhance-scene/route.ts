@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     const completion = await withRetry(
       () => zai.chat.completions.create({
         messages: [
-          { role: "assistant", content: systemPrompt },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
         thinking: { type: "disabled" },
@@ -89,7 +89,11 @@ export async function POST(req: NextRequest) {
       "AI Director prompt enhancement"
     );
 
-    const enhancedPrompt = completion.choices[0]?.message?.content?.trim().replace(/^["']|["']$/g, "") || prompt;
+    const enhancedPrompt = completion.choices[0]?.message?.content?.trim()
+      .replace(/^```[a-z]*\n?/g, "")
+      .replace(/```$/g, "")
+      .replace(/^["']|["']$/g, "")
+      .trim() || prompt;
 
     // AI also suggests the mood, camera, and lighting it chose
     let aiMood = mood || "cinematic";

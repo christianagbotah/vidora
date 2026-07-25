@@ -1164,10 +1164,12 @@ function VidoraApp() {
       const data = await res.json();
       if (data.success) {
         setEnhancedText(data.enhancedPrompt);
-        toast({ title: "Prompt enhanced" });
+        toast({ title: "Prompt enhanced", description: "Review the enhanced version below." });
+      } else {
+        toast({ title: "Enhancement failed", description: data.error || "Could not enhance your prompt. Please try again.", variant: "destructive" });
       }
     } catch {
-      toast({ title: "Enhancement failed", variant: "destructive" });
+      toast({ title: "Enhancement failed", description: "Could not connect to the server. Please try again.", variant: "destructive" });
     } finally {
       setIsEnhancingPrompt(false);
     }

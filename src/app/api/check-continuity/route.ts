@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
       () => zai.chat.completions.create({
         messages: [
           {
-            role: "assistant",
+            role: "system",
             content: [
               "You are an expert Film Continuity Checker and Storyboard Editor.",
               "Analyze the following scenes for visual and narrative continuity issues.",
