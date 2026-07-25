@@ -565,6 +565,7 @@ function VidoraApp() {
   const [authName, setAuthName] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authFieldError, setAuthFieldError] = useState<"email" | "password" | "name" | "">("");
   const [userTokens, setUserTokens] = useState(0);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
 
@@ -1350,6 +1351,53 @@ function VidoraApp() {
   const handleRegister = async () => {
     setAuthLoading(true);
     setAuthError("");
+    setAuthFieldError("");
+
+    // ── Client-side validation ──
+    if (!authName.trim()) {
+      setAuthError("Please enter your full name.");
+      setAuthFieldError("name");
+      setAuthLoading(false);
+      return;
+    }
+    if (authName.trim().length < 2) {
+      setAuthError("Name must be at least 2 characters long.");
+      setAuthFieldError("name");
+      setAuthLoading(false);
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(authEmail)) {
+      setAuthError("Please enter a valid email address (e.g. you@example.com).");
+      setAuthFieldError("email");
+      setAuthLoading(false);
+      return;
+    }
+    if (authPassword.length < 8) {
+      setAuthError("Password must be at least 8 characters long.");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+    if (!/[A-Z]/.test(authPassword)) {
+      setAuthError("Password must contain at least one uppercase letter (A-Z).");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+    if (!/[0-9]/.test(authPassword)) {
+      setAuthError("Password must contain at least one number (0-9).");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+    if (!/[^A-Za-z0-9]/.test(authPassword)) {
+      setAuthError("Password must contain at least one special character (e.g. !@#$%^&*).");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch("/api/auth/register", {
         method: "POST",
@@ -1366,10 +1414,12 @@ function VidoraApp() {
         setAuthDialogOpen(false);
         toast({ title: "Account created successfully!" });
       } else {
-        setAuthError(data.error || "Registration failed");
+        setAuthError(data.error || "Registration failed. Please try again.");
+        setAuthFieldError(data.field || "");
       }
     } catch {
-      setAuthError("Registration failed. Please try again.");
+      setAuthError("Could not connect to the server. Please check your internet connection and try again.");
+      setAuthFieldError("");
     } finally {
       setAuthLoading(false);
     }
@@ -4320,35 +4370,57 @@ function VidoraApp() {
           </DialogHeader>
           <div className="space-y-4 pt-2">
             {authError && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-600 text-sm">
-                <AlertTriangle className="h-4 w-4 shrink-0" />
-                {authError}
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{authError}</span>
               </div>
             )}
             {authMode === "register" && (
               <div className="space-y-1.5">
                 <Label className="text-sm font-medium">Full Name</Label>
-                <Input placeholder="John Doe" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+                <Input
+                  placeholder="John Doe"
+                  value={authName}
+                  onChange={(e) => { setAuthName(e.target.value); if (authFieldError === "name") { setAuthFieldError(""); setAuthError(""); } }}
+                  className={authFieldError === "name" ? "border-red-400 focus-visible:ring-red-400" : ""}
+                />
               </div>
             )}
             <div className="space-y-1.5">
               <Label className="text-sm font-medium">Email</Label>
-              <Input type="email" placeholder="you@example.com" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} />
+              <Input
+                type="email"
+                placeholder="you@example.com"
+                value={authEmail}
+                onChange={(e) => { setAuthEmail(e.target.value); if (authFieldError === "email") { setAuthFieldError(""); setAuthError(""); } }}
+                className={authFieldError === "email" ? "border-red-400 focus-visible:ring-red-400" : ""}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="text-sm font-medium">Password</Label>
-              <Input type="password" placeholder="••••••••" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} />
+              <Input
+                type="password"
+                placeholder="••••••••"
+                value={authPassword}
+                onChange={(e) => { setAuthPassword(e.target.value); if (authFieldError === "password") { setAuthFieldError(""); setAuthError(""); } }}
+                className={authFieldError === "password" ? "border-red-400 focus-visible:ring-red-400" : ""}
+              />
+              {authMode === "register" && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Must be 8+ characters with uppercase, lowercase, number & special character
+                </p>
+              )}
             </div>
             <Button
               className="w-full btn-gradient"
-              disabled={authLoading || !authEmail || !authPassword}
+              disabled={authLoading || !authEmail || !authPassword || (authMode === "register" && !authName.trim())}
               onClick={authMode === "login" ? handleLogin : handleRegister}
             >
               {authLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{authMode === "login" ? "Signing in..." : "Creating account..."}</> : authMode === "login" ? "Sign In" : "Create Account"}
             </Button>
             <div className="text-center text-sm text-muted-foreground">
               {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }} className="text-violet-600 font-semibold hover:underline">
+              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); setAuthFieldError(""); }} className="text-violet-600 font-semibold hover:underline">
                 {authMode === "login" ? "Sign Up" : "Sign In"}
               </button>
             </div>
