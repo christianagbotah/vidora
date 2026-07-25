@@ -6,7 +6,7 @@ module.exports = {
       cwd: "/home/lightworld/webapps/vidora",
       env: {
         NODE_ENV: "production",
-        PORT: 3000,
+        PORT: 3004,
         HOSTNAME: "0.0.0.0",
       },
       instances: 1,
