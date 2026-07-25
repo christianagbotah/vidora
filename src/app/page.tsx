@@ -245,7 +245,7 @@ function SortableSceneCard({
             <GripVertical className="h-4 w-4 text-slate-300" />
           </div>
           {/* Thumbnail */}
-          <div className="relative w-full sm:w-32 h-24 sm:h-auto shrink-0 bg-slate-100">
+          <div className="relative w-full sm:w-36 h-28 sm:h-auto shrink-0 bg-slate-100">
             {scene.imageUrl ? (
               <>
                 <img src={scene.imageUrl} alt="" className="w-full h-full object-cover" />
@@ -263,65 +263,65 @@ function SortableSceneCard({
                 <Film className="h-6 w-6 text-slate-300" />
               </div>
             )}
-            <Badge className="absolute top-1 left-1 text-[9px] font-bold px-1.5 bg-black/60 text-white border-0">
+            <Badge className="absolute top-1.5 left-1.5 text-[10px] font-bold px-2 bg-black/60 text-white border-0">
               #{scene.sceneNumber}
             </Badge>
-            <Badge className={`absolute top-1 right-1 text-[9px] font-semibold px-1.5 ${statusColor}`}>
+            <Badge className={`absolute top-1.5 right-1.5 text-[10px] font-semibold px-2 ${statusColor}`}>
               {scene.status}
             </Badge>
           </div>
           {/* Content */}
-          <div className="flex-1 p-3 min-w-0">
+          <div className="flex-1 p-4 min-w-0">
             {/* Title Row */}
             <div className="flex items-center gap-1.5 flex-wrap mb-1">
               {scene.title && (
-                <span className="text-xs font-bold truncate">{scene.title}</span>
+                <span className="text-sm font-bold truncate">{scene.title}</span>
               )}
               {scene.dialogue && (
-                <Badge variant="outline" className="text-[9px] px-1 py-0">
-                  <MessageSquare className="h-2.5 w-2.5 mr-0.5" />Dialogue
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                  <MessageSquare className="h-3 w-3 mr-0.5" />Dialogue
                 </Badge>
               )}
               {scene.mood && moodBadge && (
-                <Badge className={`text-[9px] px-1.5 py-0 ${moodBadge}`}>{scene.mood}</Badge>
+                <Badge className={`text-[10px] px-2 py-0 ${moodBadge}`}>{scene.mood}</Badge>
               )}
               {scene.cameraMove && (
-                <Badge variant="outline" className="text-[9px] px-1 py-0 border-cyan-200 text-cyan-600">
-                  <Camera className="h-2.5 w-2.5 mr-0.5" />{scene.cameraMove}
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-cyan-200 text-cyan-600">
+                  <Camera className="h-3 w-3 mr-0.5" />{scene.cameraMove}
                 </Badge>
               )}
               {scene.lighting && (
-                <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-200 text-amber-600">
-                  <Lightbulb className="h-2.5 w-2.5 mr-0.5" />{scene.lighting}
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-200 text-amber-600">
+                  <Lightbulb className="h-3 w-3 mr-0.5" />{scene.lighting}
                 </Badge>
               )}
             </div>
 
             {/* Prompt */}
             <p
-              className={`text-[11px] text-muted-foreground leading-relaxed ${expandedPrompt ? "" : "line-clamp-2"}`}
+              className={`text-xs text-muted-foreground leading-relaxed ${expandedPrompt ? "" : "line-clamp-2"}`}
             >
               {scene.enhancedPrompt || scene.prompt}
             </p>
             {(scene.enhancedPrompt || scene.prompt).length > 120 && (
               <button
                 onClick={() => setExpandedPrompt(!expandedPrompt)}
-                className="text-[10px] text-violet-500 mt-0.5 hover:underline"
+                className="text-[11px] text-violet-500 mt-0.5 hover:underline"
               >
                 {expandedPrompt ? "Show less" : "Show more"}
               </button>
             )}
             {scene.dialogue && (
-              <p className="text-[10px] text-violet-500 mt-1 italic line-clamp-1">
+              <p className="text-xs text-violet-500 mt-1.5 italic line-clamp-1">
                 {scene.dialogue}
               </p>
             )}
 
             {/* Narration audio player */}
             {scene.narrationUrl && (
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <Volume2 className="h-3 w-3 text-emerald-500 shrink-0" />
-                <audio controls src={scene.narrationUrl} className="h-6 w-full max-w-[180px]" preload="none" />
+              <div className="mt-2 flex items-center gap-1.5">
+                <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                <audio controls src={scene.narrationUrl} className="h-7 w-full max-w-[200px]" preload="none" />
               </div>
             )}
 
@@ -337,135 +337,135 @@ function SortableSceneCard({
                 <a
                   href={scene.videoUrl}
                   download
-                  className="inline-flex items-center gap-1 text-[10px] text-violet-500 hover:text-violet-700 mt-1"
+                  className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
                 >
-                  <Download className="h-3 w-3" />Download video
+                  <Download className="h-3.5 w-3.5" />Download video
                 </a>
               </div>
             )}
 
             {/* Progress spinner */}
             {scene.status === "generating" && (
-              <div className="mt-2 flex items-center gap-2 text-[10px] text-violet-500">
-                <Loader2 className="h-3 w-3 animate-spin" />
+              <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 <span>Generating video...</span>
               </div>
             )}
 
             {/* Actions */}
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
               {!scene.videoUrl && scene.status !== "generating" && (
                 <Button
-                  size="sm" variant="outline" className="h-6 text-[10px] px-2"
+                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
                   onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
                 >
-                  <Play className="h-3 w-3 mr-0.5" />Generate Video
+                  <Play className="h-3.5 w-3.5 mr-1" />Generate Video
                 </Button>
               )}
               {scene.status === "failed" && (
                 <Button
-                  size="sm" variant="outline" className="h-6 text-[10px] px-2"
+                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
                   onClick={() => onRetry(scene)}
                 >
-                  <RefreshCw className="h-3 w-3 mr-0.5" />Retry
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
                 </Button>
               )}
               {scene.dialogue && !scene.narrationUrl && (
                 <div className="flex items-center gap-1">
                   <Select value={narrationVoice} onValueChange={setNarrationVoice}>
-                    <SelectTrigger className="h-6 w-20 text-[10px] px-1">
+                    <SelectTrigger className="h-7 w-24 text-xs px-1.5">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {TTS_VOICES.map((v) => (
                         <SelectItem key={v.id} value={v.id}>
-                          <span className="text-[10px]">{v.label}</span>
+                          <span className="text-xs">{v.label}</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <Button
-                    size="sm" variant="outline" className="h-6 text-[10px] px-2"
+                    size="sm" variant="outline" className="h-7 text-xs px-2.5"
                     onClick={() => onNarrate(scene.id, narrationVoice)}
                     disabled={isGeneratingNarration}
                   >
                     {isGeneratingNarration
-                      ? <><Loader2 className="h-3 w-3 animate-spin mr-0.5" />Generating...</>
-                      : <><Volume2 className="h-3 w-3 mr-0.5" />Narrate</>
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Generating...</>
+                      : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
                     }
                   </Button>
                 </div>
               )}
               <Button
-                size="sm" variant="outline" className="h-6 text-[10px] px-2"
+                size="sm" variant="outline" className="h-7 text-xs px-2.5"
                 onClick={() => onEnhanceScene(scene)}
               >
-                <Wand2 className="h-3 w-3 mr-0.5" />AI Enhance
+                <Wand2 className="h-3.5 w-3.5 mr-1" />AI Enhance
               </Button>
               <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
-                <SelectTrigger className="h-6 w-20 text-[10px] px-1">
+                <SelectTrigger className="h-7 w-24 text-xs px-1.5">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {TRANSITIONS.map((t) => (
                     <SelectItem key={t.value} value={t.value}>
-                      <span className="text-[10px]">{t.label}</span>
+                      <span className="text-xs">{t.label}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Button
                 size="sm" variant="ghost"
-                className="h-6 text-[10px] px-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 ml-auto"
+                className="h-7 text-xs px-2 text-red-400 hover:text-red-600 hover:bg-red-50 ml-auto"
                 onClick={() => onDelete(scene.id, "Scene " + scene.sceneNumber)}
               >
-                <Trash2 className="h-3 w-3" />
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
 
             {/* AI Director Controls */}
-            <div className="mt-2 pt-2 border-t border-slate-100">
+            <div className="mt-3 pt-3 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Mood</Label>
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Mood</Label>
                   <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
-                    <SelectTrigger className="h-7 text-[10px] px-1 mt-0.5">
+                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
                       <SelectValue placeholder="Set mood" />
                     </SelectTrigger>
                     <SelectContent>
                       {MOODS.map((m) => (
                         <SelectItem key={m} value={m}>
-                          <span className="text-[10px] capitalize">{m}</span>
+                          <span className="text-xs capitalize">{m}</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Camera</Label>
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Camera</Label>
                   <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
-                    <SelectTrigger className="h-7 text-[10px] px-1 mt-0.5">
+                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
                       <SelectValue placeholder="Camera move" />
                     </SelectTrigger>
                     <SelectContent>
                       {CAMERA_MOVES.map((c) => (
                         <SelectItem key={c} value={c}>
-                          <span className="text-[10px] capitalize">{c}</span>
+                          <span className="text-xs capitalize">{c}</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Lighting</Label>
+                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Lighting</Label>
                   <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
-                    <SelectTrigger className="h-7 text-[10px] px-1 mt-0.5">
+                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
                       <SelectValue placeholder="Lighting" />
                     </SelectTrigger>
                     <SelectContent>
                       {LIGHTING_STYLES.map((l) => (
                         <SelectItem key={l} value={l}>
-                          <span className="text-[10px] capitalize">{l}</span>
+                          <span className="text-xs capitalize">{l}</span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -2518,28 +2518,28 @@ function VidoraApp() {
               <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <CardTitle className="text-base font-bold flex items-center gap-2">
-                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-purple-500 flex items-center justify-center text-white">
-                        <Layers className="h-3.5 w-3.5" />
+                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+                      <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-500 flex items-center justify-center text-white">
+                        <Layers className="h-4 w-4" />
                       </div>
                       Scene Timeline
-                      <Badge variant="outline" className="text-[10px] ml-1">{safeScenes.length}</Badge>
+                      <Badge variant="outline" className="text-xs ml-1">{safeScenes.length}</Badge>
                     </CardTitle>
                     <div className="flex items-center gap-2">
                       <Select value={sceneFilter} onValueChange={setSceneFilter}>
-                        <SelectTrigger className="h-7 w-28 text-[10px] px-2">
+                        <SelectTrigger className="h-8 w-32 text-xs px-2">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="all"><span className="text-[10px]">All</span></SelectItem>
-                          <SelectItem value="pending"><span className="text-[10px]">Pending</span></SelectItem>
-                          <SelectItem value="generating"><span className="text-[10px]">Generating</span></SelectItem>
-                          <SelectItem value="completed"><span className="text-[10px]">Completed</span></SelectItem>
-                          <SelectItem value="failed"><span className="text-[10px]">Failed</span></SelectItem>
+                          <SelectItem value="all"><span className="text-xs">All</span></SelectItem>
+                          <SelectItem value="pending"><span className="text-xs">Pending</span></SelectItem>
+                          <SelectItem value="generating"><span className="text-xs">Generating</span></SelectItem>
+                          <SelectItem value="completed"><span className="text-xs">Completed</span></SelectItem>
+                          <SelectItem value="failed"><span className="text-xs">Failed</span></SelectItem>
                         </SelectContent>
                       </Select>
                       <Button size="sm" variant="outline" onClick={() => setCreateDialogOpen(true)}>
-                        <Plus className="h-3 w-3 mr-1" />Add Scene
+                        <Plus className="h-3.5 w-3.5 mr-1" />Add Scene
                       </Button>
                     </div>
                   </div>
