@@ -394,3 +394,24 @@ Stage Summary:
 - All non-landing page fonts professionally enhanced for better readability
 - All dependencies installed and lint clean
 ---
+Task ID: 2
+Agent: main
+Task: Fix mobile header overflow when logged in
+
+Work Log:
+- Identified root cause: 5+ auth buttons (Dashboard, Admin, tokens, Profile, Sign Out) + nav button all rendered inline in h-14 header, overflowing on mobile
+- Added DropdownMenu import from shadcn/ui
+- Replaced flat auth button list with responsive design:
+  - Desktop (md+): Full inline buttons preserved in `hidden md:flex` container
+  - Mobile (<md): Single round user icon button (`hidden md:hidden`) that opens a DropdownMenu with all options
+- DropdownMenu shows: user name/email header, Dashboard, Admin (if admin role), Buy Tokens (with badge), Profile, separator, Sign Out
+- "Create Video" and "Back" buttons hide text labels on mobile (icon-only via `hidden sm:inline`)
+- "Sign In" button also hides text on mobile (icon-only)
+- Verified across 3 viewports: 375px (iPhone X) → 57px, 768px (tablet) → 57px, 1024px (desktop) → 57px
+- Lint passes clean
+
+Stage Summary:
+- Header stays at 57px (h-14 + border) across all viewports
+- Mobile users get a clean dropdown menu from a single user avatar button
+- Desktop users retain full inline navigation buttons
+---

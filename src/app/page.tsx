@@ -42,6 +42,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import DeviceSimulator from "@/components/DeviceSimulator";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -1637,38 +1640,76 @@ function VidoraApp() {
           <div className="flex items-center gap-2">
             {currentView === "home" && (
               <Button onClick={() => setCurrentView("create")} size="sm" className="btn-gradient">
-                <Sparkles className="h-4 w-4 mr-1.5" />Create Video
+                <Sparkles className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Create Video</span>
               </Button>
             )}
             {currentView !== "home" && (
               <Button variant="ghost" size="sm" onClick={() => setCurrentView("home")} className="hover:bg-violet-50">
-                <ArrowLeft className="h-4 w-4 mr-1" />Back
+                <ArrowLeft className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Back</span>
               </Button>
             )}
-            {/* Auth / User controls */}
+            {/* Auth / User controls — mobile dropdown, desktop inline */}
             {session?.user ? (
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
-                  <BarChart3 className="h-4 w-4 mr-1" />Dashboard
-                </Button>
-                {userProfile?.role === "admin" && (
-                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
-                    <ShieldCheck className="h-4 w-4 mr-1" />Admin
+              <>
+                {/* Desktop: inline buttons */}
+                <div className="hidden md:flex items-center gap-1.5">
+                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
+                    <BarChart3 className="h-4 w-4 mr-1" />Dashboard
                   </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
-                  <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
-                  <User className="h-4 w-4 mr-1" />Profile
-                </Button>
-                <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
-                  <LogOut className="h-4 w-4 mr-1" />
-                </Button>
-              </div>
+                  {userProfile?.role === "admin" && (
+                    <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
+                      <ShieldCheck className="h-4 w-4 mr-1" />Admin
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
+                    <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
+                    <User className="h-4 w-4 mr-1" />Profile
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
+                    <LogOut className="h-4 w-4 mr-1" />Sign Out
+                  </Button>
+                </div>
+                {/* Mobile: dropdown menu */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="md:hidden h-9 w-9 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200">
+                      <User className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <div className="px-2 py-1.5">
+                      <p className="text-sm font-semibold truncate">{userProfile?.name || session.user?.email}</p>
+                      <p className="text-xs text-muted-foreground truncate">{session.user?.email}</p>
+                    </div>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => { setCurrentView("dashboard"); }}>
+                      <BarChart3 className="h-4 w-4 mr-2 text-violet-500" />Dashboard
+                    </DropdownMenuItem>
+                    {userProfile?.role === "admin" && (
+                      <DropdownMenuItem onClick={() => { setCurrentView("admin"); }}>
+                        <ShieldCheck className="h-4 w-4 mr-2 text-violet-500" />Admin
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem onClick={() => { setCurrentView("buy-tokens"); }}>
+                      <Coins className="h-4 w-4 mr-2 text-amber-500" />
+                      <span>Buy Tokens</span>
+                      <Badge variant="outline" className="ml-auto text-xs border-amber-200 text-amber-600">{userTokens}</Badge>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => { setCurrentView("profile"); }}>
+                      <User className="h-4 w-4 mr-2 text-slate-500" />Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleSignOut} className="text-red-600 focus:text-red-600">
+                      <LogOut className="h-4 w-4 mr-2" />Sign Out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
             ) : (
               <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hover:bg-violet-50">
-                <LogIn className="h-4 w-4 mr-1.5" />Sign In
+                <LogIn className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Sign In</span>
               </Button>
             )}
           </div>
