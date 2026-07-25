@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     const reference = `VID-${uuid().slice(0, 8)}-${Date.now()}`;
-    const callbackUrl = `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/payments/verify`;
+    const callbackUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/payments/verify`;
 
     // Create payment record
     const payment = await db.payment.create({
