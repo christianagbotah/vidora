@@ -696,15 +696,50 @@ function VidoraApp() {
     if (!currentProject) return;
     setGeneratingScenes((prev) => new Set(prev).add(sceneId));
     try {
-      const res = await fetch(`/api/generate-video`, {
+      const res = await fetch(`/api/generate-video-scene`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: currentProject.id }),
+        body: JSON.stringify({
+          prompt,
+          sceneId,
+          projectId: currentProject.id,
+          duration: currentProject.targetDuration || 10,
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: "Generating video..." });
-        setTimeout(refreshProject, 5000);
+        toast({ title: "Generating video...", description: data.videoUrl ? "Video ready!" : "This may take a few minutes." });
+        if (!data.videoUrl) {
+          // Start polling for this scene's video
+          const pollScene = async () => {
+            try {
+              const statusRes = await fetch(`/api/video-status`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ sceneId }),
+              });
+              const statusData = await statusRes.json();
+              if (statusData.videoUrl) {
+                await refreshProject();
+                return true; // done
+              }
+              if (statusData.status === "failed") {
+                toast({ title: "Generation failed", description: "The video could not be generated.", variant: "destructive" });
+                return true; // stop polling
+              }
+              return false; // still processing
+            } catch {
+              return false;
+            }
+          };
+          for (let i = 0; i < 40; i++) {
+            await new Promise((r) => setTimeout(r, 15000));
+            const done = await pollScene();
+            if (done) break;
+          }
+        } else {
+          await refreshProject();
+        }
       } else {
         toast({ title: "Failed", description: data.error, variant: "destructive" });
       }
@@ -1232,19 +1267,24 @@ function VidoraApp() {
       recorder.ondataavailable = (e) => audioChunksRef.current.push(e.data);
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const file = new File([blob], "recording.webm", { type: "audio/webm" });
-        setVideoFile(file);
         setIsRecording(false);
-        toast({ title: "Recording saved" });
+        toast({ title: "Processing recording..." });
         // Auto-transcribe
         const fd = new FormData();
-        fd.append("audio", file);
+        fd.append("audio", blob, "recording.webm");
         fetch("/api/transcribe", { method: "POST", body: fd })
           .then((r) => r.json())
           .then((d) => {
-            if (d.success && d.text) setTextPrompt(d.text);
+            if (d.success && d.transcription) {
+              setTextPrompt(d.transcription);
+              toast({ title: "Transcription complete!" });
+            } else {
+              toast({ title: "Transcription failed", description: d.error || "Could not process your audio. Please try again.", variant: "destructive" });
+            }
           })
-          .catch(() => { /* transcription failed */ });
+          .catch(() => {
+            toast({ title: "Transcription failed", description: "Could not connect to the server. Please try again.", variant: "destructive" });
+          });
         stream.getTracks().forEach((t) => t.stop());
       };
       recorder.start();

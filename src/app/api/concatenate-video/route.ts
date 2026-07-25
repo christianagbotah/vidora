@@ -8,8 +8,26 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+async function checkFfmpeg(): Promise<boolean> {
+  try {
+    await execAsync("which ffmpeg");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
+    // Validate ffmpeg is available
+    const hasFfmpeg = await checkFfmpeg();
+    if (!hasFfmpeg) {
+      return NextResponse.json(
+        { success: false, error: "ffmpeg is not installed on the server. Please install ffmpeg (e.g. sudo apt install ffmpeg) to merge videos." },
+        { status: 500 }
+      );
+    }
+
     const { projectId } = await req.json();
     if (!projectId) {
       return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
@@ -95,10 +113,17 @@ export async function POST(req: NextRequest) {
       }
 
       if (!concatSucceeded) {
-        await execAsync(
-          'ffmpeg -y -f concat -safe 0 -i "' + concatListPath + '" -c:v libx264 -preset fast -crf 23 -r 24 -pix_fmt yuv420p -movflags +faststart "' + outputPath + '"',
-          { timeout: 600000 }
-        );
+        console.log("Concat demuxer failed (likely different codecs), re-encoding with libx264...");
+        try {
+          await execAsync(
+            'ffmpeg -y -f concat -safe 0 -i "' + concatListPath + '" -c:v libx264 -preset fast -crf 23 -r 24 -pix_fmt yuv420p -c:a aac -movflags +faststart "' + outputPath + '"',
+            { timeout: 600000 }
+          );
+        } catch (recodeErr) {
+          const recodeMsg = recodeErr instanceof Error ? recodeErr.message : String(recodeErr);
+          console.error("Re-encode concat also failed:", recodeMsg);
+          throw new Error("ffmpeg could not merge the video clips. The clips may have incompatible formats. Details: " + recodeMsg.slice(0, 200));
+        }
         if (!existsSync(outputPath)) {
           throw new Error("ffmpeg concat failed");
         }

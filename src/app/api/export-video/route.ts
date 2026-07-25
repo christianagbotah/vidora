@@ -8,6 +8,15 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
+async function checkFfmpeg(): Promise<boolean> {
+  try {
+    await execAsync("which ffmpeg && which ffprobe");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Quality Presets ───────────────────────────────────────────────────────────
 
 interface QualityPreset {
@@ -278,6 +287,15 @@ function buildFfmpegCommand(opts: {
 
 export async function POST(req: NextRequest) {
   try {
+    // ── Validate ffmpeg is available ──────────────────────────────────────
+    const hasFfmpeg = await checkFfmpeg();
+    if (!hasFfmpeg) {
+      return NextResponse.json(
+        { success: false, error: "ffmpeg/ffprobe is not installed on the server. Please install them (e.g. sudo apt install ffmpeg) to export videos." },
+        { status: 500 }
+      );
+    }
+
     // ── Parse & validate request body ──────────────────────────────────────
     const body = await req.json();
     const {

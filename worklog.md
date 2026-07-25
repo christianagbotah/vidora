@@ -415,3 +415,34 @@ Stage Summary:
 - Mobile users get a clean dropdown menu from a single user avatar button
 - Desktop users retain full inline navigation buttons
 ---
+Task ID: 5
+Agent: main
+Task: Fix voice transcription not showing + video generation always failing + video concatenation
+
+Work Log:
+- Investigated voice recording flow: found `d.text` vs `d.transcription` field name mismatch in page.tsx line ~1245
+- Fixed transcription: changed `d.text` → `d.transcription`, removed `setVideoFile(file)` that was polluting video upload state
+- Added proper error toasts for transcription success/failure
+- Rewrote `generate-video-scene/route.ts` with robust patterns from batch route:
+  - Comprehensive `extractVideoUrl()` checking 10+ field patterns + regex fallback
+  - `isTaskComplete()` and `isTaskFailed()` handling multiple status conventions
+  - Status field fallback: `result.task_status || result.status || "UNKNOWN"`
+  - Added `duration` parameter (default 10s)
+  - Rate-limit retry with exponential backoff (`withRetry`)
+  - Reference image support from scene characters
+  - Early exit if video URL found while still processing
+  - 80 polls × 15s = 20 min max wait (was 15 × 8s = 2 min)
+- Fixed `handleGenerateSingle` in page.tsx: was calling batch `/api/generate-video` with only `projectId`, now calls `/api/generate-video-scene` with `prompt`, `sceneId`, `projectId`, `duration`
+- Added polling loop for single-scene generation using `/api/video-status` POST endpoint
+- Added ffmpeg validation at start of `concatenate-video/route.ts` and `export-video/route.ts`
+- Improved ffmpeg concat error handling with specific messages for incompatible formats
+- Lint passes clean
+
+Stage Summary:
+- Voice transcription now works: API returns `transcription` field, frontend reads it correctly
+- Single-scene generation calls the correct API endpoint with proper parameters
+- Video status detection handles SUCCESS/COMPLETED/SUCCEEDED/DONE/FINISHED and FAIL/FAILED/ERROR etc.
+- Video URL extraction checks 10+ response field patterns instead of 4
+- ffmpeg missing gives clear error: "ffmpeg is not installed on the server. Please install ffmpeg..."
+- All lint checks pass
+---
