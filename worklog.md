@@ -360,3 +360,37 @@ Stage Summary:
 - Production-ready middleware (commented for dev, ready for VPS)
 - All APIs verified working via browser testing
 ---
+Task ID: 1
+Agent: main
+Task: Fix Payment Gateway Tabs + Enhance Font Sizes
+
+Work Log:
+- Pulled latest code from GitHub (cce656e) — project had 16 new commits including SaaS infrastructure, auth, payments, tokens, admin dashboard
+- Reset local branch to origin/main to sync with remote changes
+- Fixed Payment Gateway Configuration in Admin Dashboard: replaced plain `<button>` gateway selector (which only saved gateway name, no tab switching) with proper shadcn/ui `<Tabs>` component
+- Added Paystack tab (🇬🇭): shows Secret Key, Public Key, Webhook Secret, Currency fields with enable Switch
+- Added Hubtel tab: shows Client ID, Client Secret, Merchant Account Number, API Key, Currency fields with enable Switch
+- Added Stripe tab: shows Secret Key, Publishable Key with enable Switch
+- Each tab has gateway status indicator and Save Configuration button
+- Added 4 new fields to CONFIG_SCHEMA in admin/config/route.ts: paystack_webhook_secret, paystack_currency, hubtel_api_key, hubtel_currency
+- Enhanced font sizes across all non-landing views:
+  - text-[11px] → text-sm (15 occurrences)
+  - text-[10px] → text-xs (36 occurrences)
+  - text-[9px] → text-xs (6 occurrences)
+  - text-[8px] → text-xs (2 occurrences)
+  - Duration preset buttons: text-xs → text-sm, py-1.5 → py-2, px-3 → px-4
+  - Custom duration input: h-9 → h-10, text-xs → text-sm
+  - Project type labels: text-xs → text-sm
+  - Admin table headers: text-xs → text-sm
+  - Dashboard stat labels: text-xs → text-sm
+  - All admin config inputs: h-8 text-xs → h-9 text-sm
+- Installed missing bcryptjs dependency (and @types/bcryptjs)
+- Fixed package.json duplicate entries (prisma, @types/bcryptjs)
+- Lint passes with 0 errors
+- Browser verified: Home, Create, Gallery views all render correctly
+
+Stage Summary:
+- Payment gateway tabs now properly work with Paystack/Hubtel/Stripe tab switching
+- All non-landing page fonts professionally enhanced for better readability
+- All dependencies installed and lint clean
+---

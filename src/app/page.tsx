@@ -263,10 +263,10 @@ function SortableSceneCard({
                 <Film className="h-6 w-6 text-slate-300" />
               </div>
             )}
-            <Badge className="absolute top-1.5 left-1.5 text-[10px] font-bold px-2 bg-black/60 text-white border-0">
+            <Badge className="absolute top-1.5 left-1.5 text-xs font-bold px-2 bg-black/60 text-white border-0">
               #{scene.sceneNumber}
             </Badge>
-            <Badge className={`absolute top-1.5 right-1.5 text-[10px] font-semibold px-2 ${statusColor}`}>
+            <Badge className={`absolute top-1.5 right-1.5 text-xs font-semibold px-2 ${statusColor}`}>
               {scene.status}
             </Badge>
           </div>
@@ -278,20 +278,20 @@ function SortableSceneCard({
                 <span className="text-sm font-bold truncate">{scene.title}</span>
               )}
               {scene.dialogue && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                <Badge variant="outline" className="text-xs px-1.5 py-0">
                   <MessageSquare className="h-3 w-3 mr-0.5" />Dialogue
                 </Badge>
               )}
               {scene.mood && moodBadge && (
-                <Badge className={`text-[10px] px-2 py-0 ${moodBadge}`}>{scene.mood}</Badge>
+                <Badge className={`text-xs px-2 py-0 ${moodBadge}`}>{scene.mood}</Badge>
               )}
               {scene.cameraMove && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-cyan-200 text-cyan-600">
+                <Badge variant="outline" className="text-xs px-1.5 py-0 border-cyan-200 text-cyan-600">
                   <Camera className="h-3 w-3 mr-0.5" />{scene.cameraMove}
                 </Badge>
               )}
               {scene.lighting && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-200 text-amber-600">
+                <Badge variant="outline" className="text-xs px-1.5 py-0 border-amber-200 text-amber-600">
                   <Lightbulb className="h-3 w-3 mr-0.5" />{scene.lighting}
                 </Badge>
               )}
@@ -306,7 +306,7 @@ function SortableSceneCard({
             {(scene.enhancedPrompt || scene.prompt).length > 120 && (
               <button
                 onClick={() => setExpandedPrompt(!expandedPrompt)}
-                className="text-[11px] text-violet-500 mt-0.5 hover:underline"
+                className="text-sm text-violet-500 mt-0.5 hover:underline"
               >
                 {expandedPrompt ? "Show less" : "Show more"}
               </button>
@@ -427,9 +427,9 @@ function SortableSceneCard({
             <div className="mt-3 pt-3 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Mood</Label>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Mood</Label>
                   <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
-                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
                       <SelectValue placeholder="Set mood" />
                     </SelectTrigger>
                     <SelectContent>
@@ -442,9 +442,9 @@ function SortableSceneCard({
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Camera</Label>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Camera</Label>
                   <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
-                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
                       <SelectValue placeholder="Camera move" />
                     </SelectTrigger>
                     <SelectContent>
@@ -457,9 +457,9 @@ function SortableSceneCard({
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Lighting</Label>
+                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Lighting</Label>
                   <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
-                    <SelectTrigger className="h-8 text-xs px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
                       <SelectValue placeholder="Lighting" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1630,7 +1630,7 @@ function VidoraApp() {
             <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent font-extrabold tracking-tight">
               Vidora
             </span>
-            <Badge variant="outline" className="text-[10px] font-semibold text-violet-500 border-violet-200 ml-1">
+            <Badge variant="outline" className="text-xs font-semibold text-violet-500 border-violet-200 ml-1">
               PRO
             </Badge>
           </button>
@@ -1874,7 +1874,7 @@ function VidoraApp() {
                         <CardHeader className="pb-2">
                           <div className="flex items-start justify-between">
                             <CardTitle className="text-base font-bold truncate pr-2">{p.title}</CardTitle>
-                            <Badge className={`text-[10px] font-semibold px-2 shrink-0 ${
+                            <Badge className={`text-xs font-semibold px-2 shrink-0 ${
                               p.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : p.status === "generating" ? "bg-violet-50 text-violet-700 border-violet-200"
                               : p.status === "failed" ? "bg-red-50 text-red-700 border-red-200"
@@ -1886,11 +1886,11 @@ function VidoraApp() {
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
-                            <Badge variant="outline" className="text-[10px]">{p.aspectRatio}</Badge>
-                            <Badge variant="outline" className="text-[10px]">{p.style}</Badge>
+                            <Badge variant="outline" className="text-xs">{p.aspectRatio}</Badge>
+                            <Badge variant="outline" className="text-xs">{p.style}</Badge>
                             <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{formatDuration(p.targetDuration)}</span>
                             {p.projectType && p.projectType !== "custom" && (
-                              <Badge className="text-[10px] bg-violet-50 text-violet-600 border-violet-200">{p.projectType}</Badge>
+                              <Badge className="text-xs bg-violet-50 text-violet-600 border-violet-200">{p.projectType}</Badge>
                             )}
                           </div>
                           <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
@@ -1901,7 +1901,7 @@ function VidoraApp() {
                           </div>
                           {p.finalVideoUrl && (
                             <div className="mt-2">
-                              <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                              <Badge className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
                                 <CheckCircle className="h-3 w-3 mr-1" />Exported
                               </Badge>
                             </div>
@@ -1995,8 +1995,8 @@ function VidoraApp() {
                           <div className={`h-8 w-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center text-white mb-2`}>
                             <t.icon className="h-4 w-4" />
                           </div>
-                          <p className="text-xs font-bold">{t.label}</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
+                          <p className="text-sm font-bold">{t.label}</p>
+                          <p className="text-sm text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
                           {projectType === t.id && (
                             <div className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-violet-500" />
                           )}
@@ -2014,7 +2014,7 @@ function VidoraApp() {
                           <button
                             key={d.value}
                             onClick={() => { setSelectedDuration(d.value); setIsCustomDuration(false); }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
                               !isCustomDuration && selectedDuration === d.value
                                 ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
                                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -2026,7 +2026,7 @@ function VidoraApp() {
                       </div>
                       <button
                         onClick={() => setIsCustomDuration(true)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
                           isCustomDuration
                             ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
                             : "bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200"
@@ -2036,16 +2036,16 @@ function VidoraApp() {
                       </button>
                       {isCustomDuration && (
                         <div className="flex items-center gap-1.5">
-                          <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-24 h-9 text-xs" />
+                          <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-28 h-10 text-sm" />
                           <span className="text-xs text-muted-foreground">sec (10–300)</span>
                         </div>
                       )}
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-xs">
                         <Film className="h-2.5 w-2.5 mr-1" />~{effectiveSceneCount} scene{effectiveSceneCount > 1 ? "s" : ""}
                       </Badge>
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-xs">
                         <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
                       </Badge>
                     </div>
@@ -2080,7 +2080,7 @@ function VidoraApp() {
                             }`}
                           >
                             <a.icon className={`h-4 w-4 mx-auto ${selectedAspect === a.value ? "text-violet-600" : "text-slate-400"}`} />
-                            <p className="text-[9px] mt-0.5 font-bold">{a.label}</p>
+                            <p className="text-xs mt-0.5 font-bold">{a.label}</p>
                           </button>
                         ))}
                       </div>
@@ -2264,7 +2264,7 @@ function VidoraApp() {
                         <Eye className="h-3.5 w-3.5" />
                       </div>
                       Script Analysis Preview
-                      <Badge className="ml-auto text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                      <Badge className="ml-auto text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
                         {parsedScenes.length} scenes, {parsedCharacters.length} characters
                       </Badge>
                     </CardTitle>
@@ -2275,12 +2275,12 @@ function VidoraApp() {
                         {parsedScenes.map((s, i) => (
                           <div key={i} className="p-3 rounded-lg border border-slate-100 bg-slate-50/50">
                             <div className="flex items-center gap-2 mb-1">
-                              <Badge className="text-[9px] bg-violet-100 text-violet-700 border-violet-200">Scene {i + 1}</Badge>
+                              <Badge className="text-xs bg-violet-100 text-violet-700 border-violet-200">Scene {i + 1}</Badge>
                               {s.title && <span className="text-xs font-bold">{s.title}</span>}
                             </div>
-                            <p className="text-[11px] text-muted-foreground line-clamp-2">{s.prompt}</p>
+                            <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
                             {s.dialogue && (
-                              <p className="text-[10px] text-violet-500 mt-1 italic">{s.dialogue}</p>
+                              <p className="text-xs text-violet-500 mt-1 italic">{s.dialogue}</p>
                             )}
                           </div>
                         ))}
@@ -2291,7 +2291,7 @@ function VidoraApp() {
                         <p className="text-xs font-bold mb-2">Detected Characters:</p>
                         <div className="flex flex-wrap gap-2">
                           {parsedCharacters.map((c, i) => (
-                            <Badge key={i} variant="outline" className="text-[10px]">
+                            <Badge key={i} variant="outline" className="text-xs">
                               <Users className="h-2.5 w-2.5 mr-1" />
                               {c.name} ({c.role})
                             </Badge>
@@ -2386,7 +2386,7 @@ function VidoraApp() {
                         <Settings className="h-3.5 w-3.5" />
                       </div>
                       Project Settings
-                      <Badge variant="outline" className="text-[10px] ml-1">
+                      <Badge variant="outline" className="text-xs ml-1">
                         {currentProject.style} · {currentProject.aspectRatio} · {formatDuration(currentProject.targetDuration)}
                       </Badge>
                     </CardTitle>
@@ -2562,7 +2562,7 @@ function VidoraApp() {
                         <Users className="h-3.5 w-3.5" />
                       </div>
                       Characters
-                      <Badge variant="outline" className="text-[10px] ml-1">{safeCharacters.length}</Badge>
+                      <Badge variant="outline" className="text-xs ml-1">{safeCharacters.length}</Badge>
                     </CardTitle>
                     <Button size="sm" variant="outline" onClick={() => setCreateDialogOpen(true)}>
                       <Plus className="h-3 w-3 mr-1" />Add Character
@@ -2584,7 +2584,7 @@ function VidoraApp() {
                           <div className="min-w-0 flex-1">
                             <p className="text-xs font-bold truncate">{char.name}</p>
                             {char.role && (
-                              <Badge variant="outline" className="text-[8px] px-1 py-0">{char.role}</Badge>
+                              <Badge variant="outline" className="text-xs px-1 py-0">{char.role}</Badge>
                             )}
                           </div>
                           <div className="flex flex-col gap-1 shrink-0">
@@ -2603,14 +2603,14 @@ function VidoraApp() {
                               <Wand2 className="h-3 w-3" />
                             </Button>
                             <Select value={char.voiceId || charVoiceAssign[char.id] || ""} onValueChange={(v) => handleAssignVoice(char.id, v)}>
-                              <SelectTrigger className="h-6 w-16 text-[8px] px-0.5">
+                              <SelectTrigger className="h-6 w-16 text-xs px-0.5">
                                 <Volume2 className="h-2.5 w-2.5" />
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
                                 {TTS_VOICES.map((v) => (
                                   <SelectItem key={v.id} value={v.id}>
-                                    <span className="text-[10px]">{v.label}</span>
+                                    <span className="text-xs">{v.label}</span>
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -2821,7 +2821,7 @@ function VidoraApp() {
                         )}
                         <CardContent>
                           <p className="text-sm text-muted-foreground leading-relaxed">{scene.description}</p>
-                          <Badge variant="outline" className="mt-2 text-[10px] capitalize">{scene.category}</Badge>
+                          <Badge variant="outline" className="mt-2 text-xs capitalize">{scene.category}</Badge>
                         </CardContent>
                       </Card>
                     </motion.div>
@@ -2879,7 +2879,7 @@ function VidoraApp() {
                   >
                     {pkg.popular && (
                       <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
-                        <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[10px] px-2.5 shadow-md">
+                        <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-xs px-2.5 shadow-md">
                           <Star className="h-3 w-3 mr-1" />Popular
                         </Badge>
                       </div>
@@ -2895,7 +2895,7 @@ function VidoraApp() {
                             {typeof pkg.priceGHS === "number" && pkg.priceGHS < 100 ? `GH₵${pkg.priceGHS}` : `$${pkg.priceUSD}`}
                           </span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                        <p className="text-sm text-muted-foreground mt-0.5">
                           or ${pkg.priceUSD} USD
                         </p>
                       </div>
@@ -2956,7 +2956,7 @@ function VidoraApp() {
                           <stat.icon className="h-4 w-4" />
                         </div>
                         <div>
-                          <p className="text-xs text-muted-foreground font-medium">{stat.label}</p>
+                          <p className="text-sm text-muted-foreground font-medium">{stat.label}</p>
                           <p className="text-xl font-extrabold">{stat.value}</p>
                         </div>
                       </div>
@@ -3002,7 +3002,7 @@ function VidoraApp() {
                             <CardContent className="p-4">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-sm font-bold truncate">{project.title || "Untitled"}</span>
-                                <Badge className={`text-[10px] px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
+                                <Badge className={`text-xs px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
                                   {project.status}
                                 </Badge>
                               </div>
@@ -3052,7 +3052,7 @@ function VidoraApp() {
                         return (
                           <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-slate-50/50 hover:bg-slate-50 transition-colors">
                             <div className="flex items-center gap-3">
-                              <Badge className={`text-[10px] px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
+                              <Badge className={`text-xs px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
                                 {String(tx.type)}
                               </Badge>
                               <div>
@@ -3131,7 +3131,7 @@ function VidoraApp() {
                       <h2 className="text-lg font-bold">{userProfile?.name || "User"}</h2>
                       <p className="text-sm text-muted-foreground">{userProfile?.email || ""}</p>
                       <div className="flex items-center gap-2 mt-1">
-                        <Badge className="text-[10px] px-2 bg-violet-50 text-violet-700 border-violet-200">
+                        <Badge className="text-xs px-2 bg-violet-50 text-violet-700 border-violet-200">
                           {userProfile?.role === "admin" ? "🛡️ Admin" : "✨ Member"}
                         </Badge>
                         <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -3234,7 +3234,7 @@ function VidoraApp() {
                           return (
                             <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-slate-50/50 hover:bg-slate-50 transition-colors">
                               <div className="flex items-center gap-3">
-                                <Badge className={`text-[10px] px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
+                                <Badge className={`text-xs px-2 ${typeColors[String(tx.type)] || "bg-slate-100 text-slate-600"}`}>
                                   {String(tx.type)}
                                 </Badge>
                                 <div>
@@ -3305,7 +3305,7 @@ function VidoraApp() {
                             <CardContent className="p-4">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-sm font-bold truncate">{project.title || "Untitled"}</span>
-                                <Badge className={`text-[10px] px-2 ${
+                                <Badge className={`text-xs px-2 ${
                                   project.status === "completed"
                                     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                     : "bg-red-50 text-red-700 border-red-200"
@@ -3371,7 +3371,7 @@ function VidoraApp() {
                               <stat.icon className="h-5 w-5" />
                             </div>
                             <div>
-                              <p className="text-xs text-muted-foreground">{stat.label}</p>
+                              <p className="text-sm text-muted-foreground">{stat.label}</p>
                               <p className="text-xl font-bold">{stat.value}</p>
                             </div>
                           </div>
@@ -3392,7 +3392,7 @@ function VidoraApp() {
                       <div className="max-h-96 overflow-y-auto custom-scrollbar">
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 bg-white">
-                            <tr className="border-b text-left text-xs text-muted-foreground">
+                            <tr className="border-b text-left text-sm text-muted-foreground">
                               <th className="pb-2 pr-3">Name</th>
                               <th className="pb-2 pr-3">Email</th>
                               <th className="pb-2 pr-3">Role</th>
@@ -3407,13 +3407,13 @@ function VidoraApp() {
                                 <td className="py-2 pr-3 font-medium truncate max-w-[120px]">{u.name as string}</td>
                                 <td className="py-2 pr-3 truncate max-w-[180px] text-muted-foreground">{u.email as string}</td>
                                 <td className="py-2 pr-3">
-                                  <Badge variant="outline" className={`text-[10px] ${
+                                  <Badge variant="outline" className={`text-xs ${
                                     u.role === "admin" ? "bg-violet-50 text-violet-600 border-violet-200" : "bg-slate-50"
                                   }`}>{u.role as string}</Badge>
                                 </td>
                                 <td className="py-2 pr-3 font-semibold">{u.tokens as number}</td>
                                 <td className="py-2 pr-3">
-                                  <Badge variant="outline" className={`text-[10px] ${u.isActive ? "bg-emerald-50 text-emerald-600 border-emerald-200" : "bg-red-50 text-red-600"}`}>
+                                  <Badge variant="outline" className={`text-xs ${u.isActive ? "bg-emerald-50 text-emerald-600 border-emerald-200" : "bg-red-50 text-red-600"}`}>
                                     {u.isActive ? "Active" : "Inactive"}
                                   </Badge>
                                 </td>
@@ -3443,57 +3443,201 @@ function VidoraApp() {
                       <CardTitle className="text-base font-bold flex items-center gap-2">
                         <Building2 className="h-4 w-4 text-violet-500" />
                         Payment Gateway Configuration
+                        {adminConfigs.payment_gateway?.value && (
+                          <Badge variant="outline" className={`ml-auto text-xs font-medium ${
+                            adminConfigs.payment_gateway?.value === "paystack" ? "bg-violet-50 text-violet-600 border-violet-200" :
+                            adminConfigs.payment_gateway?.value === "hubtel" ? "bg-blue-50 text-blue-600 border-blue-200" :
+                            "bg-indigo-50 text-indigo-600 border-indigo-200"
+                          }`}>
+                            Active: {adminConfigs.payment_gateway.value}
+                          </Badge>
+                        )}
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="space-y-2">
-                        <Label className="text-sm font-medium">Active Gateway</Label>
-                        <div className="flex flex-wrap gap-2">
-                          {["paystack", "hubtel", "stripe"].map((gw) => (
-                            <button
-                              key={gw}
-                              onClick={() => handleAdminSaveConfig({ payment_gateway: gw })}
-                              className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all capitalize ${
-                                adminConfigs.payment_gateway?.value === gw
-                                  ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
-                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                              }`}
-                            >
-                              {gw === "paystack" && "🇬🇭 "}{gw}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                    <CardContent>
+                      <Tabs defaultValue={adminConfigs.payment_gateway?.value || "paystack"} onValueChange={(v) => handleAdminSaveConfig({ payment_gateway: v })}>
+                        <TabsList className="grid grid-cols-3 w-full">
+                          <TabsTrigger value="paystack" className="text-sm font-semibold">🇬🇭 Paystack</TabsTrigger>
+                          <TabsTrigger value="hubtel" className="text-sm font-semibold">Hubtel</TabsTrigger>
+                          <TabsTrigger value="stripe" className="text-sm font-semibold">Stripe</TabsTrigger>
+                        </TabsList>
 
-                      {/* Gateway API Key Fields */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                        {Object.entries(adminConfigs).map(([key, cfg]) => {
-                          if (!key.includes("_key") && !key.includes("_id") && !key.includes("_secret")) return null;
-                          if (key.startsWith("ai_")) return null; // AI keys have their own section
-                          return (
-                            <div key={key} className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">{cfg.description || key}</Label>
+                        {/* Paystack Tab */}
+                        <TabsContent value="paystack" className="space-y-4 mt-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">Accept payments via Paystack (MoMo, Visa, Mastercard)</p>
+                            <Switch
+                              checked={adminConfigs.payment_gateway?.value === "paystack"}
+                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "paystack" })}
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Secret Key</Label>
                               <Input
                                 type="password"
-                                value={cfg.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, [key]: { ...cfg, value: e.target.value } })}
-                                placeholder={`Enter ${key.replace(/_/g, " ")}`}
-                                className="h-8 text-xs"
+                                value={adminConfigs.paystack_secret_key?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_secret_key: { value: e.target.value, description: "" } })}
+                                placeholder="sk_live_..."
+                                className="h-9 text-sm"
                               />
                             </div>
-                          );
-                        })}
-                      </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Public Key</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.paystack_public_key?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_public_key: { value: e.target.value, description: "" } })}
+                                placeholder="pk_live_..."
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Webhook Secret</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.paystack_webhook_secret?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_webhook_secret: { value: e.target.value, description: "" } })}
+                                placeholder="Paystack webhook verification secret"
+                                className="h-9 text-sm"
+                              />
+                              <p className="text-xs text-muted-foreground">Used to verify webhook events from Paystack</p>
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Currency</Label>
+                              <Input
+                                type="text"
+                                value={adminConfigs.paystack_currency?.value || "GHS"}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_currency: { value: e.target.value, description: "" } })}
+                                placeholder="GHS"
+                                className="h-9 text-sm"
+                              />
+                              <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
+                            </div>
+                          </div>
+                          <Button onClick={() => {
+                            const updates: Record<string, string> = {};
+                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
+                            handleAdminSaveConfig(updates);
+                          }} className="btn-gradient">
+                            <KeyRound className="h-4 w-4 mr-1.5" />Save Paystack Configuration
+                          </Button>
+                        </TabsContent>
 
-                      <Button onClick={() => {
-                        const updates: Record<string, string> = {};
-                        Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
-                        handleAdminSaveConfig(updates);
-                      }} className="btn-gradient">
-                        <KeyRound className="h-4 w-4 mr-1.5" />Save Configuration
-                      </Button>
+                        {/* Hubtel Tab */}
+                        <TabsContent value="hubtel" className="space-y-4 mt-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
+                            <Switch
+                              checked={adminConfigs.payment_gateway?.value === "hubtel"}
+                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "hubtel" })}
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Client ID</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.hubtel_client_id?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_client_id: { value: e.target.value, description: "" } })}
+                                placeholder="Hubtel client ID"
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Client Secret</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.hubtel_client_secret?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_client_secret: { value: e.target.value, description: "" } })}
+                                placeholder="Hubtel client secret"
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Merchant Account Number</Label>
+                              <Input
+                                type="text"
+                                value={adminConfigs.hubtel_merchant_id?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_merchant_id: { value: e.target.value, description: "" } })}
+                                placeholder="HM-XXXXXX"
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">API Key</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.hubtel_api_key?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_api_key: { value: e.target.value, description: "" } })}
+                                placeholder="Hubtel API key"
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Currency</Label>
+                              <Input
+                                type="text"
+                                value={adminConfigs.hubtel_currency?.value || "GHS"}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_currency: { value: e.target.value, description: "" } })}
+                                placeholder="GHS"
+                                className="h-9 text-sm"
+                              />
+                              <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
+                            </div>
+                          </div>
+                          <Button onClick={() => {
+                            const updates: Record<string, string> = {};
+                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
+                            handleAdminSaveConfig(updates);
+                          }} className="btn-gradient">
+                            <KeyRound className="h-4 w-4 mr-1.5" />Save Hubtel Configuration
+                          </Button>
+                        </TabsContent>
+
+                        {/* Stripe Tab */}
+                        <TabsContent value="stripe" className="space-y-4 mt-4">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">Accept payments via Stripe (Card, Apple Pay, Google Pay)</p>
+                            <Switch
+                              checked={adminConfigs.payment_gateway?.value === "stripe"}
+                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "stripe" })}
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Secret Key</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.stripe_secret_key?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, stripe_secret_key: { value: e.target.value, description: "" } })}
+                                placeholder="sk_live_..."
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-sm font-medium">Publishable Key</Label>
+                              <Input
+                                type="password"
+                                value={adminConfigs.stripe_publishable_key?.value || ""}
+                                onChange={(e) => setAdminConfigs({ ...adminConfigs, stripe_publishable_key: { value: e.target.value, description: "" } })}
+                                placeholder="pk_live_..."
+                                className="h-9 text-sm"
+                              />
+                            </div>
+                          </div>
+                          <Button onClick={() => {
+                            const updates: Record<string, string> = {};
+                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
+                            handleAdminSaveConfig(updates);
+                          }} className="btn-gradient">
+                            <KeyRound className="h-4 w-4 mr-1.5" />Save Stripe Configuration
+                          </Button>
+                        </TabsContent>
+                      </Tabs>
                     </CardContent>
                   </Card>
+
 
                   {/* AI Provider Configuration */}
                   <Card className="border-0 shadow-lg shadow-black/5">
@@ -3501,7 +3645,7 @@ function VidoraApp() {
                       <CardTitle className="text-base font-bold flex items-center gap-2">
                         <Sparkles className="h-4 w-4 text-violet-500" />
                         AI Provider Configuration
-                        <Badge variant="outline" className="text-[9px] ml-1 bg-amber-50 text-amber-600 border-amber-200">VPS Only</Badge>
+                        <Badge variant="outline" className="text-xs ml-1 bg-amber-50 text-amber-600 border-amber-200">VPS Only</Badge>
                       </CardTitle>
                       <CardDescription className="text-xs">
                         Configure AI service providers for video, image, TTS, and LLM generation. These are used when deployed on a live VPS server.
@@ -3518,7 +3662,7 @@ function VidoraApp() {
                             <button
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_video_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
                                 adminConfigs.ai_video_provider?.value === p
                                   ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -3528,23 +3672,23 @@ function VidoraApp() {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
                               value={adminConfigs.ai_video_api_key?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_api_key: { value: e.target.value, description: "" } })}
                               placeholder="Enter video provider API key"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
                               value={adminConfigs.ai_video_model?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_model: { value: e.target.value, description: "" } })}
                               placeholder="e.g. stable-video-diffusion-xt"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                         </div>
@@ -3562,7 +3706,7 @@ function VidoraApp() {
                             <button
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_image_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
                                 adminConfigs.ai_image_provider?.value === p
                                   ? "bg-gradient-to-r from-fuchsia-500 to-pink-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -3572,23 +3716,23 @@ function VidoraApp() {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
                               value={adminConfigs.ai_image_api_key?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_api_key: { value: e.target.value, description: "" } })}
                               placeholder="Enter image provider API key"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
                               value={adminConfigs.ai_image_model?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_model: { value: e.target.value, description: "" } })}
                               placeholder="e.g. flux-pro, sdxl-turbo"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                         </div>
@@ -3606,7 +3750,7 @@ function VidoraApp() {
                             <button
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_tts_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
                                 adminConfigs.ai_tts_provider?.value === p
                                   ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -3616,23 +3760,23 @@ function VidoraApp() {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
                               value={adminConfigs.ai_tts_api_key?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_api_key: { value: e.target.value, description: "" } })}
                               placeholder="Enter TTS provider API key"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
                               value={adminConfigs.ai_tts_model?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_model: { value: e.target.value, description: "" } })}
                               placeholder="e.g. eleven_multilingual_v2, tts-1"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                         </div>
@@ -3650,7 +3794,7 @@ function VidoraApp() {
                             <button
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_llm_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
                                 adminConfigs.ai_llm_provider?.value === p
                                   ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -3660,23 +3804,23 @@ function VidoraApp() {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
                               value={adminConfigs.ai_llm_api_key?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_api_key: { value: e.target.value, description: "" } })}
                               placeholder="Enter LLM API key"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
                               value={adminConfigs.ai_llm_model?.value || ""}
                               onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_model: { value: e.target.value, description: "" } })}
                               placeholder="e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b"
-                              className="h-8 text-xs"
+                              className="h-9 text-sm"
                             />
                           </div>
                         </div>
@@ -3704,7 +3848,7 @@ function VidoraApp() {
                       <div className="max-h-72 overflow-y-auto custom-scrollbar">
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 bg-white">
-                            <tr className="border-b text-left text-xs text-muted-foreground">
+                            <tr className="border-b text-left text-sm text-muted-foreground">
                               <th className="pb-2 pr-3">Date</th>
                               <th className="pb-2 pr-3">User</th>
                               <th className="pb-2 pr-3">Gateway</th>
@@ -3726,7 +3870,7 @@ function VidoraApp() {
                                 <td className="py-2 pr-3 font-semibold">GH₵{p.amount as number}</td>
                                 <td className="py-2 pr-3">{p.tokensPurchased as number}</td>
                                 <td className="py-2">
-                                  <Badge variant="outline" className={`text-[10px] ${
+                                  <Badge variant="outline" className={`text-xs ${
                                     p.status === "completed" ? "bg-emerald-50 text-emerald-600 border-emerald-200" :
                                     p.status === "pending" ? "bg-amber-50 text-amber-600 border-amber-200" :
                                     "bg-red-50 text-red-600"
@@ -4004,7 +4148,7 @@ function VidoraApp() {
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
                             <div className="flex items-center gap-1.5 mb-1">
-                              <Badge className={`text-[9px] px-1.5 ${
+                              <Badge className={`text-xs px-1.5 ${
                                 issue.type === "inconsistency"
                                   ? "bg-red-100 text-red-700"
                                   : issue.type === "warning"
@@ -4013,10 +4157,10 @@ function VidoraApp() {
                               }`}>
                                 {issue.type}
                               </Badge>
-                              <Badge variant="outline" className="text-[9px]">
+                              <Badge variant="outline" className="text-xs">
                                 Scene {issue.sceneIndex + 1}
                               </Badge>
-                              <Badge variant="outline" className={`text-[9px] ${
+                              <Badge variant="outline" className={`text-xs ${
                                 issue.severity === "high" ? "border-red-200 text-red-600"
                                 : issue.severity === "medium" ? "border-amber-200 text-amber-600"
                                 : "border-slate-200 text-slate-600"
@@ -4025,10 +4169,10 @@ function VidoraApp() {
                               </Badge>
                             </div>
                             <p className="text-xs text-foreground">{issue.description}</p>
-                            <p className="text-[10px] text-muted-foreground mt-1 italic">Fix: {issue.fix}</p>
+                            <p className="text-xs text-muted-foreground mt-1 italic">Fix: {issue.fix}</p>
                           </div>
                           <Button
-                            size="sm" variant="outline" className="h-6 text-[10px] px-2 shrink-0"
+                            size="sm" variant="outline" className="h-6 text-xs px-2 shrink-0"
                             onClick={() => handleApplyFix(issue)}
                           >
                             Apply Fix
