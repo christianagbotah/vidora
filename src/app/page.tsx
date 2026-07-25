@@ -2930,6 +2930,7 @@ function VidoraApp() {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                         {Object.entries(adminConfigs).map(([key, cfg]) => {
                           if (!key.includes("_key") && !key.includes("_id") && !key.includes("_secret")) return null;
+                          if (key.startsWith("ai_")) return null; // AI keys have their own section
                           return (
                             <div key={key} className="space-y-1">
                               <Label className="text-xs text-muted-foreground">{cfg.description || key}</Label>
@@ -2951,6 +2952,203 @@ function VidoraApp() {
                         handleAdminSaveConfig(updates);
                       }} className="btn-gradient">
                         <KeyRound className="h-4 w-4 mr-1.5" />Save Configuration
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {/* AI Provider Configuration */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-violet-500" />
+                        AI Provider Configuration
+                        <Badge variant="outline" className="text-[9px] ml-1 bg-amber-50 text-amber-600 border-amber-200">VPS Only</Badge>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Configure AI service providers for video, image, TTS, and LLM generation. These are used when deployed on a live VPS server.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+                      {/* Video Generation */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-semibold flex items-center gap-1.5">
+                          <Video className="h-3.5 w-3.5 text-violet-500" />Video Generation
+                        </Label>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {["replicate", "luma", "runway"].map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => handleAdminSaveConfig({ ai_video_provider: p })}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                                adminConfigs.ai_video_provider?.value === p
+                                  ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >{p}</button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Input
+                              type="password"
+                              value={adminConfigs.ai_video_api_key?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_api_key: { value: e.target.value, description: "" } })}
+                              placeholder="Enter video provider API key"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Input
+                              type="text"
+                              value={adminConfigs.ai_video_model?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_model: { value: e.target.value, description: "" } })}
+                              placeholder="e.g. stable-video-diffusion-xt"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Image Generation */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-semibold flex items-center gap-1.5">
+                          <ImageIcon className="h-3.5 w-3.5 text-fuchsia-500" />Image Generation
+                        </Label>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {["replicate", "stability", "together"].map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => handleAdminSaveConfig({ ai_image_provider: p })}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                                adminConfigs.ai_image_provider?.value === p
+                                  ? "bg-gradient-to-r from-fuchsia-500 to-pink-500 text-white shadow-md"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >{p}</button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Input
+                              type="password"
+                              value={adminConfigs.ai_image_api_key?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_api_key: { value: e.target.value, description: "" } })}
+                              placeholder="Enter image provider API key"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Input
+                              type="text"
+                              value={adminConfigs.ai_image_model?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_model: { value: e.target.value, description: "" } })}
+                              placeholder="e.g. flux-pro, sdxl-turbo"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Text-to-Speech */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-semibold flex items-center gap-1.5">
+                          <Volume2 className="h-3.5 w-3.5 text-emerald-500" />Text-to-Speech (TTS)
+                        </Label>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {["elevenlabs", "openai", "google"].map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => handleAdminSaveConfig({ ai_tts_provider: p })}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                                adminConfigs.ai_tts_provider?.value === p
+                                  ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >{p}</button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Input
+                              type="password"
+                              value={adminConfigs.ai_tts_api_key?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_api_key: { value: e.target.value, description: "" } })}
+                              placeholder="Enter TTS provider API key"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Input
+                              type="text"
+                              value={adminConfigs.ai_tts_model?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_model: { value: e.target.value, description: "" } })}
+                              placeholder="e.g. eleven_multilingual_v2, tts-1"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* LLM (AI Director & Continuity) */}
+                      <div className="space-y-2">
+                        <Label className="text-sm font-semibold flex items-center gap-1.5">
+                          <Wand2 className="h-3.5 w-3.5 text-amber-500" />LLM (AI Director & Continuity)
+                        </Label>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {["openai", "anthropic", "together"].map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => handleAdminSaveConfig({ ai_llm_provider: p })}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all capitalize ${
+                                adminConfigs.ai_llm_provider?.value === p
+                                  ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >{p}</button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+                            <Input
+                              type="password"
+                              value={adminConfigs.ai_llm_api_key?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_api_key: { value: e.target.value, description: "" } })}
+                              placeholder="Enter LLM API key"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-[11px] text-muted-foreground">Model</Label>
+                            <Input
+                              type="text"
+                              value={adminConfigs.ai_llm_model?.value || ""}
+                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_model: { value: e.target.value, description: "" } })}
+                              placeholder="e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b"
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button onClick={() => {
+                        const updates: Record<string, string> = {};
+                        Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
+                        handleAdminSaveConfig(updates);
+                      }} className="btn-gradient">
+                        <KeyRound className="h-4 w-4 mr-1.5" />Save AI Configuration
                       </Button>
                     </CardContent>
                   </Card>
@@ -3043,6 +3241,7 @@ function VidoraApp() {
       {/* Video Preview Dialog */}
       <Dialog open={!!previewVideoUrl} onOpenChange={closePreview}>
         <DialogContent className="max-w-3xl p-0 overflow-hidden">
+          <DialogTitle className="sr-only">Video Preview</DialogTitle>
           <div className="relative">
             <Button
               variant="ghost" size="sm"

@@ -15,6 +15,19 @@ const CONFIG_SCHEMA: Record<string, string> = {
   download_token_cost: "Number of tokens required per video download",
   site_name: "Site name displayed to users",
   admin_email: "Admin contact email",
+  // AI Providers
+  ai_video_provider: "Video generation provider (replicate, luma, runway)",
+  ai_video_api_key: "Video generation API key",
+  ai_video_model: "Video generation model (e.g. stable-video-diffusion-xt)",
+  ai_image_provider: "Image generation provider (replicate, stability, together)",
+  ai_image_api_key: "Image generation API key",
+  ai_image_model: "Image generation model (e.g. flux-pro, sdxl-turbo)",
+  ai_tts_provider: "Text-to-speech provider (elevenlabs, openai, google)",
+  ai_tts_api_key: "Text-to-speech API key",
+  ai_tts_model: "TTS model (e.g. eleven_multilingual_v2, tts-1)",
+  ai_llm_provider: "LLM provider (openai, anthropic, together)",
+  ai_llm_api_key: "LLM API key (for AI Director & continuity checker)",
+  ai_llm_model: "LLM model (e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b)",
 };
 
 export async function GET() {
