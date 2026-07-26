@@ -1274,3 +1274,31 @@ Stage Summary:
 - After the user runs those commands ONCE, .env is untracked on the VPS forever. Future `git pull` will never conflict on .env again — no more stash dance needed.
 - `.env.example` is now the documented template in the repo for future VPS setup / new developers.
 - The production .env on the VPS (with real postgres DATABASE_URL + ZAI_API_KEY + payment keys) remains the single source of truth, preserved across all future pulls automatically.
+
+---
+Task ID: push-4
+Agent: main (orchestrator)
+Task: enforce "always develop with PostgreSQL production in mind" — guardrails so schema.prisma can never flip to sqlite again
+
+Work Log:
+- User directive: production uses PostgreSQL 17 on the VPS; always develop with production in mind, not the local sqlite server
+- Root cause of the earlier deploy outage: schema.prisma was temporarily flipped to sqlite for local testing, then committed+pushed → VPS `bun install` → `prisma generate` failed against postgres DATABASE_URL
+- No PostgreSQL/Docker available in this sandbox, so local dev must stay sqlite — but the COMMITTED schema must always be postgres
+- Added 4 guardrails:
+
+1. prisma/schema.prisma: prominent header warning ("⚠️ PRODUCTION SCHEMA — PostgreSQL ⚠️") explaining it's the single source of truth, NEVER flip to sqlite, and pointing to scripts/local-db-push.sh for local dev work
+2. prisma/schema.prisma.local: matching header marking it as the sqlite dev mirror only, with instructions to keep both files in sync (only differences: provider + no @db.Text)
+3. scripts/local-db-push.sh: safe helper — backs up postgres schema → swaps in sqlite mirror → runs prisma db push/generate → restores postgres automatically (bash trap, works even on error/Ctrl-C). The committed schema.prisma never leaves postgres state.
+4. scripts/pre-commit-guard.sh: git hook that BLOCKS any commit staging provider="sqlite" in prisma/schema.prisma. Tested: attempted a fake sqlite commit → "❌ BLOCKED" + exit 1, no commit created. Installed as symlink at .git/hooks/pre-commit in this dev environment.
+
+- .gitignore: added negation `!scripts/local-db-push.sh` because the existing `local-*` pattern was catching the script filename
+- TESTED the guard: `sed sqlite → git add → git commit` → blocked with clear error message. Restored schema. Real postgres commit passed: "✓ schema.prisma is postgresql — safe to commit"
+- Committed 2fc54c7, pushed to origin/main (a83f6e7..2fc54c7)
+- Dev server healthy: 200s on /api/payments/packages and /api/auth/session
+
+Stage Summary:
+- It is now MECHANICALLY IMPOSSIBLE to accidentally commit a sqlite schema in this dev environment (pre-commit hook blocks it)
+- The committed prisma/schema.prisma will always be postgres — production-faithful
+- Local dev workflow when schema changes are needed: `bash scripts/local-db-push.sh` (auto-swap + restore, no risk)
+- VPS doesn't need the hook (VPS only pulls+deploys, doesn't commit). If setting up a new dev clone, install the hook: `ln -sf ../../scripts/pre-commit-guard.sh .git/hooks/pre-commit`
+- Remote now has 3 commits for the user to pull: f45049a (dubbing UI) + a83f6e7 (.env untrack) + 2fc54c7 (postgres guardrails)
