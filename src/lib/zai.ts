@@ -285,16 +285,50 @@ const globalForZAI = globalThis as unknown as { __zaiClient?: ZAIInstance };
 let clientPromise: Promise<ZAIInstance> | null = null;
 
 /**
- * Get the cached singleton ZAI client. The SDK reads .z-ai-config on first
- * create() and we cache the instance for the lifetime of the process.
+ * Get the cached singleton ZAI client.
+ *
+ * CONFIG RESOLUTION ORDER:
+ *   1. ZAI_BASE_URL + ZAI_API_KEY env vars (preferred for production)
+ *   2. .z-ai-config file via ZAI.create() (dev fallback)
+ *
+ * WHY ENV VARS:
+ *   The SDK's file-based config lookup checks CWD → ~ → /etc/ for
+ *   `.z-ai-config`. On some hosts (e.g. cloud sandboxes), `/etc/.z-ai-config`
+ *   may exist and point to an *internal* endpoint (internal-api.z.ai) that
+ *   resolves to private, unroutable IPs (172.25.x.x). This causes
+ *   ConnectTimeoutError in production even though `curl api.z.ai` works.
+ *   Env vars bypass the file lookup entirely.
  */
 export function getClient(): Promise<ZAIInstance> {
   if (globalForZAI.__zaiClient) return Promise.resolve(globalForZAI.__zaiClient);
   if (!clientPromise) {
-    clientPromise = ZAI.create().then((instance) => {
+    clientPromise = (async () => {
+      const envBaseUrl = process.env.ZAI_BASE_URL;
+      const envApiKey = process.env.ZAI_API_KEY;
+      if (envBaseUrl && envApiKey) {
+        // Bypass ZAI.create()'s file-based loadConfig() and construct
+        // directly. The SDK marks the constructor as private in its
+        // .d.ts to nudge users toward ZAI.create(), but at runtime it
+        // is a regular constructor that accepts a ZAIConfig object.
+        type ZAIConstructor = new (config: {
+          baseUrl: string;
+          apiKey: string;
+          chatId?: string;
+          userId?: string;
+          token?: string;
+        }) => ZAIInstance;
+        const instance = new (ZAI as unknown as ZAIConstructor)({
+          baseUrl: envBaseUrl,
+          apiKey: envApiKey,
+        });
+        globalForZAI.__zaiClient = instance;
+        return instance;
+      }
+      // Dev fallback: let the SDK read .z-ai-config from disk
+      const instance = await ZAI.create();
       globalForZAI.__zaiClient = instance;
       return instance;
-    });
+    })();
   }
   return clientPromise;
 }
