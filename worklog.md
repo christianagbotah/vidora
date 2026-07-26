@@ -1187,3 +1187,30 @@ Stage Summary:
 - The same fixes also fix the narration route (generate-narration) which had the same mp3 + Turbopack issues.
 - The subtitles route's `zai.chat()` bug is also fixed — subtitles will now generate correctly once Z.ai balance is recharged.
 - Artifacts: src/lib/dubbing-languages.ts (new), src/lib/audio-storage.ts (new), src/app/api/audio/[filename]/route.ts (new), src/app/api/scenes/[id]/dubbing/route.ts (rewritten), src/app/api/scenes/[id]/subtitles/route.ts (chat fix), src/app/api/generate-narration/route.ts (wav + audio-storage), src/lib/zai.ts (TTS default wav), src/app/page.tsx (grouped dubbing Select + better error toast)
+
+---
+Task ID: push-1
+Agent: main (orchestrator)
+Task: commit and push updates
+
+Work Log:
+- Checked git status: working tree clean but branch was 5 commits ahead of origin/main
+- Discovered critical issue: committed prisma/schema.prisma was set to `sqlite` (temporary local-testing state), but VPS deploy uses PostgreSQL → pushing as-is would break production (`bun install` triggers prisma generate against postgres DATABASE_URL)
+- Verified the production backup `prisma/schema.prisma.prod.bak` was STALE: missing all 8 advanced-feature models (BrandKit, SceneTranslation, SocialConnection, SocialPublish, ProjectTemplate, VideoView, Workspace, WorkspaceMember) added during the 9 advanced features work
+- Could NOT simply restore the .bak (would delete those features). Instead converted the CURRENT full schema to PostgreSQL:
+  - provider: sqlite → postgresql
+  - re-added @db.Text annotations on all long-text fields (matching old .bak patterns + new models' text fields: subtitleSrt, musicTrackUrl, tagline, translatedText, accessToken, refreshToken, externalUrl, description, errorMessage, sceneTemplates, characterTemplates, userAgent, referer, coverImage, etc.)
+- Validated the postgres schema with `DATABASE_URL=postgresql://... bunx prisma validate` → "The schema at prisma/schema.prisma is valid 🚀" (used inline URL because local .env is sqlite)
+- Saved the committed sqlite version to `prisma/schema.prisma.local` (extracted via `git show HEAD:prisma/schema.prisma`) so local dev can be restored with `cp prisma/schema.prisma.local prisma/schema.prisma`
+- Refreshed `prisma/schema.prisma.prod.bak` to match the new postgres schema (was stale)
+- Confirmed running dev server unaffected: dev.log shows 200s on sqlite queries (`main`.`VideoProject`...) — editing schema.prisma does NOT regenerate the prisma client, so the old sqlite client keeps working
+- Committed: "fix: restore PostgreSQL schema for production deploy" (3 files: schema.prisma, schema.prisma.prod.bak, schema.prisma.local)
+- Pushed b55fe0a..1190178 to origin/main — 6 commits now on remote
+
+Stage Summary:
+- All 6 local commits are now pushed to origin/main (was 5 ahead + 1 new schema-restoration commit)
+- prisma/schema.prisma is now PostgreSQL + deploy-ready, INCLUDING all 8 advanced-feature models
+- Local dev server still running on sqlite (pre-generated client); to run `bun install`/`db:push` locally, restore sqlite via `cp prisma/schema.prisma.local prisma/schema.prisma` first
+- VPS deploy (`./deploy.sh`) is now safe: `bun install` will generate a postgres client matching the postgres DATABASE_URL
+- NOTE: On the VPS, after `git pull`, the new models (BrandKit, SceneTranslation, etc.) must be applied to the postgres DB. deploy.sh does NOT run `prisma db push` — recommend running `bunx prisma db push` on the VPS after deploy to create the new tables (or use `prisma migrate`). This is a manual step the owner must perform.
+- Still pending (NOT done in this task): dubbing language list missing English + dubbing failure investigation; select fields (camera/light/mode/language) not selecting on video gen page; mobile overlap of select fields.
