@@ -42,6 +42,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 local-*
+# keep the local-db-push helper script tracked (it's a dev tool, not a secret)
+!scripts/local-db-push.sh
 
 # AI/Sandbox configs
 .claude

@@ -1,3 +1,20 @@
+// ════════════════════════════════════════════════════════════════════════
+//  LOCAL DEV MIRROR — SQLite  (DO NOT deploy this to production)
+// ════════════════════════════════════════════════════════════════════════
+//  This is the SQLite equivalent of prisma/schema.prisma (PostgreSQL).
+//  It exists ONLY so the local dev server can run against a SQLite file
+//  (local .env has DATABASE_URL=file:./db/custom.db).
+//
+//  ⚠️  NEVER copy this file over prisma/schema.prisma and commit it.
+//      Use `bash scripts/local-db-push.sh` which swaps + restores safely.
+//
+//  When adding a new model/column: update BOTH this file AND
+//  prisma/schema.prisma (the postgres production schema) so they stay
+//  in sync. The ONLY differences should be:
+//    - provider: "sqlite" vs "postgresql"
+//    - no @db.Text annotations (sqlite ignores them)
+// ════════════════════════════════════════════════════════════════════════
+
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "rhel-openssl-1.1.x"]

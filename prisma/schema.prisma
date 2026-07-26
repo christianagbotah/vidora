@@ -1,3 +1,27 @@
+// ════════════════════════════════════════════════════════════════════════
+//  ⚠️  PRODUCTION SCHEMA — PostgreSQL  ⚠️
+// ════════════════════════════════════════════════════════════════════════
+//  This file is the SINGLE SOURCE OF TRUTH for the production database
+//  (PostgreSQL 17 on the VPS). NEVER change `provider` to "sqlite" here.
+//
+//  Why: the VPS deploy runs `bun install` → `prisma generate` against this
+//  file. If it says sqlite, production breaks. A previous sqlite flip caused
+//  a deploy outage and .env conflicts.
+//
+//  Local dev uses SQLite (see prisma/schema.prisma.local + local .env with
+//  DATABASE_URL=file:...). To apply schema changes to the local SQLite DB
+//  WITHOUT changing this file, run:
+//
+//      bash scripts/local-db-push.sh
+//
+//  That script temporarily swaps in the sqlite mirror, runs db:push, then
+//  restores this postgres file automatically. This file never leaves the
+//  committed postgres state.
+//
+//  When adding a new model/column: update BOTH this file AND
+//  prisma/schema.prisma.local so they stay in sync.
+// ════════════════════════════════════════════════════════════════════════
+
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "rhel-openssl-1.1.x"]
