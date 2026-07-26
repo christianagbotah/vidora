@@ -1,36 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireSceneAccess } from "@/lib/project-auth";
 
 /**
  * PUT /api/scenes/[id]/music
  * Updates the music settings for a scene.
+ *
  * Body: { musicTrackUrl?, musicVolume?, musicMood? }
+ *
+ * Access:
+ *  - Owner: full access
+ *  - Admin: view + edit (admin override)
+ *  - Guest on demo project (userId === null): allowed so the demo is
+ *    fully interactive without sign-up. Writes to a demo project only
+ *    affect that guest's ephemeral demo project.
  */
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
     const { id } = await params;
+    // Allow writes on guest demo projects; require auth + ownership for real projects.
+    const authResult = await requireSceneAccess(id, true);
+    if (!authResult.ok) return authResult.response;
+
     const body = await req.json();
     const { musicTrackUrl, musicVolume, musicMood } = body;
-
-    const scene = await db.videoScene.findUnique({ where: { id }, include: { project: true } });
-    if (!scene) {
-      return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
-    }
-    // Allow if user owns the project or is admin
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const role = (session.user as Record<string, unknown>).role as string;
-    if (scene.project.userId && scene.project.userId !== userId && role !== "admin") {
-      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
-    }
 
     const data: Record<string, unknown> = {};
     if (musicTrackUrl !== undefined) data.musicTrackUrl = musicTrackUrl || null;

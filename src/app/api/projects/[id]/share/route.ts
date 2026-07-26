@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 import bcrypt from "bcryptjs";
 
 /**
@@ -14,6 +13,10 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    // Allow read access for guest demo projects (userId === null) too.
+    const authResult = await requireProjectAccess(id, false);
+    if (!authResult.ok) return authResult.response;
+
     const project = await db.videoProject.findUnique({ where: { id } });
     if (!project) {
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
@@ -40,25 +43,23 @@ export async function GET(
  * POST /api/projects/[id]/share
  * Updates the project's sharing settings.
  * Body: { isPublic?: boolean, shareSlug?: string, password?: string, allowEmbed?: boolean }
+ *
+ * Guests can share demo projects (userId === null) — each demo is ephemeral
+ * and per-click, so letting the guest toggle sharing on it is safe and makes
+ * the demo fully interactive.
  */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, true);
+    if (!authResult.ok) return authResult.response;
 
     const project = await db.videoProject.findUnique({ where: { id } });
     if (!project) {
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
-    }
-    if (project.userId && project.userId !== userId) {
-      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
     }
 
     const body = await req.json();

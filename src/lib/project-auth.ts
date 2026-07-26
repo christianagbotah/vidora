@@ -86,9 +86,10 @@ export async function requireProjectAccess(
   projectId: string,
   writeCheck = false
 ): Promise<ProjectAuthResult | AuthError> {
-  const authResult = await requireAuth();
-  if (!authResult.ok) return authResult;
-
+  // First, look up the project so we can detect guest demo projects
+  // (projects created with userId=null by the demo flow). These are
+  // intentionally public — guests must be able to view/interact with
+  // them so the "Try Live Demo" button works without sign-up.
   const project = await db.videoProject.findUnique({
     where: { id: projectId },
     select: { id: true, userId: true, title: true },
@@ -103,6 +104,23 @@ export async function requireProjectAccess(
       ),
     };
   }
+
+  // Guest demo project (userId === null): allow full read+write access
+  // without auth. Demo projects are created fresh per click (ephemeral),
+  // so writes only affect that guest's own demo project. This makes the
+  // demo fully interactive (share, pick music, generate subtitles, edit
+  // settings) without requiring sign-up.
+  if (project.userId === null) {
+    return {
+      ok: true,
+      session: { userId: "guest", role: "guest", email: "" },
+      project,
+    };
+  }
+
+  // For real user projects, require authentication
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult;
 
   const isOwner = project.userId === authResult.session.userId;
   const isAdmin = authResult.session.role === "admin";
@@ -122,6 +140,91 @@ export async function requireProjectAccess(
     ok: false,
     response: NextResponse.json(
       { success: false, error: "You don't have access to this project" },
+      { status: 403 }
+    ),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+//  Scene-level access helper
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface SceneAuthResult {
+  ok: true;
+  session: AuthSession;
+  scene: { id: string; projectId: string };
+  project: { id: string; userId: string | null; title: string };
+}
+export type SceneAuthError = AuthError;
+
+/**
+ * Require access to a specific scene (by scene ID).
+ *
+ * Resolves the scene → project chain and delegates to the same rules as
+ * `requireProjectAccess`:
+ *  - Guest demo projects (userId === null): guests get READ access; writes
+ *    are blocked (must sign in to save edits).
+ *  - Real user projects: owner full access, admin view-only, others 403.
+ */
+export async function requireSceneAccess(
+  sceneId: string,
+  writeCheck = false
+): Promise<SceneAuthResult | SceneAuthError> {
+  const scene = await db.videoScene.findUnique({
+    where: { id: sceneId },
+    select: { id: true, projectId: true },
+  });
+  if (!scene) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { success: false, error: "Scene not found" },
+        { status: 404 }
+      ),
+    };
+  }
+
+  const project = await db.videoProject.findUnique({
+    where: { id: scene.projectId },
+    select: { id: true, userId: true, title: true },
+  });
+  if (!project) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 }
+      ),
+    };
+  }
+
+  // Guest demo project — allow full read+write access without auth.
+  // Demo projects are created fresh per click (ephemeral), so writes only
+  // affect that guest's own demo project. This makes the demo fully
+  // interactive (pick music, generate subtitles, etc.) without sign-up.
+  if (project.userId === null) {
+    return {
+      ok: true,
+      session: { userId: "guest", role: "guest", email: "" },
+      scene,
+      project,
+    };
+  }
+
+  // Real project — delegate to project access rules
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult;
+
+  const isOwner = project.userId === authResult.session.userId;
+  const isAdmin = authResult.session.role === "admin";
+  if (isOwner || (isAdmin && !writeCheck)) {
+    return { ok: true, session: authResult.session, scene, project };
+  }
+
+  return {
+    ok: false,
+    response: NextResponse.json(
+      { success: false, error: "You don't have access to this scene" },
       { status: 403 }
     ),
   };

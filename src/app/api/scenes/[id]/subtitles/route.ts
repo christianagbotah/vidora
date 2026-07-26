@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { requireSceneAccess } from "@/lib/project-auth";
 
 /**
  * POST /api/scenes/[id]/subtitles
@@ -24,21 +21,15 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
     const { id } = await params;
+    const authResult = await requireSceneAccess(id, true);
+    if (!authResult.ok) return authResult.response;
+
     const { lang = "en" } = await req.json().catch(() => ({ lang: "en" }));
 
-    const scene = await db.videoScene.findUnique({ where: { id }, include: { project: true } });
+    const scene = await db.videoScene.findUnique({ where: { id } });
     if (!scene) {
       return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const role = (session.user as Record<string, unknown>).role as string;
-    if (scene.project.userId && scene.project.userId !== userId && role !== "admin") {
-      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
     }
 
     // Use narration text if available, otherwise use dialogue/prompt
@@ -135,23 +126,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
     const { id } = await params;
+    const authResult = await requireSceneAccess(id, true);
+    if (!authResult.ok) return authResult.response;
+
     const body = await req.json();
     const { burnSubtitles, subtitleSrt } = body;
-
-    const scene = await db.videoScene.findUnique({ where: { id }, include: { project: true } });
-    if (!scene) {
-      return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const role = (session.user as Record<string, unknown>).role as string;
-    if (scene.project.userId && scene.project.userId !== userId && role !== "admin") {
-      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
-    }
 
     const data: Record<string, unknown> = {};
     if (typeof burnSubtitles === "boolean") data.burnSubtitles = burnSubtitles;

@@ -53,6 +53,7 @@ import DeviceSimulator from "@/components/DeviceSimulator";
 import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
+import { BrandKitDialog } from "@/components/BrandKitDialog";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -3695,6 +3696,13 @@ function VidoraApp() {
                   <Share2 className="h-4 w-4 mr-1.5" />Share
                 </Button>
                 <Button
+                  onClick={() => setBrandKitDialogOpen(true)}
+                  variant="outline"
+                  className="text-fuchsia-600 border-fuchsia-200 hover:bg-fuchsia-50"
+                >
+                  <Palette className="h-4 w-4 mr-1.5" />Brand Kit
+                </Button>
+                <Button
                   onClick={handleOpenAnalytics}
                   variant="outline"
                   disabled={!currentProject}
@@ -6121,6 +6129,12 @@ function VidoraApp() {
           onOpenChange={setShareDialogOpen}
         />
       )}
+
+      {/* ── Brand Kit Dialog ── */}
+      <BrandKitDialog
+        open={brandKitDialogOpen}
+        onOpenChange={setBrandKitDialogOpen}
+      />
 
       {/* ── Analytics Dialog ── */}
       <Dialog open={analyticsDialogOpen} onOpenChange={setAnalyticsDialogOpen}>
