@@ -33,6 +33,14 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 3004,
 
+        // CRITICAL: Override the system HOSTNAME (which is the machine's
+        // hostname like "vps.example.com" and resolves to a single public IP).
+        // The Next.js standalone server reads process.env.HOSTNAME to decide
+        // which interface to bind. If it binds to the public IP only,
+        // localhost connections (from nginx/Webuzo reverse proxy) are refused
+        // → 502 Bad Gateway. "0.0.0.0" = listen on ALL interfaces.
+        HOSTNAME: "0.0.0.0",
+
         // ── Database ──
         DATABASE_URL: process.env.DATABASE_URL,
 
