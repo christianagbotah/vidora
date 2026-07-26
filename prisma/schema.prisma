@@ -145,3 +145,26 @@ model SystemConfig {
   description   String?   @db.Text
   updatedAt     DateTime  @updatedAt
 }
+
+// ── Admin-managed token packages ──
+// Stored in DB so the admin can adjust prices, quantities, bonuses, and
+// ordering WITHOUT a code change or redeploy. Seeds mirror the hardcoded
+// defaults in src/lib/pricing.ts (TOKEN_PACKAGES) for migration safety.
+model TokenPackage {
+  id            String    @id @default(cuid())
+  // Human-readable slug kept stable across renames (e.g. "starter", "basic").
+  // Used by the checkout flow to reference a package after an admin rename.
+  slug          String    @unique
+  name          String
+  tokens        Int                       // base token count
+  priceGHS      Float
+  priceUSD      Float
+  bonusPct      Float     @default(0)     // extra tokens as % (e.g. 20 = +20%)
+  popular       Boolean   @default(false) // highlighted in the buy-tokens grid
+  isActive      Boolean   @default(true)  // soft-delete / hide from storefront
+  sortOrder     Int       @default(0)     // ascending; lower = shown first
+  features      String    @default("[]")  // JSON array of feature strings
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  @@index([isActive, sortOrder])
+}

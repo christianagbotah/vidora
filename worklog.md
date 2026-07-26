@@ -876,3 +876,47 @@ Stage Summary:
 - Cost analytics: every free preview records costUsd in TokenTransaction so the owner sees true CAC in profit analytics
 - The ONLY thing blocking live storyboard/image generation is the Z.ai account balance (error 1113) — owner must recharge Z.ai; code is correct
 - Project visibility bug from prior session already fixed (projects route filters by userId for non-admins, admin sees all)
+
+---
+Task ID: 8
+Agent: main
+Task: Make token packages admin-managed (adjustable prices/quantities from UI, no redeploy) — answer "how does admin adjust token prices and quantities" + continue making the app world-class.
+
+Work Log:
+- Added `TokenPackage` model to prisma/schema.prisma: id, slug (unique), name, tokens, priceGHS, priceUSD, bonusPct, popular, isActive, sortOrder, features (JSON), timestamps. Ran `db:push` with explicit DATABASE_URL override (OS env had stale SQLite URL).
+- Created `src/lib/token-packages.ts` — single source of truth for package CRUD:
+  • `getActivePackages()` — for storefront, 60s in-memory cache, auto-seeds DB on first call, falls back to hardcoded TOKEN_PACKAGES if DB unreachable
+  • `getAllPackagesForAdmin()` — bypasses cache, includes inactive
+  • `createPackage`, `updatePackage`, `deletePackage`, `resetToDefaults` — all invalidate cache on write
+  • `getPackageBySlug()` — for checkout flow
+  • `rowToPackage()` — derives effectiveTokens + per-token prices on read so admins see live numbers
+- Created `src/app/api/admin/packages/route.ts` — GET (admin list), POST (create or `{action:"reset"}`)
+- Created `src/app/api/admin/packages/[id]/route.ts` — PUT (update, slug intentionally NOT updatable to preserve checkout refs), DELETE (hard delete)
+- Rewrote `src/app/api/payments/packages/route.ts` — now reads from `getActivePackages()` instead of hardcoded constant; keeps the same response shape (effectiveTokens, estimatedVideos, pricing samples) so the frontend didn't need changes
+- Added `PackageEditDialog` component (`src/components/PackageEditDialog.tsx`) — full create/edit dialog with:
+  • Name + slug (slug locked on edit), base tokens, bonus %, price GHS/USD
+  • Live economics preview (effective tokens, per-token price, ~1-min videos per package, revenue per video)
+  • Warning when per-token price exceeds ₵0.50 baseline
+  • Features list editor (one per line)
+  • Popular + Active toggles, sort order
+- Added to admin panel in page.tsx:
+  • New "Token Packages" card with sortable table (up/down arrows), inline active toggle (Switch), popular star toggle, edit/delete actions
+  • Economics summary footer (cheapest/most expensive per-token, total tokens offered)
+  • "Add Package" + "Reset to Defaults" buttons
+  • 8 new handlers: handleSavePackage, handleDeletePackage, handleTogglePackageActive (optimistic), handleTogglePackagePopular (optimistic), handleReorderPackage (optimistic swap), handleResetPackages, refreshAdminPackages
+- Added `AdminTokenPackage` interface + 6 new state vars (adminPackages, editingPackage, packageDialogOpen, savingPackage, resettingPackages)
+- Fixed storefront staleness: buy-tokens view now re-fetches `/api/payments/packages` on view activation so admin edits appear immediately
+- Added icon imports: Pencil, Power, Save, ChevronUp, ChevronDown, Sparkle, AlertCircle
+- Lint passes clean (0 errors/warnings)
+- Verified end-to-end with Agent Browser:
+  • Signed in as temp admin (created/deleted testadmin@test.com)
+  • Admin panel shows "Token Packages" card with all 5 seeded packages (Starter/Basic/Pro/Business/Enterprise)
+  • Edited Basic: 30→40 tokens, ₵12→₵15 → live preview showed 48 effective tokens, ₵0.313/token → saved → table updated → public API returned new price → Buy Tokens page showed GH₵15 after navigation
+  • Toggled Basic inactive → public API stopped returning it (4 packages instead of 5) → re-enabled → restored original values (30 tokens, ₵12) to preserve owner's real data
+  • All 5 packages back to original defaults
+
+Stage Summary:
+- ANSWER: Admin adjusts token prices and quantities via the Admin Dashboard → "Token Packages" card. Each package has an Edit (pencil) button opening a dialog with name, tokens, bonus %, price (GHS+USD), features, popular/active toggles. Changes save to the DB and go live on the Buy Tokens page instantly — NO redeploy needed. Admin can also toggle a package inactive to hide it from customers without deleting it, reorder packages (up/down arrows), mark one as "Popular" (highlighted), add new packages, delete packages, or reset all to defaults.
+- Architecture: DB-backed (TokenPackage table) → `src/lib/token-packages.ts` service layer (60s cache, auto-seed, fallback) → `/api/payments/packages` (public, cached) + `/api/admin/packages` (admin CRUD, cache-bypassing). Slug is immutable after creation so existing checkout/payment references never break.
+- Resilience: if the DB goes down, the public packages route falls back to hardcoded TOKEN_PACKAGES so the storefront never breaks. Admin writes invalidate the cache immediately.
+- This makes the app world-class: the owner can run promotions (temporarily lower prices), adjust for FX rate changes (GHS/USD), add seasonal packages, hide underperforming ones — all from the browser, no developer involvement.

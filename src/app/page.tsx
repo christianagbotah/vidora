@@ -24,6 +24,7 @@ import {
   Building2, DollarSign, BarChart3, TrendingUp, KeyRound,
   Package, ShoppingBag, Bell, Mail, History, ArrowRight, UserCircle, Calendar, TrendingDown,
   Check, Menu, Home, FolderPlus,
+  Pencil, Power, Save, ChevronUp, ChevronDown, Sparkle, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +49,7 @@ import {
 } from "@/components/ui/sheet";
 import DeviceSimulator from "@/components/DeviceSimulator";
 import { AIStatusBadge } from "@/components/AIStatusBadge";
+import { PackageEditDialog } from "@/components/PackageEditDialog";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -178,6 +180,28 @@ const MOOD_COLORS: Record<string, string> = {
   triumphant: "bg-amber-100 text-amber-700 border-amber-200",
   suspenseful: "bg-rose-100 text-rose-700 border-rose-200",
 };
+
+/* ════════════════════════════════════════════════════════════════
+   ADMIN: Token Package type (mirrors DB-backed package shape)
+   ════════════════════════════════════════════════════════════════ */
+interface AdminTokenPackage {
+  id: string;
+  slug: string;
+  name: string;
+  tokens: number;
+  priceGHS: number;
+  priceUSD: number;
+  bonusPct: number;
+  popular: boolean;
+  isActive: boolean;
+  sortOrder: number;
+  features: string[];
+  effectiveTokens: number;
+  effectiveTokenPriceGHS: number;
+  effectiveTokenPriceUSD: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 /* ════════════════════════════════════════════════════════════════
    ANIMATION VARIANTS
@@ -592,6 +616,12 @@ function VidoraApp() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // ── Admin: Token Package Management ──
+  const [adminPackages, setAdminPackages] = useState<AdminTokenPackage[]>([]);
+  const [editingPackage, setEditingPackage] = useState<AdminTokenPackage | null>(null);
+  const [packageDialogOpen, setPackageDialogOpen] = useState(false);
+  const [savingPackage, setSavingPackage] = useState(false);
+  const [resettingPackages, setResettingPackages] = useState(false);
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
@@ -1656,14 +1686,15 @@ function VidoraApp() {
   const handleAdminLoadData = useCallback(async () => {
     setAdminLoading(true);
     try {
-      const [usersRes, paymentsRes, analyticsRes, configRes] = await Promise.all([
+      const [usersRes, paymentsRes, analyticsRes, configRes, packagesRes] = await Promise.all([
         fetch("/api/admin/users"),
         fetch("/api/admin/payments"),
         fetch("/api/admin/analytics"),
         fetch("/api/admin/config"),
+        fetch("/api/admin/packages"),
       ]);
-      const [usersData, paymentsData, analyticsData, configData] = await Promise.all([
-        usersRes.json(), paymentsRes.json(), analyticsRes.json(), configRes.json(),
+      const [usersData, paymentsData, analyticsData, configData, packagesData] = await Promise.all([
+        usersRes.json(), paymentsRes.json(), analyticsRes.json(), configRes.json(), packagesRes.json(),
       ]);
       if (usersData.success) setAdminUsers(usersData.users);
       if (paymentsData.success) setAdminPayments(paymentsData.payments);
@@ -1677,9 +1708,163 @@ function VidoraApp() {
         });
         setConfigForm(formUpdate);
       }
+      if (packagesData.success) setAdminPackages(packagesData.packages);
     } catch { /* ignore */ }
     finally { setAdminLoading(false); }
   }, []);
+
+  // ── Token Package CRUD ──
+  const refreshAdminPackages = async () => {
+    try {
+      const res = await fetch("/api/admin/packages");
+      const data = await res.json();
+      if (data.success) setAdminPackages(data.packages);
+    } catch { /* ignore */ }
+  };
+
+  const handleSavePackage = async (pkg: Partial<AdminTokenPackage> & { id?: string }) => {
+    setSavingPackage(true);
+    try {
+      const isEdit = !!pkg.id;
+      const body = {
+        slug: pkg.slug,
+        name: pkg.name,
+        tokens: Number(pkg.tokens),
+        priceGHS: Number(pkg.priceGHS),
+        priceUSD: Number(pkg.priceUSD),
+        bonusPct: Number(pkg.bonusPct),
+        popular: Boolean(pkg.popular),
+        isActive: pkg.isActive !== false,
+        sortOrder: Number(pkg.sortOrder ?? 0),
+        features: pkg.features || [],
+      };
+      const url = isEdit ? `/api/admin/packages/${pkg.id}` : "/api/admin/packages";
+      const method = isEdit ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: isEdit ? "Package updated" : "Package created", description: "Changes are live on the storefront." });
+        setPackageDialogOpen(false);
+        setEditingPackage(null);
+        await refreshAdminPackages();
+      } else {
+        toast({ title: "Failed to save package", description: data.error || "Please try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save package", variant: "destructive" });
+    } finally {
+      setSavingPackage(false);
+    }
+  };
+
+  const handleDeletePackage = async (id: string) => {
+    if (!confirm("Delete this package? This cannot be undone. Existing payment records are preserved, but the package will no longer be offered.")) return;
+    try {
+      const res = await fetch(`/api/admin/packages/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Package deleted" });
+        await refreshAdminPackages();
+      } else {
+        toast({ title: "Failed to delete", description: data.error || "It may be referenced by existing payments.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to delete package", variant: "destructive" });
+    }
+  };
+
+  const handleTogglePackageActive = async (pkg: AdminTokenPackage) => {
+    // Optimistic update for instant feedback
+    setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, isActive: !p.isActive } : p));
+    try {
+      const res = await fetch(`/api/admin/packages/${pkg.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !pkg.isActive }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: pkg.isActive ? "Package hidden from storefront" : "Package is now live", description: pkg.name });
+      } else {
+        // Revert on failure
+        setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, isActive: pkg.isActive } : p));
+        toast({ title: "Failed to toggle", variant: "destructive" });
+      }
+    } catch {
+      setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, isActive: pkg.isActive } : p));
+      toast({ title: "Failed to toggle", variant: "destructive" });
+    }
+  };
+
+  const handleTogglePackagePopular = async (pkg: AdminTokenPackage) => {
+    setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, popular: !p.popular } : p));
+    try {
+      const res = await fetch(`/api/admin/packages/${pkg.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ popular: !pkg.popular }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, popular: pkg.popular } : p));
+        toast({ title: "Failed to toggle popular", variant: "destructive" });
+      }
+    } catch {
+      setAdminPackages((prev) => prev.map((p) => p.id === pkg.id ? { ...p, popular: pkg.popular } : p));
+      toast({ title: "Failed to toggle popular", variant: "destructive" });
+    }
+  };
+
+  const handleReorderPackage = async (pkg: AdminTokenPackage, direction: "up" | "down") => {
+    const sorted = [...adminPackages].sort((a, b) => a.sortOrder - b.sortOrder);
+    const idx = sorted.findIndex((p) => p.id === pkg.id);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const swapPkg = sorted[swapIdx];
+    // Optimistic swap
+    setAdminPackages((prev) => prev.map((p) => {
+      if (p.id === pkg.id) return { ...p, sortOrder: swapPkg.sortOrder };
+      if (p.id === swapPkg.id) return { ...p, sortOrder: pkg.sortOrder };
+      return p;
+    }).sort((a, b) => a.sortOrder - b.sortOrder));
+    try {
+      await Promise.all([
+        fetch(`/api/admin/packages/${pkg.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sortOrder: swapPkg.sortOrder }) }),
+        fetch(`/api/admin/packages/${swapPkg.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sortOrder: pkg.sortOrder }) }),
+      ]);
+    } catch {
+      toast({ title: "Failed to reorder", variant: "destructive" });
+      await refreshAdminPackages();
+    }
+  };
+
+  const handleResetPackages = async () => {
+    if (!confirm("Reset ALL packages to the default values? This will discard your custom prices and quantities.")) return;
+    setResettingPackages(true);
+    try {
+      const res = await fetch("/api/admin/packages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminPackages(data.packages);
+        toast({ title: "Packages reset to defaults" });
+      } else {
+        toast({ title: "Failed to reset", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to reset", variant: "destructive" });
+    } finally {
+      setResettingPackages(false);
+    }
+  };
 
   // Save only the fields belonging to the specified gateway — no global reload mid-edit.
   const handleSaveGatewayConfig = async (gateway: string, fields: string[]) => {
@@ -1832,6 +2017,18 @@ function VidoraApp() {
       .then((d) => d.success && setTokenPackages(d.packages))
       .catch(() => {});
   }, []);
+
+  // Re-fetch packages when the user navigates to the buy-tokens view so
+  // admin edits are reflected immediately (the storefront cache has a 60s
+  // TTL, but navigating away and back should always show fresh prices).
+  useEffect(() => {
+    if (currentView === "buy-tokens") {
+      fetch("/api/payments/packages")
+        .then((r) => r.json())
+        .then((d) => d.success && setTokenPackages(d.packages))
+        .catch(() => {});
+    }
+  }, [currentView]);
 
   // Handle payment redirect callbacks (?payment=success|cancelled|error)
   useEffect(() => {
@@ -3835,6 +4032,172 @@ function VidoraApp() {
                     ))}
                   </div>
 
+                  {/* ── Token Package Management ──
+                      Admin can adjust prices, token quantities, bonuses,
+                      ordering, active/popular flags — all live, no redeploy. */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2 flex-wrap">
+                        <Package className="h-4 w-4 text-amber-500" />
+                        Token Packages
+                        <Badge variant="outline" className="text-xs ml-1 bg-amber-50 text-amber-600 border-amber-200">
+                          {adminPackages.filter((p) => p.isActive).length} live · {adminPackages.length} total
+                        </Badge>
+                        <div className="ml-auto flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleResetPackages}
+                            disabled={resettingPackages}
+                            className="h-8 text-xs"
+                          >
+                            {resettingPackages ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1.5" />}
+                            Reset to Defaults
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => { setEditingPackage(null); setPackageDialogOpen(true); }}
+                            className="btn-gradient h-8 text-xs"
+                          >
+                            <Plus className="h-3.5 w-3.5 mr-1.5" />Add Package
+                          </Button>
+                        </div>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Adjust prices, token quantities, and bonuses. Changes go live instantly on the Buy Tokens page — no redeploy needed. Inactive packages are hidden from customers but preserved for analytics.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="max-h-[28rem] overflow-y-auto custom-scrollbar -mx-2 px-2">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-white z-10">
+                            <tr className="border-b text-left text-xs text-muted-foreground">
+                              <th className="pb-2 pr-2 pl-1 w-8"></th>
+                              <th className="pb-2 pr-2">Package</th>
+                              <th className="pb-2 pr-2 text-right">Tokens</th>
+                              <th className="pb-2 pr-2 text-right">Bonus</th>
+                              <th className="pb-2 pr-2 text-right">Effective</th>
+                              <th className="pb-2 pr-2 text-right">Price (GHS)</th>
+                              <th className="pb-2 pr-2 text-right">Price (USD)</th>
+                              <th className="pb-2 pr-2 text-right">₵/Token</th>
+                              <th className="pb-2 pr-2 text-center">Popular</th>
+                              <th className="pb-2 pr-2 text-center">Active</th>
+                              <th className="pb-2 pr-1 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {adminPackages.map((pkg) => (
+                              <tr key={pkg.id} className={`border-b last:border-0 hover:bg-slate-50 ${!pkg.isActive ? "opacity-50" : ""}`}>
+                                <td className="py-2 pr-2 pl-1">
+                                  <div className="flex flex-col">
+                                    <button
+                                      onClick={() => handleReorderPackage(pkg, "up")}
+                                      disabled={pkg.sortOrder === Math.min(...adminPackages.map((p) => p.sortOrder))}
+                                      className="text-slate-400 hover:text-violet-600 disabled:opacity-20 disabled:cursor-not-allowed"
+                                      title="Move up"
+                                    ><ChevronUp className="h-3.5 w-3.5" /></button>
+                                    <button
+                                      onClick={() => handleReorderPackage(pkg, "down")}
+                                      disabled={pkg.sortOrder === Math.max(...adminPackages.map((p) => p.sortOrder))}
+                                      className="text-slate-400 hover:text-violet-600 disabled:opacity-20 disabled:cursor-not-allowed"
+                                      title="Move down"
+                                    ><ChevronDown className="h-3.5 w-3.5" /></button>
+                                  </div>
+                                </td>
+                                <td className="py-2 pr-2">
+                                  <div className="font-semibold text-slate-800">{pkg.name}</div>
+                                  <div className="text-xs text-muted-foreground font-mono">{pkg.slug}</div>
+                                </td>
+                                <td className="py-2 pr-2 text-right font-semibold">{pkg.tokens}</td>
+                                <td className="py-2 pr-2 text-right text-xs">
+                                  {pkg.bonusPct > 0 ? (
+                                    <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-600 border-emerald-200">+{pkg.bonusPct}%</Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2 pr-2 text-right">
+                                  <span className="font-bold text-violet-600">{pkg.effectiveTokens}</span>
+                                </td>
+                                <td className="py-2 pr-2 text-right font-semibold">₵{pkg.priceGHS.toFixed(2)}</td>
+                                <td className="py-2 pr-2 text-right text-muted-foreground">${pkg.priceUSD.toFixed(2)}</td>
+                                <td className="py-2 pr-2 text-right text-xs">
+                                  <span className={pkg.effectiveTokenPriceGHS < 0.3 ? "text-emerald-600 font-semibold" : "text-slate-600"}>
+                                    ₵{pkg.effectiveTokenPriceGHS.toFixed(3)}
+                                  </span>
+                                </td>
+                                <td className="py-2 pr-2 text-center">
+                                  <button
+                                    onClick={() => handleTogglePackagePopular(pkg)}
+                                    className={`transition-transform hover:scale-110 ${pkg.popular ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+                                    title={pkg.popular ? "Unmark as popular" : "Mark as popular (highlighted)"}
+                                  >
+                                    <Star className={`h-4 w-4 ${pkg.popular ? "fill-current" : ""}`} />
+                                  </button>
+                                </td>
+                                <td className="py-2 pr-2 text-center">
+                                  <Switch
+                                    checked={pkg.isActive}
+                                    onCheckedChange={() => handleTogglePackageActive(pkg)}
+                                    title={pkg.isActive ? "Click to hide from storefront" : "Click to make live"}
+                                  />
+                                </td>
+                                <td className="py-2 pr-1 text-right">
+                                  <div className="flex justify-end gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0"
+                                      onClick={() => { setEditingPackage(pkg); setPackageDialogOpen(true); }}
+                                      title="Edit package"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0 text-red-500 hover:bg-red-50 hover:text-red-600"
+                                      onClick={() => handleDeletePackage(pkg.id)}
+                                      title="Delete package"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {adminPackages.length === 0 && (
+                              <tr><td colSpan={11} className="py-8 text-center text-muted-foreground">No packages yet. Click "Add Package" or "Reset to Defaults".</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      {/* Economics summary footer */}
+                      {(() => {
+                        const active = adminPackages.filter((p) => p.isActive);
+                        if (active.length === 0) return null;
+                        const prices = active.map((p) => p.effectiveTokenPriceGHS);
+                        const totalTokens = active.reduce((s, p) => s + p.effectiveTokens, 0);
+                        return (
+                          <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <Sparkle className="h-3 w-3 text-amber-500" />
+                              Cheapest per-token: <strong className="text-slate-700">₵{Math.min(...prices).toFixed(3)}</strong>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <TrendingDown className="h-3 w-3 text-violet-500" />
+                              Most expensive: <strong className="text-slate-700">₵{Math.max(...prices).toFixed(3)}</strong>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Coins className="h-3 w-3 text-amber-500" />
+                              Total tokens offered: <strong className="text-slate-700">{totalTokens}</strong>
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </CardContent>
+                  </Card>
+
                   {/* Users Table */}
                   <Card className="border-0 shadow-lg shadow-black/5">
                     <CardHeader className="pb-3">
@@ -4369,6 +4732,15 @@ function VidoraApp() {
                       </div>
                     </CardContent>
                   </Card>
+
+                  {/* ── Package Edit/Create Dialog ── */}
+                  <PackageEditDialog
+                    open={packageDialogOpen}
+                    onOpenChange={(open) => { setPackageDialogOpen(open); if (!open) setEditingPackage(null); }}
+                    pkg={editingPackage}
+                    onSave={handleSavePackage}
+                    saving={savingPackage}
+                  />
 
                   <div className="text-center pt-2">
                     <Button variant="outline" onClick={() => setCurrentView("home")}>
