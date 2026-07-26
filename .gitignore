@@ -65,8 +65,17 @@ server.log
 /download/
 /write_page.py
 
-# Screenshots and generated assets (too large for git)
+# Local PostgreSQL data directory (environment-specific, not source code)
+/pgdata/
+
+# Test screenshots and generated assets (too large for git)
 screenshot*.png
+homepage.png
+create-page.png
+enhance-result.png
+enhance-toast.png
+*-result.png
+*-toast.png
 
 # AI generated images/videos (regenerated at runtime)
 /public/generated/
