@@ -1,29 +1,87 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
+import { zai, ZAIError } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
-import { writeFile, mkdir } from "fs/promises";
+import { execFile, execFileSync } from "child_process";
+import { promisify } from "util";
 import path from "path";
+import {
+  DUBBING_LANGUAGES,
+  DUBBING_LANGUAGE_GROUPS,
+  getDubbingLanguage,
+} from "@/lib/dubbing-languages";
+import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * POST /api/scenes/[id]/dubbing
  * Generates a dubbed narration for a scene in a target language.
- * Body: { lang: string, langName?: string, voiceId?: string }
+ * Body: { lang: string, voiceId?: string }
  *
  * Flow:
  *   1. Translate the scene's dialogue/narration text via LLM
- *   2. Generate TTS audio in the target language
- *   3. Save as a SceneTranslation record
- *   4. Return the translation + audio URL
+ *   2. Split the translation into TTS-safe chunks (~900 chars)
+ *   3. Generate TTS audio for each chunk
+ *   4. Concatenate chunks with ffmpeg → single MP3
+ *   5. Save as a SceneTranslation record + return the audio URL
  *
- * If Z.ai is unavailable, returns a graceful error.
+ * If Z.ai is unavailable (e.g. insufficient balance), returns a graceful,
+ * human-readable error so the UI can show a helpful toast.
  */
 
-const SUPPORTED_LANGS: Record<string, string> = {
-  en: "English", fr: "French", twi: "Twi (Akan)", ga: "Ga", ha: "Hausa",
-  es: "Spanish", pt: "Portuguese", ar: "Arabic", zh: "Chinese (Mandarin)",
-  de: "German", sw: "Swahili", yo: "Yoruba",
-};
+// Split text into chunks that fit within the 1024 char TTS limit.
+// Mirrors the logic in /api/generate-narration so long translations
+// (e.g. a 2000-char German narration) don't blow up the TTS endpoint.
+function splitTextIntoChunks(text: string, maxLen = 900): string[] {
+  if (text.length <= maxLen) return [text];
+  const sentences = text.match(/[^.!?。！？]+[.!?。！？]+/g) || [text];
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of sentences) {
+    if ((current + sentence).length <= maxLen) {
+      current += sentence;
+    } else {
+      if (current) chunks.push(current.trim());
+      current = sentence;
+    }
+  }
+  if (current) chunks.push(current.trim());
+  return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
+}
+
+// Concatenate wav/mp3 chunks via ffmpeg's concat demuxer.
+// For single-chunk, copies the file to the output path (so the caller can
+// always reference outputPath). Uses bash for file operations to bypass
+// Turbopack's fs interception in dev mode.
+async function concatMp3Files(chunkPaths: string[], outputPath: string): Promise<boolean> {
+  if (chunkPaths.length === 1) {
+    // Single chunk: copy to output path via bash (bypasses Turbopack)
+    try {
+      execFileSync("bash", ["-c", `cp "${chunkPaths[0]}" "${outputPath}"`]);
+      return true;
+    } catch (err) {
+      console.error("[dubbing] single-chunk copy failed:", err);
+      return false;
+    }
+  }
+  // Multi-chunk: use ffmpeg concat demuxer
+  const listFile = outputPath + ".concat.txt";
+  const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
+  // Write the list file via bash (bypasses Turbopack)
+  execFileSync("bash", ["-c", `cat > "${listFile}"`], { input: listContent });
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
+    ], { timeout: 30_000 });
+    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
+    return true;
+  } catch (err) {
+    console.error("[dubbing] ffmpeg concat failed:", err);
+    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
+    return false;
+  }
+}
 
 export async function POST(
   req: NextRequest,
@@ -35,8 +93,12 @@ export async function POST(
     if (!authResult.ok) return authResult.response;
 
     const { lang, voiceId } = await req.json();
-    if (!lang || !SUPPORTED_LANGS[lang]) {
-      return NextResponse.json({ success: false, error: `Unsupported language. Supported: ${Object.keys(SUPPORTED_LANGS).join(", ")}` }, { status: 400 });
+    const langMeta = lang ? getDubbingLanguage(lang) : null;
+    if (!langMeta) {
+      return NextResponse.json(
+        { success: false, error: `Unsupported language. Supported codes: ${Object.keys(DUBBING_LANGUAGES).join(", ")}` },
+        { status: 400 }
+      );
     }
 
     const scene = await db.videoScene.findUnique({ where: { id } });
@@ -46,17 +108,22 @@ export async function POST(
 
     const sourceText = scene.dialogue || scene.prompt;
     if (!sourceText) {
-      return NextResponse.json({ success: false, error: "No narration text to translate" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "No narration text to translate. Add dialogue to this scene first." },
+        { status: 400 }
+      );
     }
 
-    const langName = SUPPORTED_LANGS[lang];
+    const langName = langMeta.name;
+    // Canonical lowercase voice id — "tongtong" is the SDK default.
+    const voice = (voiceId || "tongtong").toLowerCase();
 
     // Create or update the translation record
     let translation = await db.sceneTranslation.findUnique({
       where: { sceneId_lang: { sceneId: id, lang } },
     });
 
-    if (translation && translation.status === "ready" && translation.translatedText) {
+    if (translation && translation.status === "ready" && translation.translatedText && translation.narrationUrl) {
       return NextResponse.json({ success: true, translation, message: "Translation already exists" });
     }
 
@@ -72,46 +139,86 @@ export async function POST(
     }
 
     try {
-      // Step 1: Translate via LLM
-      const translatePrompt = `Translate the following text into ${langName}. Keep the tone and emotion. Output ONLY the translated text, nothing else.
-
-Text: "${sourceText}"`;
-
+      // ── Step 1: Translate via LLM ────────────────────────────────────────
+      // NOTE: zai.chat() expects { systemPrompt, userPrompt } — NOT { messages }.
+      // Passing { messages } silently drops the content → Z.ai rejects with
+      // "API parameters incorrect". This was the root cause of dubbing failing.
       const translatedText = await zai.chat({
-        messages: [{ role: "user", content: translatePrompt }],
+        systemPrompt: `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`,
+        userPrompt: sourceText,
         retry: { label: `translate to ${lang}`, timeoutMs: 30_000, maxRetries: 2 },
       });
 
-      const cleanTranslation = translatedText.replace(/^["']|["']$/g, "").trim();
+      const cleanTranslation = translatedText.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+      if (!cleanTranslation) {
+        throw new Error("Translation came back empty");
+      }
 
       await db.sceneTranslation.update({
         where: { id: translation.id },
         data: { translatedText: cleanTranslation, status: "generating" },
       });
 
-      // Step 2: Generate TTS audio
-      const audioBase64 = await zai.tts({
-        text: cleanTranslation,
-        voice: voiceId || "TongTong",
-        retry: { label: `tts ${lang}`, timeoutMs: 60_000, maxRetries: 2 },
-      });
+      // ── Step 2: Split into TTS-safe chunks ───────────────────────────────
+      const chunks = splitTextIntoChunks(cleanTranslation);
+      // Write to /tmp/vidora-audio/ via the audio-storage helper, which uses
+      // bash to bypass Turbopack's fs interception in dev mode.
+      ensureAudioDir();
 
-      // Save audio to public/generated
-      const audioBuffer = Buffer.from(audioBase64, "base64");
-      const filename = `dub_${id}_${lang}_${Date.now()}.mp3`;
-      const outputDir = path.join(process.cwd(), "public", "generated");
-      await mkdir(outputDir, { recursive: true });
-      await writeFile(path.join(outputDir, filename), audioBuffer);
-      const narrationUrl = `/generated/${filename}`;
+      const chunkPaths: string[] = [];
+
+      // ── Step 3: Generate TTS audio per chunk ──────────────────────────────
+      for (let i = 0; i < chunks.length; i++) {
+        const arrayBuffer = await zai.tts({
+          input: chunks[i], // ✅ CORRECT: TTSOptions expects `input`, not `text`
+          voice,
+          retry: { label: `tts ${lang} chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
+        });
+        // ✅ CORRECT conversion: ArrayBuffer → Node Buffer via Uint8Array.
+        const buffer = Buffer.from(new Uint8Array(arrayBuffer));
+        // Z.ai returns WAV audio (API rejects "mp3" response_format), so we
+        // save chunks as .wav. Use the bash-based writer to bypass Turbopack.
+        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.wav`;
+        const chunkFile = writeAudioFile(chunkFilename, buffer);
+        chunkPaths.push(chunkFile);
+      }
+
+      // ── Step 4: Concatenate chunks (if >1) ───────────────────────────────
+      const finalFilename = `dub_${id}_${lang}_${Date.now()}.wav`;
+      const finalPath = getAudioPath(finalFilename);
+      const concatenated = await concatMp3Files(chunkPaths, finalPath);
+
+      let narrationUrl: string;
+      if (concatenated) {
+        // Serve via the /api/audio API route (works in dev + production)
+        narrationUrl = `/api/audio/${finalFilename}`;
+        // Clean up individual chunks, keep only the final
+        for (const p of chunkPaths) {
+          deleteAudioFile(path.basename(p));
+        }
+      } else {
+        // Fallback: serve the first chunk directly
+        narrationUrl = `/api/audio/${path.basename(chunkPaths[0])}`;
+      }
 
       const updated = await db.sceneTranslation.update({
         where: { id: translation.id },
-        data: { narrationUrl, voiceId: voiceId || "TongTong", status: "ready" },
+        data: { narrationUrl, voiceId: voice, status: "ready" },
       });
 
-      return NextResponse.json({ success: true, translation: updated });
+      return NextResponse.json({
+        success: true,
+        translation: updated,
+        chunks: chunks.length,
+      });
     } catch (aiError) {
-      const msg = aiError instanceof Error ? aiError.message : "AI dubbing failed";
+      // Surface a clear, actionable error. ZAIError already carries a
+      // human-readable message (e.g. "ZAI account has insufficient balance…").
+      const msg = aiError instanceof ZAIError
+        ? aiError.message
+        : aiError instanceof Error
+          ? aiError.message
+          : "AI dubbing failed";
       await db.sceneTranslation.update({
         where: { id: translation.id },
         data: { status: "failed" },
@@ -126,7 +233,7 @@ Text: "${sourceText}"`;
 
 /**
  * GET /api/scenes/[id]/dubbing
- * Returns all translations for a scene.
+ * Returns all translations for a scene + the full supported language catalog.
  */
 export async function GET(
   _req: NextRequest,
@@ -138,7 +245,12 @@ export async function GET(
       where: { sceneId: id },
       orderBy: { lang: "asc" },
     });
-    return NextResponse.json({ success: true, translations, supportedLangs: SUPPORTED_LANGS });
+    return NextResponse.json({
+      success: true,
+      translations,
+      supportedLangs: DUBBING_LANGUAGES,
+      languageGroups: DUBBING_LANGUAGE_GROUPS,
+    });
   } catch (error) {
     console.error("[dubbing GET]", error);
     return NextResponse.json({ success: false, error: "Failed to load translations" }, { status: 500 });

@@ -35,7 +35,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader,
@@ -54,6 +54,7 @@ import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
+import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES, DUBBING_LANGUAGE_COUNT } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -478,27 +479,36 @@ function SortableSceneCard({
                   {scene.burnSubtitles ? "Burn ✓" : "Burn"}
                 </Button>
               )}
-              {/* ── Dubbing Selector ── */}
+              {/* ── Dubbing Selector (30+ languages, grouped) ── */}
               <Select
                 value=""
                 onValueChange={(v) => {
-                  const langs: Record<string, string> = {
-                    fr: "French", twi: "Twi", ga: "Ga", ha: "Hausa", es: "Spanish", sw: "Swahili",
-                  };
-                  if (langs[v]) onGenerateDubbing(scene.id, v, langs[v]);
+                  // Find the language in the shared catalog
+                  const lang = ALL_DUBBING_LANGUAGES.find((l) => l.code === v);
+                  if (lang) onGenerateDubbing(scene.id, lang.code, lang.name);
                 }}
               >
-                <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                  <Languages className="h-3 w-3 mr-1 inline shrink-0" />
+                <SelectTrigger className="h-7 w-[88px] text-xs px-1.5 gap-1">
+                  <Languages className="h-3 w-3 shrink-0" />
                   <SelectValue placeholder="Dub" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="fr"><span className="text-xs">🇫🇷 French</span></SelectItem>
-                  <SelectItem value="twi"><span className="text-xs">🇬🇭 Twi</span></SelectItem>
-                  <SelectItem value="ga"><span className="text-xs">🇬🇭 Ga</span></SelectItem>
-                  <SelectItem value="ha"><span className="text-xs">🇬🇭 Hausa</span></SelectItem>
-                  <SelectItem value="es"><span className="text-xs">🇪🇸 Spanish</span></SelectItem>
-                  <SelectItem value="sw"><span className="text-xs">🇰🇪 Swahili</span></SelectItem>
+                <SelectContent className="min-w-[240px] max-h-[320px]">
+                  <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {DUBBING_LANGUAGE_COUNT} languages
+                  </div>
+                  {DUBBING_LANGUAGE_GROUPS.map((group) => (
+                    <SelectGroup key={group.label}>
+                      <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pt-2">
+                        {group.label}
+                      </SelectLabel>
+                      {group.languages.map((lang) => (
+                        <SelectItem key={lang.code} value={lang.code} className="text-xs">
+                          <span className="mr-1.5">{lang.flag}</span>
+                          {lang.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
@@ -1606,12 +1616,24 @@ function VidoraApp() {
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: `${langName} dubbing ready!`, description: "Translation + voice generated." });
+        toast({
+          title: `${langName} dubbing ready!`,
+          description: data.chunks > 1 ? `Translation + voice generated (${data.chunks} segments).` : "Translation + voice generated.",
+        });
       } else {
-        toast({ title: "Dubbing failed", description: data.error, variant: "destructive" });
+        // Detect Z.ai balance / quota errors and give a friendlier message
+        const errMsg = String(data.error || "");
+        const isBalanceIssue = /insufficient balance|quota|1113|1112/i.test(errMsg);
+        toast({
+          title: isBalanceIssue ? "Dubbing unavailable" : "Dubbing failed",
+          description: isBalanceIssue
+            ? "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing."
+            : errMsg || "Please try again.",
+          variant: "destructive",
+        });
       }
     } catch {
-      toast({ title: "Error", variant: "destructive" });
+      toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
     }
   };
 

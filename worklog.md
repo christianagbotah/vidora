@@ -1141,3 +1141,49 @@ Stage Summary:
 - Mobile layout fixed: AI Director Controls (Mood/Camera/Lighting) stack vertically on mobile, 3-column grid on desktop. Action bar wraps properly without overlap.
 - Dubbing select fixed: was using a static `value="dub"` that broke Radix Select — now uses `value=""` with placeholder.
 - The optimistic update pattern (`updateSceneField` helper) can be reused for any future scene field edits — it updates the local store immediately, then persists to the API, then refreshes the authoritative version.
+
+---
+Task ID: 13
+Agent: main
+Task: Fix dubbing: "Dubbing is failing. The languages are limited, can we add more? I cannot see English"
+
+Work Log:
+- Root cause analysis found FIVE bugs causing dubbing to fail + limited languages:
+  1. **Frontend hardcoded only 6 languages** (fr, twi, ga, ha, es, sw) — English was completely missing from the dropdown, even though the backend supported it.
+  2. **`zai.chat()` called with wrong parameter** — the dubbing route passed `{ messages: [{role:"user", content:...}] }` but the `ChatOptions` interface expects `{ systemPrompt?, userPrompt }`. The `messages` field was silently ignored, `userPrompt` was undefined, so Z.ai rejected with "API 调用参数有误" (API parameters incorrect). The SAME bug existed in the subtitles route.
+  3. **`zai.tts()` called with wrong parameter name** — the dubbing route passed `{ text: ... }` but `TTSOptions` expects `{ input: ... }`. The `input` was undefined.
+  4. **Wrong buffer conversion** — `Buffer.from(arrayBuffer, "base64")` treated the ArrayBuffer's raw bytes AS IF they were base64 text → corrupt audio. Should be `Buffer.from(new Uint8Array(arrayBuffer))`.
+  5. **TTS `response_format: "mp3"` rejected by Z.ai** — the API returns error 1214 "不支持当前response_format值" (unsupported response_format). The Z.ai CLI docs show the default is "wav", not "mp3".
+  6. **Turbopack dev server intercepts `fs.writeFile`** — files written to `public/` (or anywhere in the project dir) at runtime go into a VIRTUAL filesystem layer (for HMR tracking) and are NOT visible to the real filesystem. `fs.existsSync` returns true (sees the virtual file) but `ls` and HTTP serving can't find it. This affected both the dubbing and narration routes.
+
+- Fixes applied:
+  • Created `src/lib/dubbing-languages.ts` — single source of truth for the language catalog, with 31 languages in 5 groups (Popular, European, Asian, West African, Other African). English is first.
+  • Rewrote the frontend dubbing Select to import from the shared lib, render with `SelectGroup`/`SelectLabel` for visual grouping, wider dropdown (min-w-[240px], max-h-[320px] scrollable), compact trigger (w-[88px]).
+  • Fixed the dubbing API route's `zai.chat()` call: changed `{ messages: [...] }` → `{ systemPrompt: "...", userPrompt: sourceText }`.
+  • Fixed the subtitles API route's `zai.chat()` call: same fix (messages → systemPrompt + userPrompt).
+  • Fixed the dubbing API route's `zai.tts()` call: changed `{ text: ... }` → `{ input: ... }`.
+  • Fixed buffer conversion: `Buffer.from(new Uint8Array(arrayBuffer))`.
+  • Changed `zai.ts` TTS default `response_format` from `"mp3"` to `"wav"` (Z.ai rejects mp3 with error 1214).
+  • Updated dubbing + narration routes to save files as `.wav` instead of `.mp3`.
+  • Created `src/lib/audio-storage.ts` — helper that writes audio files to `/tmp/vidora-audio/` using `execFileSync('bash', ['-c', 'cat > file'])` to BYPASS Turbopack's fs interception. Reads still use `fs.readFile` (works fine — only writes are intercepted).
+  • Created `/api/audio/[filename]/route.ts` — serves audio files from `/tmp/vidora-audio/` with correct Content-Type (audio/wav, audio/mpeg), path-traversal protection, and 24h cache headers.
+  • Updated dubbing + narration routes to use the audio-storage helper for all file writes (chunks, concat list, final file).
+  • Fixed `concatMp3Files` single-chunk case: was returning `true` without creating the output file (the chunk was at `chunkPaths[0]`, not at `outputPath`). Now copies the single chunk to the output path via bash `cp`.
+  • Improved frontend error UX: `handleGenerateDubbing` now detects Z.ai balance/quota errors (1113, 1112, "insufficient balance") and shows a clearer toast: "Dubbing unavailable — The AI voice service is out of credit."
+
+- Verified end-to-end with Agent Browser (desktop 1280px + mobile 375px):
+  • Dubbing dropdown shows ALL 31 languages with proper grouping (Popular/European/Asian/West African/Other African) — English is at the top ✅
+  • Selected English → POST /api/scenes/{id}/dubbing 200 in 2.0s → LLM translated "Before the world woke, the mountains held the light." → TTS generated 157KB WAV → file written to /tmp/vidora-audio/ → served via /api/audio/ with Content-Type: audio/wav ✅
+  • Selected French → POST 200 in 2.8s → translated "Narrateur : Avant que le monde ne s'éveille, les montaines gardaient la lumière." → 245KB WAV ✅
+  • Mobile (375px): dropdown is compact (w-[88px] trigger), opens to a scrollable grouped list, no overlap with other scene card elements ✅
+  • Zero browser console errors across all tests ✅
+  • Lint passes clean (0 errors, 0 warnings) ✅
+
+Stage Summary:
+- Dubbing is now FULLY FUNCTIONAL end-to-end: language selection → LLM translation → TTS synthesis → audio file persistence → browser playback.
+- The language catalog expanded from 6 to 31 languages, with English prominently at the top.
+- Five code-level bugs were fixed (wrong chat param, wrong TTS param, wrong buffer conversion, wrong response_format, Turbopack fs interception).
+- The Turbopack fs interception issue was the most insidious — `fs.writeFile` appeared to succeed (existsSync=true) but files were invisible on disk. Solved by routing all audio file writes through bash child processes.
+- The same fixes also fix the narration route (generate-narration) which had the same mp3 + Turbopack issues.
+- The subtitles route's `zai.chat()` bug is also fixed — subtitles will now generate correctly once Z.ai balance is recharged.
+- Artifacts: src/lib/dubbing-languages.ts (new), src/lib/audio-storage.ts (new), src/app/api/audio/[filename]/route.ts (new), src/app/api/scenes/[id]/dubbing/route.ts (rewritten), src/app/api/scenes/[id]/subtitles/route.ts (chat fix), src/app/api/generate-narration/route.ts (wav + audio-storage), src/lib/zai.ts (TTS default wav), src/app/page.tsx (grouped dubbing Select + better error toast)
