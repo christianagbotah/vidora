@@ -44,8 +44,8 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
+} from "@/components/ui/sheet";
 import DeviceSimulator from "@/components/DeviceSimulator";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -580,7 +580,7 @@ function VidoraApp() {
   const [configForm, setConfigForm] = useState<Record<string, string>>({});
   const [adminLoading, setAdminLoading] = useState(false);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
-  const [activeGatewayTab, setActiveGatewayTab] = useState<string>("paystack");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
@@ -1546,10 +1546,6 @@ function VidoraApp() {
           formUpdate[k] = v.value || "";
         });
         setConfigForm(formUpdate);
-        // Set the active gateway tab to the currently active gateway
-        if (configData.configs.payment_gateway?.value) {
-          setActiveGatewayTab(configData.configs.payment_gateway.value);
-        }
       }
     } catch { /* ignore */ }
     finally { setAdminLoading(false); }
@@ -1602,7 +1598,6 @@ function VidoraApp() {
       const data = await res.json();
       if (data.success) {
         toast({ title: `${gateway.charAt(0).toUpperCase() + gateway.slice(1)} is now the active gateway` });
-        setActiveGatewayTab(gateway);
         // Update both adminConfigs and configForm without a full reload
         setAdminConfigs((prev) => ({ ...prev, payment_gateway: { value: gateway, description: prev.payment_gateway?.description || "" } }));
         setConfigForm((prev) => ({ ...prev, payment_gateway: gateway }));
@@ -1886,50 +1881,25 @@ function VidoraApp() {
                 </Button>
               </div>
             )}
-            {/* Mobile: token badge + dropdown menu */}
-            {session?.user ? (
-              <>
-                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="md:hidden border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
+            {/* Mobile: token badge + hamburger drawer (always visible on mobile) */}
+            <div className="flex md:hidden items-center gap-1.5">
+              {session?.user ? (
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
                   <Coins className="h-4 w-4" /><span className="ml-1 text-xs font-bold">{userTokens}</span>
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="md:hidden h-9 w-9 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 shrink-0">
-                      <User className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    <div className="px-2 py-1.5">
-                      <p className="text-sm font-semibold truncate">{userProfile?.name || session.user?.email}</p>
-                      <p className="text-xs text-muted-foreground truncate">{session.user?.email}</p>
-                    </div>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => { setCurrentView("dashboard"); }}>
-                      <BarChart3 className="h-4 w-4 mr-2 text-violet-500" />Dashboard
-                    </DropdownMenuItem>
-                    {userProfile?.role === "admin" && (
-                      <DropdownMenuItem onClick={() => { setCurrentView("admin"); }}>
-                        <ShieldCheck className="h-4 w-4 mr-2 text-violet-500" />Admin
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => { setCurrentView("buy-tokens"); }}>
-                      <Coins className="h-4 w-4 mr-2 text-amber-500" />
-                      <span>Buy Tokens</span>
-                      <Badge variant="outline" className="ml-auto text-xs border-amber-200 text-amber-600">{userTokens}</Badge>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => { setCurrentView("profile"); }}>
-                      <User className="h-4 w-4 mr-2 text-slate-500" />Profile
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleSignOut} className="text-red-600 focus:text-red-600">
-                      <LogOut className="h-4 w-4 mr-2" />Sign Out
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hover:bg-violet-50 shrink-0">
-                <LogIn className="h-4 w-4" /><span className="ml-1.5 sm:hidden">Sign In</span><span className="hidden sm:inline ml-1.5">Sign In</span>
+              ) : (
+                <Button size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="btn-gradient shrink-0">
+                  <LogIn className="h-4 w-4" /><span className="ml-1">Sign In</span>
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" onClick={() => setMobileNavOpen(true)} className="h-9 w-9 rounded-lg hover:bg-slate-100 shrink-0 border border-slate-200" aria-label="Open navigation menu">
+                <Menu className="h-5 w-5" />
+              </Button>
+            </div>
+            {/* Desktop: Sign In button for logged-out users (logged-in users get inline buttons above) */}
+            {!session?.user && (
+              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hidden md:inline-flex hover:bg-violet-50 shrink-0">
+                <LogIn className="h-4 w-4" /><span className="ml-1.5">Sign In</span>
               </Button>
             )}
           </div>
@@ -3743,172 +3713,186 @@ function VidoraApp() {
                         <p className="text-xs text-muted-foreground mt-2">Only the active gateway is used at checkout. Switch anytime.</p>
                       </div>
 
-                      {/* Tabs switch the VISIBLE form only — does NOT auto-save or reload */}
-                      <Tabs value={activeGatewayTab} onValueChange={(v) => setActiveGatewayTab(v)}>
-                        <TabsList className="grid grid-cols-3 w-full">
-                          <TabsTrigger value="paystack" className="text-sm font-semibold">Paystack</TabsTrigger>
-                          <TabsTrigger value="hubtel" className="text-sm font-semibold">Hubtel</TabsTrigger>
-                          <TabsTrigger value="stripe" className="text-sm font-semibold">Stripe</TabsTrigger>
-                        </TabsList>
+                      {/* Only the ACTIVE gateway's fields are shown — selecting a gateway above
+                          switches this form instantly. No tabs, no clutter. */}
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 sm:p-5">
+                        <div className="flex items-center gap-2 mb-4">
+                          {(() => {
+                            const gw = adminConfigs.payment_gateway?.value || "paystack";
+                            const icon = gw === "paystack" ? <DollarSign className="h-4 w-4 text-violet-500" /> :
+                                         gw === "hubtel" ? <Wallet className="h-4 w-4 text-amber-500" /> :
+                                         <CreditCard className="h-4 w-4 text-emerald-500" />;
+                            return icon;
+                          })()}
+                          <h4 className="text-sm font-bold capitalize text-slate-800">
+                            {adminConfigs.payment_gateway?.value || "paystack"} Configuration
+                          </h4>
+                        </div>
 
-                        {/* Paystack Tab — only Paystack fields are saved */}
-                        <TabsContent value="paystack" className="space-y-4 mt-4">
-                          <p className="text-sm text-muted-foreground">Accept payments via Paystack (MoMo, Visa, Mastercard)</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Secret Key</Label>
-                              <Input
-                                type="password"
-                                value={configForm.paystack_secret_key || ""}
-                                onChange={(e) => updateConfigField("paystack_secret_key", e.target.value)}
-                                placeholder="sk_live_..."
-                                className="h-9 text-sm"
-                              />
+                        {/* ── Paystack fields (only when active) ── */}
+                        {(adminConfigs.payment_gateway?.value || "paystack") === "paystack" && (
+                          <div className="space-y-4">
+                            <p className="text-sm text-muted-foreground">Accept payments via Paystack (MoMo, Visa, Mastercard)</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Secret Key</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.paystack_secret_key || ""}
+                                  onChange={(e) => updateConfigField("paystack_secret_key", e.target.value)}
+                                  placeholder="sk_live_..."
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Public Key</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.paystack_public_key || ""}
+                                  onChange={(e) => updateConfigField("paystack_public_key", e.target.value)}
+                                  placeholder="pk_live_..."
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Webhook Secret</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.paystack_webhook_secret || ""}
+                                  onChange={(e) => updateConfigField("paystack_webhook_secret", e.target.value)}
+                                  placeholder="Paystack webhook verification secret"
+                                  className="h-9 text-sm"
+                                />
+                                <p className="text-xs text-muted-foreground">Used to verify webhook events from Paystack</p>
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Currency</Label>
+                                <Input
+                                  type="text"
+                                  value={configForm.paystack_currency || "GHS"}
+                                  onChange={(e) => updateConfigField("paystack_currency", e.target.value)}
+                                  placeholder="GHS"
+                                  className="h-9 text-sm"
+                                />
+                                <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
+                              </div>
                             </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Public Key</Label>
-                              <Input
-                                type="password"
-                                value={configForm.paystack_public_key || ""}
-                                onChange={(e) => updateConfigField("paystack_public_key", e.target.value)}
-                                placeholder="pk_live_..."
-                                className="h-9 text-sm"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Webhook Secret</Label>
-                              <Input
-                                type="password"
-                                value={configForm.paystack_webhook_secret || ""}
-                                onChange={(e) => updateConfigField("paystack_webhook_secret", e.target.value)}
-                                placeholder="Paystack webhook verification secret"
-                                className="h-9 text-sm"
-                              />
-                              <p className="text-xs text-muted-foreground">Used to verify webhook events from Paystack</p>
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Currency</Label>
-                              <Input
-                                type="text"
-                                value={configForm.paystack_currency || "GHS"}
-                                onChange={(e) => updateConfigField("paystack_currency", e.target.value)}
-                                placeholder="GHS"
-                                className="h-9 text-sm"
-                              />
-                              <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
-                            </div>
+                            <Button
+                              onClick={() => handleSaveGatewayConfig("paystack", ["paystack_secret_key", "paystack_public_key", "paystack_webhook_secret", "paystack_currency"])}
+                              disabled={savingConfigKey === "paystack"}
+                              className="btn-gradient w-full sm:w-auto"
+                            >
+                              {savingConfigKey === "paystack" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                              {savingConfigKey === "paystack" ? "Saving..." : "Save Paystack Configuration"}
+                            </Button>
                           </div>
-                          <Button
-                            onClick={() => handleSaveGatewayConfig("paystack", ["paystack_secret_key", "paystack_public_key", "paystack_webhook_secret", "paystack_currency"])}
-                            disabled={savingConfigKey === "paystack"}
-                            className="btn-gradient"
-                          >
-                            {savingConfigKey === "paystack" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
-                            {savingConfigKey === "paystack" ? "Saving..." : "Save Paystack Configuration"}
-                          </Button>
-                        </TabsContent>
+                        )}
 
-                        {/* Hubtel Tab — only Hubtel fields are saved */}
-                        <TabsContent value="hubtel" className="space-y-4 mt-4">
-                          <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Client ID</Label>
-                              <Input
-                                type="password"
-                                value={configForm.hubtel_client_id || ""}
-                                onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
-                                placeholder="Hubtel client ID"
-                                className="h-9 text-sm"
-                              />
+                        {/* ── Hubtel fields (only when active) ── */}
+                        {adminConfigs.payment_gateway?.value === "hubtel" && (
+                          <div className="space-y-4">
+                            <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Client ID</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.hubtel_client_id || ""}
+                                  onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
+                                  placeholder="Hubtel client ID"
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Client Secret</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.hubtel_client_secret || ""}
+                                  onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
+                                  placeholder="Hubtel client secret"
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Merchant Account Number</Label>
+                                <Input
+                                  type="text"
+                                  value={configForm.hubtel_merchant_id || ""}
+                                  onChange={(e) => updateConfigField("hubtel_merchant_id", e.target.value)}
+                                  placeholder="HM-XXXXXX"
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">API Key</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.hubtel_api_key || ""}
+                                  onChange={(e) => updateConfigField("hubtel_api_key", e.target.value)}
+                                  placeholder="Hubtel API key"
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Currency</Label>
+                                <Input
+                                  type="text"
+                                  value={configForm.hubtel_currency || "GHS"}
+                                  onChange={(e) => updateConfigField("hubtel_currency", e.target.value)}
+                                  placeholder="GHS"
+                                  className="h-9 text-sm"
+                                />
+                                <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
+                              </div>
                             </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Client Secret</Label>
-                              <Input
-                                type="password"
-                                value={configForm.hubtel_client_secret || ""}
-                                onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
-                                placeholder="Hubtel client secret"
-                                className="h-9 text-sm"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Merchant Account Number</Label>
-                              <Input
-                                type="text"
-                                value={configForm.hubtel_merchant_id || ""}
-                                onChange={(e) => updateConfigField("hubtel_merchant_id", e.target.value)}
-                                placeholder="HM-XXXXXX"
-                                className="h-9 text-sm"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">API Key</Label>
-                              <Input
-                                type="password"
-                                value={configForm.hubtel_api_key || ""}
-                                onChange={(e) => updateConfigField("hubtel_api_key", e.target.value)}
-                                placeholder="Hubtel API key"
-                                className="h-9 text-sm"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Currency</Label>
-                              <Input
-                                type="text"
-                                value={configForm.hubtel_currency || "GHS"}
-                                onChange={(e) => updateConfigField("hubtel_currency", e.target.value)}
-                                placeholder="GHS"
-                                className="h-9 text-sm"
-                              />
-                              <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
-                            </div>
+                            <Button
+                              onClick={() => handleSaveGatewayConfig("hubtel", ["hubtel_client_id", "hubtel_client_secret", "hubtel_merchant_id", "hubtel_api_key", "hubtel_currency"])}
+                              disabled={savingConfigKey === "hubtel"}
+                              className="btn-gradient w-full sm:w-auto"
+                            >
+                              {savingConfigKey === "hubtel" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                              {savingConfigKey === "hubtel" ? "Saving..." : "Save Hubtel Configuration"}
+                            </Button>
                           </div>
-                          <Button
-                            onClick={() => handleSaveGatewayConfig("hubtel", ["hubtel_client_id", "hubtel_client_secret", "hubtel_merchant_id", "hubtel_api_key", "hubtel_currency"])}
-                            disabled={savingConfigKey === "hubtel"}
-                            className="btn-gradient"
-                          >
-                            {savingConfigKey === "hubtel" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
-                            {savingConfigKey === "hubtel" ? "Saving..." : "Save Hubtel Configuration"}
-                          </Button>
-                        </TabsContent>
+                        )}
 
-                        {/* Stripe Tab — only Stripe fields are saved */}
-                        <TabsContent value="stripe" className="space-y-4 mt-4">
-                          <p className="text-sm text-muted-foreground">Accept payments via Stripe (Card, Apple Pay, Google Pay)</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Secret Key</Label>
-                              <Input
-                                type="password"
-                                value={configForm.stripe_secret_key || ""}
-                                onChange={(e) => updateConfigField("stripe_secret_key", e.target.value)}
-                                placeholder="sk_live_..."
-                                className="h-9 text-sm"
-                              />
+                        {/* ── Stripe fields (only when active) ── */}
+                        {adminConfigs.payment_gateway?.value === "stripe" && (
+                          <div className="space-y-4">
+                            <p className="text-sm text-muted-foreground">Accept payments via Stripe (Card, Apple Pay, Google Pay)</p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Secret Key</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.stripe_secret_key || ""}
+                                  onChange={(e) => updateConfigField("stripe_secret_key", e.target.value)}
+                                  placeholder="sk_live_..."
+                                  className="h-9 text-sm"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label className="text-sm font-medium">Publishable Key</Label>
+                                <Input
+                                  type="password"
+                                  value={configForm.stripe_publishable_key || ""}
+                                  onChange={(e) => updateConfigField("stripe_publishable_key", e.target.value)}
+                                  placeholder="pk_live_..."
+                                  className="h-9 text-sm"
+                                />
+                              </div>
                             </div>
-                            <div className="space-y-1.5">
-                              <Label className="text-sm font-medium">Publishable Key</Label>
-                              <Input
-                                type="password"
-                                value={configForm.stripe_publishable_key || ""}
-                                onChange={(e) => updateConfigField("stripe_publishable_key", e.target.value)}
-                                placeholder="pk_live_..."
-                                className="h-9 text-sm"
-                              />
-                            </div>
+                            <Button
+                              onClick={() => handleSaveGatewayConfig("stripe", ["stripe_secret_key", "stripe_publishable_key"])}
+                              disabled={savingConfigKey === "stripe"}
+                              className="btn-gradient w-full sm:w-auto"
+                            >
+                              {savingConfigKey === "stripe" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                              {savingConfigKey === "stripe" ? "Saving..." : "Save Stripe Configuration"}
+                            </Button>
                           </div>
-                          <Button
-                            onClick={() => handleSaveGatewayConfig("stripe", ["stripe_secret_key", "stripe_publishable_key"])}
-                            disabled={savingConfigKey === "stripe"}
-                            className="btn-gradient"
-                          >
-                            {savingConfigKey === "stripe" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
-                            {savingConfigKey === "stripe" ? "Saving..." : "Save Stripe Configuration"}
-                          </Button>
-                        </TabsContent>
-                      </Tabs>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
 
@@ -4218,6 +4202,131 @@ function VidoraApp() {
           </div>
         </nav>
       )}
+
+      {/* ═══════════════════════════════════════════════════════
+          MOBILE NAVIGATION DRAWER (hamburger menu)
+          ═══════════════════════════════════════════════════════ */}
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="right" className="w-[300px] sm:w-[340px] p-0 flex flex-col">
+          <SheetHeader className="border-b pb-4">
+            <SheetTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
+                <Clapperboard className="h-4 w-4 text-white" />
+              </div>
+              <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent font-extrabold text-lg">
+                Vidora
+              </span>
+              <Badge variant="outline" className="text-xs font-semibold text-violet-500 border-violet-200 ml-0.5">
+                PRO
+              </Badge>
+            </SheetTitle>
+            <SheetDescription className="sr-only">Navigation menu</SheetDescription>
+          </SheetHeader>
+
+          {/* Drawer body — scrollable */}
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            {session?.user ? (
+              <div className="space-y-1">
+                {/* User info card */}
+                <div className="p-3 rounded-lg bg-gradient-to-br from-violet-50 to-fuchsia-50 border border-violet-100 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white font-bold shrink-0">
+                      {(userProfile?.name || session.user?.email || "U").charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold truncate text-slate-800">{userProfile?.name || "User"}</p>
+                      <p className="text-xs text-muted-foreground truncate">{session.user?.email}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Token balance</span>
+                    <Badge variant="outline" className="text-xs font-bold border-amber-200 text-amber-600 bg-amber-50">
+                      <Coins className="h-3 w-3 mr-1" />{userTokens}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* Navigation links */}
+                {[
+                  { view: "home", icon: <Home className="h-5 w-5" />, label: "Home" },
+                  { view: "dashboard", icon: <BarChart3 className="h-5 w-5" />, label: "Dashboard" },
+                  { view: "create", icon: <Plus className="h-5 w-5" />, label: "Create Video" },
+                  { view: "gallery", icon: <LayoutGrid className="h-5 w-5" />, label: "Templates" },
+                  { view: "buy-tokens", icon: <Coins className="h-5 w-5" />, label: "Buy Tokens" },
+                  { view: "profile", icon: <User className="h-5 w-5" />, label: "Profile" },
+                  ...(userProfile?.role === "admin" ? [{ view: "admin", icon: <ShieldCheck className="h-5 w-5" />, label: "Admin Portal" }] : []),
+                ].map((item) => (
+                  <button
+                    key={item.view}
+                    onClick={() => { setCurrentView(item.view as never); setMobileNavOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                      currentView === item.view
+                        ? "bg-violet-50 text-violet-700"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className={currentView === item.view ? "text-violet-500" : "text-slate-400"}>{item.icon}</span>
+                    {item.label}
+                    {currentView === item.view && <ChevronRight className="h-4 w-4 ml-auto text-violet-400" />}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="text-center py-4">
+                  <div className="mx-auto mb-3 h-14 w-14 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white shadow-lg shadow-violet-500/20">
+                    <Sparkles className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800">Welcome to Vidora</h3>
+                  <p className="text-sm text-muted-foreground mt-1">Sign in to create AI-powered videos, manage projects, and track your tokens.</p>
+                </div>
+                <Button
+                  className="btn-gradient w-full h-11"
+                  onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); setMobileNavOpen(false); }}
+                >
+                  <LogIn className="h-4 w-4 mr-2" />Sign In
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full h-11 border-violet-200 text-violet-600 hover:bg-violet-50"
+                  onClick={() => { setCurrentView("create"); setMobileNavOpen(false); }}
+                >
+                  <Sparkles className="h-4 w-4 mr-2" />Try the Creator
+                </Button>
+                <div className="pt-3 border-t">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Quick Links</p>
+                  {[
+                    { view: "create", icon: <Plus className="h-4 w-4" />, label: "Start Creating" },
+                    { view: "gallery", icon: <LayoutGrid className="h-4 w-4" />, label: "Browse Templates" },
+                  ].map((item) => (
+                    <button
+                      key={item.view}
+                      onClick={() => { setCurrentView(item.view as never); setMobileNavOpen(false); }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      <span className="text-slate-400">{item.icon}</span>
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer — Sign Out (logged in only) */}
+          {session?.user && (
+            <SheetFooter className="border-t pt-4">
+              <Button
+                variant="outline"
+                className="w-full h-11 text-red-500 border-red-200 hover:bg-red-50 hover:text-red-600"
+                onClick={() => { handleSignOut(); setMobileNavOpen(false); }}
+              >
+                <LogOut className="h-4 w-4 mr-2" />Sign Out
+              </Button>
+            </SheetFooter>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* ═══════════════════════════════════════════════════════
           DIALOGS
