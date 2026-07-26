@@ -1993,10 +1993,10 @@ function VidoraApp() {
      ════════════════════════════════════════════════════════════════ */
 
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
       {/* ── Header ── */}
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-2">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2 min-w-0">
           <button
             onClick={() => currentView !== "home" ? setCurrentView("home") : undefined}
             className="flex items-center gap-2 font-bold text-base sm:text-lg hover:opacity-80 transition-opacity shrink-0"
@@ -2011,12 +2011,12 @@ function VidoraApp() {
               PRO
             </Badge>
           </button>
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
             {/* AI Service Status — proactive health indicator */}
             <AIStatusBadge compact />
-            {/* Desktop: inline buttons */}
+            {/* Desktop (lg+): inline buttons with labels */}
             {session?.user && (
-              <div className="hidden md:flex items-center gap-1.5">
+              <div className="hidden lg:flex items-center gap-1">
                 <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
                   <BarChart3 className="h-4 w-4 mr-1" />Dashboard
                 </Button>
@@ -2025,8 +2025,8 @@ function VidoraApp() {
                     <ShieldCheck className="h-4 w-4 mr-1" />Admin
                   </Button>
                 )}
-                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
-                  <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
+                  <Coins className="h-4 w-4 mr-1" /><span className="font-bold">{userTokens}</span>
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
                   <User className="h-4 w-4 mr-1" />Profile
@@ -2036,8 +2036,8 @@ function VidoraApp() {
                 </Button>
               </div>
             )}
-            {/* Mobile: token badge + hamburger drawer (always visible on mobile) */}
-            <div className="flex md:hidden items-center gap-1.5">
+            {/* Tablet/mobile (below lg): token badge + hamburger drawer */}
+            <div className="flex lg:hidden items-center gap-1.5">
               {session?.user ? (
                 <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
                   <Coins className="h-4 w-4" /><span className="ml-1 text-xs font-bold">{userTokens}</span>
@@ -2051,9 +2051,9 @@ function VidoraApp() {
                 <Menu className="h-5 w-5" />
               </Button>
             </div>
-            {/* Desktop: Sign In button for logged-out users (logged-in users get inline buttons above) */}
+            {/* Desktop (lg+): Sign In button for logged-out users */}
             {!session?.user && (
-              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hidden md:inline-flex hover:bg-violet-50 shrink-0">
+              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hidden lg:inline-flex hover:bg-violet-50 shrink-0">
                 <LogIn className="h-4 w-4" /><span className="ml-1.5">Sign In</span>
               </Button>
             )}
@@ -2082,7 +2082,7 @@ function VidoraApp() {
                 <div className="orb orb-violet w-[400px] h-[400px] -top-20 -left-32" />
                 <div className="orb orb-amber w-[300px] h-[300px] top-10 right-10" />
                 <div className="orb orb-rose w-[250px] h-[250px] bottom-20 left-1/2" />
-                <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-20 sm:py-28 lg:py-36 text-center">
+                <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20 lg:py-24 text-center">
                   <motion.div
                     initial={{ opacity: 0, y: 30 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -2092,29 +2092,29 @@ function VidoraApp() {
                     <Badge className="px-4 py-1.5 text-xs font-semibold glass-card text-violet-200 hover:bg-white/10 cursor-default">
                       <Zap className="h-3 w-3 mr-1.5 text-amber-400" />Professional AI Video Studio
                     </Badge>
-                    <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-tight">
+                    <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-tight">
                       <span className="text-white">Create Production-Ready</span>
                       <br />
                       <span className="hero-text-gradient">AI Videos</span>
                     </h1>
-                    <p className="text-lg sm:text-xl text-violet-200/80 max-w-2xl mx-auto leading-relaxed">
+                    <p className="text-base sm:text-lg text-violet-200/80 max-w-2xl mx-auto leading-relaxed">
                       Write scripts, design characters, generate cinematic scenes with AI Director controls. From birthday stories to commercials — all powered by AI.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
                       <Button
                         size="lg"
                         onClick={() => setCurrentView("create")}
-                        className="btn-gradient text-base px-8 py-6 h-auto"
+                        className="btn-gradient text-sm sm:text-base px-6 py-4 h-auto"
                       >
-                        <Sparkles className="h-5 w-5 mr-2" />Start Creating
+                        <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Start Creating
                       </Button>
                       <Button
                         size="lg"
                         variant="outline"
                         onClick={() => setCurrentView("gallery")}
-                        className="glass-card text-white/80 hover:text-white hover:bg-white/10 px-8 py-6 h-auto"
+                        className="glass-card text-white/80 hover:text-white hover:bg-white/10 px-6 py-4 h-auto"
                       >
-                        <LayoutGrid className="h-5 w-5 mr-2" />Browse Templates
+                        <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
                       </Button>
                     </div>
                     <div className="flex items-center justify-center gap-6 sm:gap-8 pt-4 text-sm flex-wrap">
@@ -2142,7 +2142,7 @@ function VidoraApp() {
               {/* Quick Create Cards */}
               <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
                 <div className="text-center mb-8">
-                  <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Quick Create</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Quick Create</h2>
                   <p className="text-muted-foreground mt-1">Choose how you want to start</p>
                 </div>
                 <motion.div {...stagger} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
@@ -2174,7 +2174,7 @@ function VidoraApp() {
               <section className="max-w-6xl mx-auto px-4 sm:px-6 py-12">
                 <div className="section-divider mb-12" />
                 <div className="text-center mb-10">
-                  <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Everything You Need for Professional Videos</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Everything You Need for Professional Videos</h2>
                   <p className="text-muted-foreground mt-2 max-w-2xl mx-auto">From script analysis to AI Director controls, Vidora handles every step.</p>
                 </div>
                 <motion.div {...stagger} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
@@ -2198,7 +2198,7 @@ function VidoraApp() {
               <section className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
                 <div className="section-divider mb-12" />
                 <div className="text-center mb-10">
-                  <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">How It Works</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">How It Works</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   {STEPS.map((step, i) => (
@@ -2220,7 +2220,7 @@ function VidoraApp() {
               <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
                 <div className="section-divider mb-12" />
                 <div className="text-center mb-10">
-                  <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Loved by Creators</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Loved by Creators</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                   {TESTIMONIALS.map((t) => (
@@ -2344,7 +2344,7 @@ function VidoraApp() {
           {currentView === "create" && (
             <motion.div key="create" {...fadeUp} className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
               <div>
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Create New Video</h1>
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Create New Video</h1>
                 <p className="text-muted-foreground mt-1">Write a script, describe a scene, or choose a template</p>
               </div>
 
@@ -3227,7 +3227,7 @@ function VidoraApp() {
           {currentView === "gallery" && (
             <motion.div key="gallery" {...fadeUp} className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
               <div>
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Scene Templates</h1>
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Scene Templates</h1>
                 <p className="text-muted-foreground mt-1">Choose a pre-designed scene to start creating</p>
               </div>
 
@@ -3311,7 +3311,7 @@ function VidoraApp() {
                     <Coins className="h-5 w-5" />
                   </div>
                 </div>
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Buy Tokens</h1>
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Buy Tokens</h1>
                 <p className="text-muted-foreground max-w-lg mx-auto">
                   Purchase tokens to download your AI-generated videos. Each download costs 1 token.
                 </p>
@@ -3391,7 +3391,7 @@ function VidoraApp() {
                   <BarChart3 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Dashboard</h1>
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
                   <p className="text-muted-foreground text-sm">Welcome back, {userProfile?.name || "User"}</p>
                 </div>
               </div>
@@ -3570,7 +3570,7 @@ function VidoraApp() {
                   <User className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">My Profile</h1>
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight">My Profile</h1>
                   <p className="text-muted-foreground text-sm">Manage your account and view activity</p>
                 </div>
               </div>
@@ -3798,7 +3798,7 @@ function VidoraApp() {
                   <ShieldCheck className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Admin Dashboard</h1>
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Admin Dashboard</h1>
                   <p className="text-muted-foreground text-sm">Manage users, payments, and system configuration</p>
                 </div>
               </div>
