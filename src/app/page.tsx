@@ -23,6 +23,7 @@ import {
   LogIn, LogOut, User, CreditCard, Wallet, Coins, ShieldCheck,
   Building2, DollarSign, BarChart3, TrendingUp, KeyRound,
   Package, ShoppingBag, Bell, Mail, History, ArrowRight, UserCircle, Calendar, TrendingDown,
+  Check, Menu, Home, FolderPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -574,7 +575,12 @@ function VidoraApp() {
   const [adminPayments, setAdminPayments] = useState<unknown[]>([]);
   const [adminAnalytics, setAdminAnalytics] = useState<Record<string, unknown> | null>(null);
   const [adminConfigs, setAdminConfigs] = useState<Record<string, { value: string; description: string }>>({});
+  // configForm is the editable working copy — separate from adminConfigs (loaded snapshot)
+  // This prevents mid-edit reloads from wiping unsaved field changes.
+  const [configForm, setConfigForm] = useState<Record<string, string>>({});
   const [adminLoading, setAdminLoading] = useState(false);
+  const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
+  const [activeGatewayTab, setActiveGatewayTab] = useState<string>("paystack");
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
@@ -1532,11 +1538,115 @@ function VidoraApp() {
       if (usersData.success) setAdminUsers(usersData.users);
       if (paymentsData.success) setAdminPayments(paymentsData.payments);
       if (analyticsData.success) setAdminAnalytics(analyticsData.analytics);
-      if (configData.success) setAdminConfigs(configData.configs);
+      if (configData.success) {
+        setAdminConfigs(configData.configs);
+        // Sync the editable form with loaded values (only keys that exist in the form)
+        const formUpdate: Record<string, string> = {};
+        Object.entries(configData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
+          formUpdate[k] = v.value || "";
+        });
+        setConfigForm(formUpdate);
+        // Set the active gateway tab to the currently active gateway
+        if (configData.configs.payment_gateway?.value) {
+          setActiveGatewayTab(configData.configs.payment_gateway.value);
+        }
+      }
     } catch { /* ignore */ }
     finally { setAdminLoading(false); }
   }, []);
 
+  // Save only the fields belonging to the specified gateway — no global reload mid-edit.
+  const handleSaveGatewayConfig = async (gateway: string, fields: string[]) => {
+    setSavingConfigKey(gateway);
+    try {
+      const updates: Record<string, string> = {};
+      fields.forEach((f) => { updates[f] = configForm[f] || ""; });
+      const res = await fetch("/api/admin/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ configs: updates }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${gateway.charAt(0).toUpperCase() + gateway.slice(1)} configuration saved` });
+        // Reload to confirm persisted state, but DON'T wipe the form — merge loaded values
+        const cfgRes = await fetch("/api/admin/config");
+        const cfgData = await cfgRes.json();
+        if (cfgData.success) {
+          setAdminConfigs(cfgData.configs);
+          const merged: Record<string, string> = { ...configForm };
+          Object.entries(cfgData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
+            merged[k] = v.value || "";
+          });
+          setConfigForm(merged);
+        }
+      } else {
+        toast({ title: "Failed to save config", description: data.error || "Please try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save config", variant: "destructive" });
+    } finally {
+      setSavingConfigKey(null);
+    }
+  };
+
+  // Set the active payment gateway (separate from field edits)
+  const handleSetActiveGateway = async (gateway: string) => {
+    setSavingConfigKey("payment_gateway");
+    try {
+      const res = await fetch("/api/admin/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ configs: { payment_gateway: gateway } }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${gateway.charAt(0).toUpperCase() + gateway.slice(1)} is now the active gateway` });
+        setActiveGatewayTab(gateway);
+        // Update both adminConfigs and configForm without a full reload
+        setAdminConfigs((prev) => ({ ...prev, payment_gateway: { value: gateway, description: prev.payment_gateway?.description || "" } }));
+        setConfigForm((prev) => ({ ...prev, payment_gateway: gateway }));
+      }
+    } catch {
+      toast({ title: "Failed to set active gateway", variant: "destructive" });
+    } finally {
+      setSavingConfigKey(null);
+    }
+  };
+
+  // Save AI provider config
+  const handleSaveAIConfig = async (provider: string, fields: string[]) => {
+    setSavingConfigKey(provider);
+    try {
+      const updates: Record<string, string> = {};
+      fields.forEach((f) => { updates[f] = configForm[f] || ""; });
+      const res = await fetch("/api/admin/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ configs: updates }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${provider} configuration saved` });
+        const cfgRes = await fetch("/api/admin/config");
+        const cfgData = await cfgRes.json();
+        if (cfgData.success) {
+          setAdminConfigs(cfgData.configs);
+          const merged: Record<string, string> = { ...configForm };
+          Object.entries(cfgData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
+            merged[k] = v.value || "";
+          });
+          setConfigForm(merged);
+        }
+      }
+    } catch {
+      toast({ title: "Failed to save config", variant: "destructive" });
+    } finally {
+      setSavingConfigKey(null);
+    }
+  };
+
+  // Backward-compatible generic save (used by AI provider radio buttons)
   const handleAdminSaveConfig = async (configs: Record<string, string>) => {
     try {
       const res = await fetch("/api/admin/config", {
@@ -1547,11 +1657,24 @@ function VidoraApp() {
       const data = await res.json();
       if (data.success) {
         toast({ title: "Configuration saved" });
-        handleAdminLoadData();
+        // Merge into local state — no full reload
+        setAdminConfigs((prev) => {
+          const next = { ...prev };
+          Object.entries(configs).forEach(([k, v]) => {
+            next[k] = { value: v, description: next[k]?.description || "" };
+          });
+          return next;
+        });
+        setConfigForm((prev) => ({ ...prev, ...configs }));
       }
     } catch {
       toast({ title: "Failed to save config", variant: "destructive" });
     }
+  };
+
+  // Update a single configForm field
+  const updateConfigField = (key: string, value: string) => {
+    setConfigForm((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleAdminUpdateUser = async (userId: string, updates: Record<string, unknown>) => {
@@ -1725,63 +1848,57 @@ function VidoraApp() {
     <div className="min-h-screen flex flex-col bg-background">
       {/* ── Header ── */}
       <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-2">
           <button
             onClick={() => currentView !== "home" ? setCurrentView("home") : undefined}
-            className="flex items-center gap-2.5 font-bold text-lg hover:opacity-80 transition-opacity"
+            className="flex items-center gap-2 font-bold text-base sm:text-lg hover:opacity-80 transition-opacity shrink-0"
           >
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
-              <Clapperboard className="h-4 w-4 text-white" />
+            <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
+              <Clapperboard className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-white" />
             </div>
             <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent font-extrabold tracking-tight">
               Vidora
             </span>
-            <Badge variant="outline" className="text-xs font-semibold text-violet-500 border-violet-200 ml-1">
+            <Badge variant="outline" className="text-xs font-semibold text-violet-500 border-violet-200 ml-0.5 hidden sm:inline">
               PRO
             </Badge>
           </button>
-          <div className="flex items-center gap-2">
-            {currentView === "home" && (
-              <Button onClick={() => setCurrentView("create")} size="sm" className="btn-gradient">
-                <Sparkles className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Create Video</span>
-              </Button>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Desktop: inline buttons */}
+            {session?.user && (
+              <div className="hidden md:flex items-center gap-1.5">
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
+                  <BarChart3 className="h-4 w-4 mr-1" />Dashboard
+                </Button>
+                {userProfile?.role === "admin" && (
+                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
+                    <ShieldCheck className="h-4 w-4 mr-1" />Admin
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
+                  <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
+                  <User className="h-4 w-4 mr-1" />Profile
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
+                  <LogOut className="h-4 w-4 mr-1" />Sign Out
+                </Button>
+              </div>
             )}
-            {currentView !== "home" && (
-              <Button variant="ghost" size="sm" onClick={() => setCurrentView("home")} className="hover:bg-violet-50">
-                <ArrowLeft className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Back</span>
-              </Button>
-            )}
-            {/* Auth / User controls — mobile dropdown, desktop inline */}
+            {/* Mobile: token badge + dropdown menu */}
             {session?.user ? (
               <>
-                {/* Desktop: inline buttons */}
-                <div className="hidden md:flex items-center gap-1.5">
-                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
-                    <BarChart3 className="h-4 w-4 mr-1" />Dashboard
-                  </Button>
-                  {userProfile?.role === "admin" && (
-                    <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
-                      <ShieldCheck className="h-4 w-4 mr-1" />Admin
-                    </Button>
-                  )}
-                  <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50">
-                    <Coins className="h-4 w-4 mr-1" />{userTokens} tokens
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
-                    <User className="h-4 w-4 mr-1" />Profile
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
-                    <LogOut className="h-4 w-4 mr-1" />Sign Out
-                  </Button>
-                </div>
-                {/* Mobile: dropdown menu */}
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="md:hidden border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
+                  <Coins className="h-4 w-4" /><span className="ml-1 text-xs font-bold">{userTokens}</span>
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="md:hidden h-9 w-9 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200">
+                    <Button variant="ghost" size="icon" className="md:hidden h-9 w-9 rounded-full bg-violet-100 text-violet-600 hover:bg-violet-200 shrink-0">
                       <User className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuContent align="end" className="w-56">
                     <div className="px-2 py-1.5">
                       <p className="text-sm font-semibold truncate">{userProfile?.name || session.user?.email}</p>
                       <p className="text-xs text-muted-foreground truncate">{session.user?.email}</p>
@@ -1811,8 +1928,8 @@ function VidoraApp() {
                 </DropdownMenu>
               </>
             ) : (
-              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hover:bg-violet-50">
-                <LogIn className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Sign In</span>
+              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hover:bg-violet-50 shrink-0">
+                <LogIn className="h-4 w-4" /><span className="ml-1.5 sm:hidden">Sign In</span><span className="hidden sm:inline ml-1.5">Sign In</span>
               </Button>
             )}
           </div>
@@ -1820,7 +1937,7 @@ function VidoraApp() {
       </header>
 
       {/* ── Main Content ── */}
-      <main className="flex-1">
+      <main className="flex-1 pb-20 md:pb-0">
         <AnimatePresence mode="wait">
 
           {/* ═══════════════════════════════════════════════════════
@@ -3584,14 +3701,14 @@ function VidoraApp() {
                   {/* Payment Gateway Config */}
                   <Card className="border-0 shadow-lg shadow-black/5">
                     <CardHeader className="pb-3">
-                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <CardTitle className="text-base font-bold flex items-center gap-2 flex-wrap">
                         <Building2 className="h-4 w-4 text-violet-500" />
                         Payment Gateway Configuration
                         {adminConfigs.payment_gateway?.value && (
                           <Badge variant="outline" className={`ml-auto text-xs font-medium ${
                             adminConfigs.payment_gateway?.value === "paystack" ? "bg-violet-50 text-violet-600 border-violet-200" :
-                            adminConfigs.payment_gateway?.value === "hubtel" ? "bg-blue-50 text-blue-600 border-blue-200" :
-                            "bg-indigo-50 text-indigo-600 border-indigo-200"
+                            adminConfigs.payment_gateway?.value === "hubtel" ? "bg-amber-50 text-amber-600 border-amber-200" :
+                            "bg-emerald-50 text-emerald-600 border-emerald-200"
                           }`}>
                             Active: {adminConfigs.payment_gateway.value}
                           </Badge>
@@ -3599,29 +3716,51 @@ function VidoraApp() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <Tabs defaultValue={adminConfigs.payment_gateway?.value || "paystack"} onValueChange={(v) => handleAdminSaveConfig({ payment_gateway: v })}>
+                      {/* Active gateway selector — NOT auto-save, requires explicit click */}
+                      <div className="mb-5 p-4 rounded-lg bg-slate-50 border border-slate-200">
+                        <Label className="text-sm font-semibold text-slate-700 mb-2 block">Select Active Payment Gateway</Label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(["paystack", "hubtel", "stripe"] as const).map((gw) => (
+                            <Button
+                              key={gw}
+                              size="sm"
+                              variant={adminConfigs.payment_gateway?.value === gw ? "default" : "outline"}
+                              className={`h-auto py-2.5 flex flex-col items-center gap-1 ${
+                                adminConfigs.payment_gateway?.value === gw
+                                  ? "btn-gradient"
+                                  : "hover:bg-slate-100"
+                              }`}
+                              disabled={savingConfigKey === "payment_gateway"}
+                              onClick={() => handleSetActiveGateway(gw)}
+                            >
+                              <span className="text-sm font-semibold capitalize">{gw}</span>
+                              {adminConfigs.payment_gateway?.value === gw && (
+                                <Check className="h-3 w-3" />
+                              )}
+                            </Button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">Only the active gateway is used at checkout. Switch anytime.</p>
+                      </div>
+
+                      {/* Tabs switch the VISIBLE form only — does NOT auto-save or reload */}
+                      <Tabs value={activeGatewayTab} onValueChange={(v) => setActiveGatewayTab(v)}>
                         <TabsList className="grid grid-cols-3 w-full">
-                          <TabsTrigger value="paystack" className="text-sm font-semibold">🇬🇭 Paystack</TabsTrigger>
+                          <TabsTrigger value="paystack" className="text-sm font-semibold">Paystack</TabsTrigger>
                           <TabsTrigger value="hubtel" className="text-sm font-semibold">Hubtel</TabsTrigger>
                           <TabsTrigger value="stripe" className="text-sm font-semibold">Stripe</TabsTrigger>
                         </TabsList>
 
-                        {/* Paystack Tab */}
+                        {/* Paystack Tab — only Paystack fields are saved */}
                         <TabsContent value="paystack" className="space-y-4 mt-4">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-muted-foreground">Accept payments via Paystack (MoMo, Visa, Mastercard)</p>
-                            <Switch
-                              checked={adminConfigs.payment_gateway?.value === "paystack"}
-                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "paystack" })}
-                            />
-                          </div>
+                          <p className="text-sm text-muted-foreground">Accept payments via Paystack (MoMo, Visa, Mastercard)</p>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
                               <Label className="text-sm font-medium">Secret Key</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.paystack_secret_key?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_secret_key: { value: e.target.value, description: "" } })}
+                                value={configForm.paystack_secret_key || ""}
+                                onChange={(e) => updateConfigField("paystack_secret_key", e.target.value)}
                                 placeholder="sk_live_..."
                                 className="h-9 text-sm"
                               />
@@ -3630,8 +3769,8 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Public Key</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.paystack_public_key?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_public_key: { value: e.target.value, description: "" } })}
+                                value={configForm.paystack_public_key || ""}
+                                onChange={(e) => updateConfigField("paystack_public_key", e.target.value)}
                                 placeholder="pk_live_..."
                                 className="h-9 text-sm"
                               />
@@ -3640,8 +3779,8 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Webhook Secret</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.paystack_webhook_secret?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_webhook_secret: { value: e.target.value, description: "" } })}
+                                value={configForm.paystack_webhook_secret || ""}
+                                onChange={(e) => updateConfigField("paystack_webhook_secret", e.target.value)}
                                 placeholder="Paystack webhook verification secret"
                                 className="h-9 text-sm"
                               />
@@ -3651,39 +3790,34 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Currency</Label>
                               <Input
                                 type="text"
-                                value={adminConfigs.paystack_currency?.value || "GHS"}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, paystack_currency: { value: e.target.value, description: "" } })}
+                                value={configForm.paystack_currency || "GHS"}
+                                onChange={(e) => updateConfigField("paystack_currency", e.target.value)}
                                 placeholder="GHS"
                                 className="h-9 text-sm"
                               />
                               <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
                             </div>
                           </div>
-                          <Button onClick={() => {
-                            const updates: Record<string, string> = {};
-                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
-                            handleAdminSaveConfig(updates);
-                          }} className="btn-gradient">
-                            <KeyRound className="h-4 w-4 mr-1.5" />Save Paystack Configuration
+                          <Button
+                            onClick={() => handleSaveGatewayConfig("paystack", ["paystack_secret_key", "paystack_public_key", "paystack_webhook_secret", "paystack_currency"])}
+                            disabled={savingConfigKey === "paystack"}
+                            className="btn-gradient"
+                          >
+                            {savingConfigKey === "paystack" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                            {savingConfigKey === "paystack" ? "Saving..." : "Save Paystack Configuration"}
                           </Button>
                         </TabsContent>
 
-                        {/* Hubtel Tab */}
+                        {/* Hubtel Tab — only Hubtel fields are saved */}
                         <TabsContent value="hubtel" className="space-y-4 mt-4">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
-                            <Switch
-                              checked={adminConfigs.payment_gateway?.value === "hubtel"}
-                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "hubtel" })}
-                            />
-                          </div>
+                          <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
                               <Label className="text-sm font-medium">Client ID</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.hubtel_client_id?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_client_id: { value: e.target.value, description: "" } })}
+                                value={configForm.hubtel_client_id || ""}
+                                onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
                                 placeholder="Hubtel client ID"
                                 className="h-9 text-sm"
                               />
@@ -3692,8 +3826,8 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Client Secret</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.hubtel_client_secret?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_client_secret: { value: e.target.value, description: "" } })}
+                                value={configForm.hubtel_client_secret || ""}
+                                onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
                                 placeholder="Hubtel client secret"
                                 className="h-9 text-sm"
                               />
@@ -3702,8 +3836,8 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Merchant Account Number</Label>
                               <Input
                                 type="text"
-                                value={adminConfigs.hubtel_merchant_id?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_merchant_id: { value: e.target.value, description: "" } })}
+                                value={configForm.hubtel_merchant_id || ""}
+                                onChange={(e) => updateConfigField("hubtel_merchant_id", e.target.value)}
                                 placeholder="HM-XXXXXX"
                                 className="h-9 text-sm"
                               />
@@ -3712,8 +3846,8 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">API Key</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.hubtel_api_key?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_api_key: { value: e.target.value, description: "" } })}
+                                value={configForm.hubtel_api_key || ""}
+                                onChange={(e) => updateConfigField("hubtel_api_key", e.target.value)}
                                 placeholder="Hubtel API key"
                                 className="h-9 text-sm"
                               />
@@ -3722,39 +3856,34 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Currency</Label>
                               <Input
                                 type="text"
-                                value={adminConfigs.hubtel_currency?.value || "GHS"}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, hubtel_currency: { value: e.target.value, description: "" } })}
+                                value={configForm.hubtel_currency || "GHS"}
+                                onChange={(e) => updateConfigField("hubtel_currency", e.target.value)}
                                 placeholder="GHS"
                                 className="h-9 text-sm"
                               />
                               <p className="text-xs text-muted-foreground">Default payment currency (e.g. GHS, USD)</p>
                             </div>
                           </div>
-                          <Button onClick={() => {
-                            const updates: Record<string, string> = {};
-                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
-                            handleAdminSaveConfig(updates);
-                          }} className="btn-gradient">
-                            <KeyRound className="h-4 w-4 mr-1.5" />Save Hubtel Configuration
+                          <Button
+                            onClick={() => handleSaveGatewayConfig("hubtel", ["hubtel_client_id", "hubtel_client_secret", "hubtel_merchant_id", "hubtel_api_key", "hubtel_currency"])}
+                            disabled={savingConfigKey === "hubtel"}
+                            className="btn-gradient"
+                          >
+                            {savingConfigKey === "hubtel" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                            {savingConfigKey === "hubtel" ? "Saving..." : "Save Hubtel Configuration"}
                           </Button>
                         </TabsContent>
 
-                        {/* Stripe Tab */}
+                        {/* Stripe Tab — only Stripe fields are saved */}
                         <TabsContent value="stripe" className="space-y-4 mt-4">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-muted-foreground">Accept payments via Stripe (Card, Apple Pay, Google Pay)</p>
-                            <Switch
-                              checked={adminConfigs.payment_gateway?.value === "stripe"}
-                              onCheckedChange={(checked) => checked && handleAdminSaveConfig({ payment_gateway: "stripe" })}
-                            />
-                          </div>
+                          <p className="text-sm text-muted-foreground">Accept payments via Stripe (Card, Apple Pay, Google Pay)</p>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
                               <Label className="text-sm font-medium">Secret Key</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.stripe_secret_key?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, stripe_secret_key: { value: e.target.value, description: "" } })}
+                                value={configForm.stripe_secret_key || ""}
+                                onChange={(e) => updateConfigField("stripe_secret_key", e.target.value)}
                                 placeholder="sk_live_..."
                                 className="h-9 text-sm"
                               />
@@ -3763,19 +3892,20 @@ function VidoraApp() {
                               <Label className="text-sm font-medium">Publishable Key</Label>
                               <Input
                                 type="password"
-                                value={adminConfigs.stripe_publishable_key?.value || ""}
-                                onChange={(e) => setAdminConfigs({ ...adminConfigs, stripe_publishable_key: { value: e.target.value, description: "" } })}
+                                value={configForm.stripe_publishable_key || ""}
+                                onChange={(e) => updateConfigField("stripe_publishable_key", e.target.value)}
                                 placeholder="pk_live_..."
                                 className="h-9 text-sm"
                               />
                             </div>
                           </div>
-                          <Button onClick={() => {
-                            const updates: Record<string, string> = {};
-                            Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
-                            handleAdminSaveConfig(updates);
-                          }} className="btn-gradient">
-                            <KeyRound className="h-4 w-4 mr-1.5" />Save Stripe Configuration
+                          <Button
+                            onClick={() => handleSaveGatewayConfig("stripe", ["stripe_secret_key", "stripe_publishable_key"])}
+                            disabled={savingConfigKey === "stripe"}
+                            className="btn-gradient"
+                          >
+                            {savingConfigKey === "stripe" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                            {savingConfigKey === "stripe" ? "Saving..." : "Save Stripe Configuration"}
                           </Button>
                         </TabsContent>
                       </Tabs>
@@ -3807,7 +3937,7 @@ function VidoraApp() {
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_video_provider: p })}
                               className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                adminConfigs.ai_video_provider?.value === p
+                                configForm.ai_video_provider === p
                                   ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                               }`}
@@ -3819,8 +3949,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
-                              value={adminConfigs.ai_video_api_key?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_api_key: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_video_api_key || ""}
+                              onChange={(e) => updateConfigField("ai_video_api_key", e.target.value)}
                               placeholder="Enter video provider API key"
                               className="h-9 text-sm"
                             />
@@ -3829,8 +3959,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
-                              value={adminConfigs.ai_video_model?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_video_model: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_video_model || ""}
+                              onChange={(e) => updateConfigField("ai_video_model", e.target.value)}
                               placeholder="e.g. stable-video-diffusion-xt"
                               className="h-9 text-sm"
                             />
@@ -3851,7 +3981,7 @@ function VidoraApp() {
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_image_provider: p })}
                               className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                adminConfigs.ai_image_provider?.value === p
+                                configForm.ai_image_provider === p
                                   ? "bg-gradient-to-r from-fuchsia-500 to-pink-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                               }`}
@@ -3863,8 +3993,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
-                              value={adminConfigs.ai_image_api_key?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_api_key: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_image_api_key || ""}
+                              onChange={(e) => updateConfigField("ai_image_api_key", e.target.value)}
                               placeholder="Enter image provider API key"
                               className="h-9 text-sm"
                             />
@@ -3873,8 +4003,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
-                              value={adminConfigs.ai_image_model?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_image_model: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_image_model || ""}
+                              onChange={(e) => updateConfigField("ai_image_model", e.target.value)}
                               placeholder="e.g. flux-pro, sdxl-turbo"
                               className="h-9 text-sm"
                             />
@@ -3895,7 +4025,7 @@ function VidoraApp() {
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_tts_provider: p })}
                               className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                adminConfigs.ai_tts_provider?.value === p
+                                configForm.ai_tts_provider === p
                                   ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                               }`}
@@ -3907,8 +4037,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
-                              value={adminConfigs.ai_tts_api_key?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_api_key: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_tts_api_key || ""}
+                              onChange={(e) => updateConfigField("ai_tts_api_key", e.target.value)}
                               placeholder="Enter TTS provider API key"
                               className="h-9 text-sm"
                             />
@@ -3917,8 +4047,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
-                              value={adminConfigs.ai_tts_model?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_tts_model: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_tts_model || ""}
+                              onChange={(e) => updateConfigField("ai_tts_model", e.target.value)}
                               placeholder="e.g. eleven_multilingual_v2, tts-1"
                               className="h-9 text-sm"
                             />
@@ -3939,7 +4069,7 @@ function VidoraApp() {
                               key={p}
                               onClick={() => handleAdminSaveConfig({ ai_llm_provider: p })}
                               className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                adminConfigs.ai_llm_provider?.value === p
+                                configForm.ai_llm_provider === p
                                   ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
                                   : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                               }`}
@@ -3951,8 +4081,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">API Key</Label>
                             <Input
                               type="password"
-                              value={adminConfigs.ai_llm_api_key?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_api_key: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_llm_api_key || ""}
+                              onChange={(e) => updateConfigField("ai_llm_api_key", e.target.value)}
                               placeholder="Enter LLM API key"
                               className="h-9 text-sm"
                             />
@@ -3961,8 +4091,8 @@ function VidoraApp() {
                             <Label className="text-sm text-muted-foreground">Model</Label>
                             <Input
                               type="text"
-                              value={adminConfigs.ai_llm_model?.value || ""}
-                              onChange={(e) => setAdminConfigs({ ...adminConfigs, ai_llm_model: { value: e.target.value, description: "" } })}
+                              value={configForm.ai_llm_model || ""}
+                              onChange={(e) => updateConfigField("ai_llm_model", e.target.value)}
                               placeholder="e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b"
                               className="h-9 text-sm"
                             />
@@ -3970,12 +4100,13 @@ function VidoraApp() {
                         </div>
                       </div>
 
-                      <Button onClick={() => {
-                        const updates: Record<string, string> = {};
-                        Object.entries(adminConfigs).forEach(([k, c]) => { updates[k] = c.value; });
-                        handleAdminSaveConfig(updates);
-                      }} className="btn-gradient">
-                        <KeyRound className="h-4 w-4 mr-1.5" />Save AI Configuration
+                      <Button
+                        onClick={() => handleSaveAIConfig("ai-providers", ["ai_video_api_key", "ai_video_model", "ai_image_api_key", "ai_image_model", "ai_tts_api_key", "ai_tts_model", "ai_llm_api_key", "ai_llm_model"])}
+                        disabled={savingConfigKey === "ai-providers"}
+                        className="btn-gradient"
+                      >
+                        {savingConfigKey === "ai-providers" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
+                        {savingConfigKey === "ai-providers" ? "Saving..." : "Save AI Configuration"}
                       </Button>
                     </CardContent>
                   </Card>
@@ -4042,6 +4173,51 @@ function VidoraApp() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* ── Mobile Bottom Navigation (native app feel) ── */}
+      {session?.user && (
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur-lg safe-area-pb" style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+          <div className="grid grid-cols-5 h-16">
+            <button
+              onClick={() => setCurrentView("home")}
+              className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${currentView === "home" ? "text-violet-600" : "text-slate-400"}`}
+            >
+              <Home className="h-5 w-5" />
+              <span className="text-[10px] font-medium">Home</span>
+            </button>
+            <button
+              onClick={() => setCurrentView("dashboard")}
+              className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${currentView === "dashboard" ? "text-violet-600" : "text-slate-400"}`}
+            >
+              <BarChart3 className="h-5 w-5" />
+              <span className="text-[10px] font-medium">Stats</span>
+            </button>
+            <button
+              onClick={() => setCurrentView("create")}
+              className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${currentView === "create" || currentView === "studio" ? "text-violet-600" : "text-slate-400"}`}
+            >
+              <div className={`h-9 w-9 rounded-full flex items-center justify-center -mt-3 shadow-lg ${currentView === "create" || currentView === "studio" ? "bg-gradient-to-br from-violet-500 to-fuchsia-500" : "bg-gradient-to-br from-violet-400 to-fuchsia-400"} text-white`}>
+                <Plus className="h-5 w-5" />
+              </div>
+              <span className="text-[10px] font-medium -mt-0.5">Create</span>
+            </button>
+            <button
+              onClick={() => setCurrentView("buy-tokens")}
+              className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${currentView === "buy-tokens" ? "text-amber-600" : "text-slate-400"}`}
+            >
+              <Coins className="h-5 w-5" />
+              <span className="text-[10px] font-medium">Tokens</span>
+            </button>
+            <button
+              onClick={() => setCurrentView("profile")}
+              className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${currentView === "profile" || currentView === "admin" ? "text-violet-600" : "text-slate-400"}`}
+            >
+              <User className="h-5 w-5" />
+              <span className="text-[10px] font-medium">Profile</span>
+            </button>
+          </div>
+        </nav>
+      )}
 
       {/* ═══════════════════════════════════════════════════════
           DIALOGS

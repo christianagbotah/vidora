@@ -67,29 +67,32 @@ export async function PUT(req: NextRequest) {
 
     const results: Record<string, string> = {};
 
-    for (const [key, value] of Object.entries(updates)) {
-      if (!(key in CONFIG_SCHEMA)) continue;
+    // Use a transaction so all fields save atomically — no partial saves.
+    await db.$transaction(async (tx) => {
+      for (const [key, value] of Object.entries(updates)) {
+        if (!(key in CONFIG_SCHEMA)) continue;
 
-      const existing = await db.systemConfig.findUnique({ where: { key } });
-      const strValue = String(value);
+        const strValue = String(value);
+        const existing = await tx.systemConfig.findUnique({ where: { key } });
 
-      if (existing) {
-        await db.systemConfig.update({
-          where: { key },
-          data: { value: strValue },
-        });
-      } else {
-        await db.systemConfig.create({
-          data: {
-            key,
-            value: strValue,
-            description: CONFIG_SCHEMA[key],
-          },
-        });
+        if (existing) {
+          await tx.systemConfig.update({
+            where: { key },
+            data: { value: strValue },
+          });
+        } else {
+          await tx.systemConfig.create({
+            data: {
+              key,
+              value: strValue,
+              description: CONFIG_SCHEMA[key],
+            },
+          });
+        }
+
+        results[key] = strValue;
       }
-
-      results[key] = strValue;
-    }
+    });
 
     return NextResponse.json({ success: true, updated: results });
   } catch (error) {

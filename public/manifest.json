@@ -1,0 +1,19 @@
+{
+  "name": "Vidora — AI Video Creator",
+  "short_name": "Vidora",
+  "description": "Create production-ready AI videos from scripts, text, voice, or images.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "video", "creativity"]
+}
