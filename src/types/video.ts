@@ -28,6 +28,13 @@ export interface VideoScene {
   mood?: string | null;
   cameraMove?: string | null;
   musicMood?: string | null;
+  musicTrackUrl?: string | null;
+  musicVolume?: number;
+  subtitleSrt?: string | null;
+  subtitleStatus?: string | null;
+  subtitleLang?: string | null;
+  burnSubtitles?: boolean;
+  narrationLang?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
   videoUrl?: string | null;

@@ -25,6 +25,8 @@ import {
   Package, ShoppingBag, Bell, Mail, History, ArrowRight, UserCircle, Calendar, TrendingDown,
   Check, Menu, Home, FolderPlus,
   Pencil, Power, Save, ChevronUp, ChevronDown, Sparkle, AlertCircle,
+  Share2, Music2, Subtitles, Languages, BarChart2, Globe, Image as ImageIcon2,
+  Building, Youtube, Instagram, Facebook, Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +52,7 @@ import {
 import DeviceSimulator from "@/components/DeviceSimulator";
 import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
+import { ShareDialog } from "@/components/ShareDialog";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -226,6 +229,7 @@ function SortableSceneCard({
   onPreview, onGenerate, onRetry, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
   isGeneratingNarration,
+  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
   onPreview: (url: string) => void;
@@ -239,6 +243,11 @@ function SortableSceneCard({
   onCameraChange: (id: string, camera: string) => void;
   onLightingChange: (id: string, lighting: string) => void;
   isGeneratingNarration: boolean;
+  onSetMusic: (sceneId: string, trackUrl: string | null, volume: number) => void;
+  onGenerateSubtitles: (sceneId: string) => void;
+  onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
+  onGenerateDubbing: (sceneId: string, lang: string, langName: string) => void;
+  musicTracks: Array<{ id: string; title: string; mood: string; url: string; duration: number }>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } = useSortable({ id: scene.id });
   const style = {
@@ -431,6 +440,66 @@ function SortableSceneCard({
               >
                 <Wand2 className="h-3.5 w-3.5 mr-1" />AI Enhance
               </Button>
+              {/* ── Music Picker ── */}
+              <Select
+                value={scene.musicTrackUrl || "none"}
+                onValueChange={(v) => onSetMusic(scene.id, v === "none" ? null : v, scene.musicVolume || 30)}
+              >
+                <SelectTrigger className="h-7 w-28 text-xs px-1.5">
+                  <Music2 className="h-3 w-3 mr-1 inline" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none"><span className="text-xs">No music</span></SelectItem>
+                  {musicTracks.map((t) => (
+                    <SelectItem key={t.id} value={t.url}>
+                      <span className="text-xs">{t.title}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* ── Subtitle Button ── */}
+              <Button
+                size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                onClick={() => onGenerateSubtitles(scene.id)}
+                title="Generate AI subtitles"
+              >
+                <Subtitles className="h-3.5 w-3.5 mr-1" />
+                {scene.subtitleStatus === "ready" ? "Subs ✓" : scene.subtitleStatus === "generating" ? "..." : "Subs"}
+              </Button>
+              {scene.subtitleStatus === "ready" && (
+                <Button
+                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                  onClick={() => onToggleBurnSubtitles(scene.id, !scene.burnSubtitles)}
+                  title={scene.burnSubtitles ? "Subtitles will be burned into video" : "Click to burn subtitles into video"}
+                >
+                  <Subtitles className={`h-3.5 w-3.5 mr-1 ${scene.burnSubtitles ? "text-violet-600" : ""}`} />
+                  {scene.burnSubtitles ? "Burn ✓" : "Burn"}
+                </Button>
+              )}
+              {/* ── Dubbing Button ── */}
+              <Select
+                value="dub"
+                onValueChange={(v) => {
+                  const langs: Record<string, string> = {
+                    fr: "French", twi: "Twi", ga: "Ga", ha: "Hausa", es: "Spanish", sw: "Swahili",
+                  };
+                  if (langs[v]) onGenerateDubbing(scene.id, v, langs[v]);
+                }}
+              >
+                <SelectTrigger className="h-7 w-24 text-xs px-1.5">
+                  <Languages className="h-3 w-3 mr-1 inline" />
+                  <SelectValue placeholder="Dub" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fr"><span className="text-xs">🇫🇷 French</span></SelectItem>
+                  <SelectItem value="twi"><span className="text-xs">🇬🇭 Twi</span></SelectItem>
+                  <SelectItem value="ga"><span className="text-xs">🇬🇭 Ga</span></SelectItem>
+                  <SelectItem value="ha"><span className="text-xs">🇬🇭 Hausa</span></SelectItem>
+                  <SelectItem value="es"><span className="text-xs">🇪🇸 Spanish</span></SelectItem>
+                  <SelectItem value="sw"><span className="text-xs">🇰🇪 Swahili</span></SelectItem>
+                </SelectContent>
+              </Select>
               <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
                 <SelectTrigger className="h-7 w-24 text-xs px-1.5">
                   <SelectValue />
@@ -602,6 +671,34 @@ function VidoraApp() {
     coverImage: string; accentColor: string; tagline: string; sceneCount: number;
     targetDuration: number; projectType: string; aspectRatio: string;
   }>>([]);
+
+  /* ── Advanced Features State ── */
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [analyticsDialogOpen, setAnalyticsDialogOpen] = useState(false);
+  const [brandKitDialogOpen, setBrandKitDialogOpen] = useState(false);
+  const [socialDialogOpen, setSocialDialogOpen] = useState(false);
+  const [marketplaceView, setMarketplaceView] = useState(false);
+  const [marketplaceTemplates, setMarketplaceTemplates] = useState<Array<{
+    slug: string; title: string; description: string; category: string;
+    coverImage: string; accentColor: string; sceneCount: number;
+    isFeatured: boolean; targetDuration: number; style: string; aspectRatio: string;
+  }>>([]);
+  const [marketplaceCategory, setMarketplaceCategory] = useState("all");
+  const [marketplaceCategories, setMarketplaceCategories] = useState<string[]>([]);
+  const [usingTemplate, setUsingTemplate] = useState<string | null>(null);
+  const [analyticsData, setAnalyticsData] = useState<Record<string, unknown> | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [musicTracks, setMusicTracks] = useState<Array<{
+    id: string; title: string; mood: string; url: string; duration: number;
+  }>>([]);
+  const [selectedSceneForMusic, setSelectedSceneForMusic] = useState<string | null>(null);
+  const [socialConnections, setSocialConnections] = useState<Array<{
+    platform: string; isConnected: boolean; accountName: string | null;
+  }>>([]);
+  const [publishHistory, setPublishHistory] = useState<Array<{
+    platform: string; externalUrl: string | null; status: string; publishedAt: string | null;
+  }>>([]);
+  const [publishingPlatform, setPublishingPlatform] = useState<string | null>(null);
 
   /* ── Auth State ── */
   const { data: session, status: authStatus } = useSession();
@@ -1402,6 +1499,223 @@ function VidoraApp() {
   }, []);
 
   useEffect(() => { fetchDemoTemplates(); }, [fetchDemoTemplates]);
+
+  /* ──────────────────────────────────────────────────────────────
+     ADVANCED FEATURE HANDLERS
+     ────────────────────────────────────────────────────────────── */
+
+  // ── Template Marketplace ──
+  const fetchMarketplaceTemplates = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/templates?category=${marketplaceCategory}`);
+      const data = await res.json();
+      if (data.success) {
+        setMarketplaceTemplates(data.templates);
+        setMarketplaceCategories(data.categories || []);
+      }
+    } catch { /* non-fatal */ }
+  }, [marketplaceCategory]);
+
+  useEffect(() => {
+    if (marketplaceView || currentView === "gallery") fetchMarketplaceTemplates();
+  }, [marketplaceView, currentView, fetchMarketplaceTemplates]);
+
+  const handleUseTemplate = async (slug: string) => {
+    setUsingTemplate(slug);
+    try {
+      const res = await fetch(`/api/templates/${slug}/use`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Project created!", description: data.message });
+        setCurrentProject(data.project);
+        if (data.project.characters) setCharacters(data.project.characters);
+        setMarketplaceView(false);
+        setCurrentView("studio");
+        fetchProjects();
+      } else {
+        toast({ title: "Failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
+    } finally {
+      setUsingTemplate(null);
+    }
+  };
+
+  // ── Music Library ──
+  const fetchMusicTracks = useCallback(async () => {
+    try {
+      const res = await fetch("/api/music/tracks");
+      const data = await res.json();
+      if (data.success) setMusicTracks(data.tracks);
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => { fetchMusicTracks(); }, [fetchMusicTracks]);
+
+  const handleSetSceneMusic = async (sceneId: string, trackUrl: string | null, volume: number) => {
+    try {
+      await fetch(`/api/scenes/${sceneId}/music`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ musicTrackUrl: trackUrl, musicVolume: volume }),
+      });
+      if (currentProject) refreshProject();
+      toast({ title: "Music updated" });
+    } catch {
+      toast({ title: "Failed to update music", variant: "destructive" });
+    }
+  };
+
+  // ── Subtitles ──
+  const handleGenerateSubtitles = async (sceneId: string) => {
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}/subtitles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: "en" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Subtitles generated!", description: "SRT captions are ready for this scene." });
+        if (currentProject) refreshProject();
+      } else {
+        toast({ title: "Subtitle generation failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
+    }
+  };
+
+  const handleToggleBurnSubtitles = async (sceneId: string, burn: boolean) => {
+    try {
+      await fetch(`/api/scenes/${sceneId}/subtitles`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ burnSubtitles: burn }),
+      });
+      if (currentProject) refreshProject();
+    } catch { /* non-fatal */ }
+  };
+
+  // ── Dubbing ──
+  const handleGenerateDubbing = async (sceneId: string, lang: string, langName: string) => {
+    toast({ title: `Generating ${langName} dubbing...`, description: "Translating and synthesizing voice." });
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}/dubbing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${langName} dubbing ready!`, description: "Translation + voice generated." });
+      } else {
+        toast({ title: "Dubbing failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
+    }
+  };
+
+  // ── Analytics ──
+  const handleOpenAnalytics = async () => {
+    if (!currentProject) return;
+    setAnalyticsDialogOpen(true);
+    setAnalyticsLoading(true);
+    try {
+      const res = await fetch(`/api/analytics/${currentProject.id}/summary`);
+      const data = await res.json();
+      if (data.success) setAnalyticsData(data);
+    } catch { /* non-fatal */ }
+    setAnalyticsLoading(false);
+  };
+
+  // ── Social Publishing ──
+  const fetchSocialConnections = useCallback(async () => {
+    if (authStatus !== "authenticated") return;
+    try {
+      const res = await fetch("/api/social/connections");
+      const data = await res.json();
+      if (data.success) setSocialConnections(data.connections);
+    } catch { /* non-fatal */ }
+  }, [authStatus]);
+
+  const fetchPublishHistory = useCallback(async () => {
+    if (!currentProject) return;
+    try {
+      const res = await fetch(`/api/social/publish?projectId=${currentProject.id}`);
+      const data = await res.json();
+      if (data.success) setPublishHistory(data.publishes);
+    } catch { /* non-fatal */ }
+  }, [currentProject]);
+
+  useEffect(() => {
+    if (socialDialogOpen) {
+      fetchSocialConnections();
+      fetchPublishHistory();
+    }
+  }, [socialDialogOpen, fetchSocialConnections, fetchPublishHistory]);
+
+  const handleToggleConnection = async (platform: string) => {
+    try {
+      await fetch("/api/social/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform }),
+      });
+      fetchSocialConnections();
+    } catch { /* non-fatal */ }
+  };
+
+  const handlePublish = async (platform: string) => {
+    if (!currentProject) return;
+    setPublishingPlatform(platform);
+    try {
+      const res = await fetch("/api/social/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentProject.id, platform }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `Published to ${platform}!`, description: data.message });
+        fetchPublishHistory();
+      } else {
+        toast({ title: "Publish failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
+    } finally {
+      setPublishingPlatform(null);
+    }
+  };
+
+  // ── Branded Export ──
+  const handleExportBranded = async (options: { burnSubtitles?: boolean; addMusic?: boolean; addWatermark?: boolean }) => {
+    if (!currentProject) return;
+    toast({ title: "Exporting branded video...", description: "Adding watermark, music, and subtitles." });
+    try {
+      const res = await fetch("/api/export-branded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentProject.id, options }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Branded export ready!", description: "Your video has been exported with branding." });
+        if (currentProject) refreshProject();
+      } else {
+        toast({ title: "Export failed", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", variant: "destructive" });
+    }
+  };
 
   const handleGenerateStoryboardPreview = async () => {
     if (authStatus !== "authenticated") {
@@ -3372,6 +3686,29 @@ function VidoraApp() {
                     </Button>
                   </a>
                 )}
+                {/* ── Advanced Feature Buttons ── */}
+                <Button
+                  onClick={() => setShareDialogOpen(true)}
+                  variant="outline"
+                  className="text-violet-600 border-violet-200 hover:bg-violet-50"
+                >
+                  <Share2 className="h-4 w-4 mr-1.5" />Share
+                </Button>
+                <Button
+                  onClick={handleOpenAnalytics}
+                  variant="outline"
+                  disabled={!currentProject}
+                >
+                  <BarChart2 className="h-4 w-4 mr-1.5" />Analytics
+                </Button>
+                <Button
+                  onClick={() => setSocialDialogOpen(true)}
+                  variant="outline"
+                  className="text-rose-600 border-rose-200 hover:bg-rose-50"
+                  disabled={!currentProject?.finalVideoUrl}
+                >
+                  <Send className="h-4 w-4 mr-1.5" />Publish
+                </Button>
               </div>
 
               {/* ── Character Panel ── */}
@@ -3521,6 +3858,11 @@ function VidoraApp() {
                               onCameraChange={handleSceneCameraChange}
                               onLightingChange={handleSceneLightingChange}
                               isGeneratingNarration={isGeneratingNarration}
+                              onSetMusic={handleSetSceneMusic}
+                              onGenerateSubtitles={handleGenerateSubtitles}
+                              onToggleBurnSubtitles={handleToggleBurnSubtitles}
+                              onGenerateDubbing={handleGenerateDubbing}
+                              musicTracks={musicTracks}
                             />
                           ))}
                         </div>
@@ -3662,6 +4004,95 @@ function VidoraApp() {
                 <Button variant="outline" onClick={() => setCurrentView("home")}>
                   <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
                 </Button>
+              </div>
+
+              {/* ── Template Marketplace ── */}
+              <div className="pt-8 border-t border-slate-200">
+                <div className="text-center mb-6">
+                  <Badge className="mb-2 bg-violet-50 text-violet-700 border-violet-200">
+                    <Building className="h-3 w-3 mr-1" />Industry Templates
+                  </Badge>
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Start from a Professional Template</h2>
+                  <p className="text-muted-foreground mt-1">Pre-built storyboards for real estate, restaurants, products, and more.</p>
+                </div>
+
+                {/* Category filter */}
+                <div className="flex items-center gap-2 flex-wrap mb-4 justify-center">
+                  <Button
+                    variant={marketplaceCategory === "all" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setMarketplaceCategory("all")}
+                    className={marketplaceCategory === "all" ? "btn-gradient" : ""}
+                  >
+                    All
+                  </Button>
+                  {marketplaceCategories.map((cat) => (
+                    <Button
+                      key={cat}
+                      variant={marketplaceCategory === cat ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setMarketplaceCategory(cat)}
+                      className={marketplaceCategory === cat ? "btn-gradient" : ""}
+                    >
+                      {cat.replace("-", " ")}
+                    </Button>
+                  ))}
+                </div>
+
+                {/* Template grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  {marketplaceTemplates.map((tpl) => (
+                    <motion.div key={tpl.slug} {...fadeItem}>
+                      <Card
+                        className="card-glow cursor-pointer border-0 shadow-lg shadow-black/5 bg-white overflow-hidden group h-full flex flex-col"
+                        onClick={() => handleUseTemplate(tpl.slug)}
+                      >
+                        <div className="relative aspect-video overflow-hidden">
+                          <img
+                            src={tpl.coverImage}
+                            alt={tpl.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          />
+                          <div className={`absolute inset-0 bg-gradient-to-t ${tpl.accentColor} opacity-20 mix-blend-multiply`} />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                          {tpl.isFeatured && (
+                            <div className="absolute top-2 right-2">
+                              <Badge className="text-xs bg-amber-500 text-white border-0">
+                                <Star className="h-3 w-3 mr-1" />Featured
+                              </Badge>
+                            </div>
+                          )}
+                          <div className="absolute bottom-2 left-3 right-3">
+                            <Badge variant="outline" className="text-xs bg-black/40 text-white border-white/20 capitalize mb-1">
+                              {tpl.category.replace("-", " ")}
+                            </Badge>
+                            <p className="text-white text-xs">{tpl.sceneCount} scenes · {tpl.targetDuration}s</p>
+                          </div>
+                        </div>
+                        <CardHeader className="pb-2 pt-3 flex-1">
+                          <CardTitle className="text-sm font-bold leading-tight">{tpl.title}</CardTitle>
+                          <CardDescription className="text-xs leading-relaxed line-clamp-2 mt-1">
+                            {tpl.description}
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="pt-0 pb-3">
+                          <Button
+                            size="sm"
+                            className="w-full btn-gradient"
+                            disabled={usingTemplate === tpl.slug}
+                            onClick={(e) => { e.stopPropagation(); handleUseTemplate(tpl.slug); }}
+                          >
+                            {usingTemplate === tpl.slug ? (
+                              <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Creating...</>
+                            ) : (
+                              <><FolderPlus className="h-4 w-4 mr-1" />Use Template</>
+                            )}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
               </div>
             </motion.div>
           )}
@@ -5675,6 +6106,200 @@ function VidoraApp() {
               <Sparkles className="h-4 w-4 mr-1.5" />Create Full Video
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════
+          ADVANCED FEATURE DIALOGS
+          ═══════════════════════════════════════════════════════ */}
+
+      {/* ── Share Dialog ── */}
+      {currentProject && (
+        <ShareDialog
+          projectId={currentProject.id}
+          open={shareDialogOpen}
+          onOpenChange={setShareDialogOpen}
+        />
+      )}
+
+      {/* ── Analytics Dialog ── */}
+      <Dialog open={analyticsDialogOpen} onOpenChange={setAnalyticsDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BarChart2 className="h-5 w-5 text-violet-500" />
+              Video Analytics
+            </DialogTitle>
+            <DialogDescription>View tracking and engagement metrics for your shared video.</DialogDescription>
+          </DialogHeader>
+          {analyticsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+            </div>
+          ) : analyticsData ? (
+            <div className="space-y-4">
+              {/* Stats grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <Card className="bg-violet-50 border-violet-100">
+                  <CardContent className="p-3 text-center">
+                    <Eye className="h-5 w-5 mx-auto text-violet-600 mb-1" />
+                    <p className="text-2xl font-bold">{(analyticsData as Record<string, unknown>).totalViews as number}</p>
+                    <p className="text-xs text-muted-foreground">Total Views</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-emerald-50 border-emerald-100">
+                  <CardContent className="p-3 text-center">
+                    <Users className="h-5 w-5 mx-auto text-emerald-600 mb-1" />
+                    <p className="text-2xl font-bold">{(analyticsData as Record<string, unknown>).uniqueViewers as number}</p>
+                    <p className="text-xs text-muted-foreground">Unique Viewers</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-amber-50 border-amber-100">
+                  <CardContent className="p-3 text-center">
+                    <Clock className="h-5 w-5 mx-auto text-amber-600 mb-1" />
+                    <p className="text-2xl font-bold">{(analyticsData as Record<string, unknown>).avgWatchTime as number}s</p>
+                    <p className="text-xs text-muted-foreground">Avg Watch</p>
+                  </CardContent>
+                </Card>
+                <Card className="bg-rose-50 border-rose-100">
+                  <CardContent className="p-3 text-center">
+                    <CheckCircle className="h-5 w-5 mx-auto text-rose-600 mb-1" />
+                    <p className="text-2xl font-bold">{(analyticsData as Record<string, unknown>).completionRate as number}%</p>
+                    <p className="text-xs text-muted-foreground">Completion</p>
+                  </CardContent>
+                </Card>
+              </div>
+              {/* 7-day trend */}
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Last 7 Days</h4>
+                <div className="flex items-end gap-1 h-24">
+                  {((analyticsData as Record<string, unknown>).trend as Array<{ date: string; views: number }>).map((day) => (
+                    <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
+                      <div
+                        className="w-full bg-gradient-to-t from-violet-500 to-fuchsia-500 rounded-t-sm min-h-[2px]"
+                        style={{ height: `${Math.max(2, day.views * 20)}px` }}
+                        title={`${day.views} views`}
+                      />
+                      <span className="text-[10px] text-muted-foreground">{day.date.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Top referers */}
+              {((analyticsData as Record<string, unknown>).topReferers as Array<{ source: string; count: number }>).length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Top Traffic Sources</h4>
+                  <div className="space-y-1">
+                    {((analyticsData as Record<string, unknown>).topReferers as Array<{ source: string; count: number }>).map((ref) => (
+                      <div key={ref.source} className="flex items-center justify-between text-sm py-1 border-b border-slate-100">
+                        <span className="truncate max-w-[200px]">{ref.source}</span>
+                        <Badge variant="outline">{ref.count} views</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground text-center pt-2">
+                Analytics are tracked when someone views your shared video link.
+              </p>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <BarChart2 className="h-10 w-10 mx-auto mb-2 opacity-30" />
+              <p>No analytics data yet.</p>
+              <p className="text-xs">Share your video to start collecting views.</p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Social Publishing Dialog ── */}
+      <Dialog open={socialDialogOpen} onOpenChange={setSocialDialogOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-rose-500" />
+              Publish to Social Media
+            </DialogTitle>
+            <DialogDescription>One-click publish your video to social platforms.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Connections */}
+            <div className="space-y-2">
+              <h4 className="text-sm font-semibold">Connected Accounts</h4>
+              {[
+                { platform: "youtube", icon: Youtube, label: "YouTube", color: "text-red-600" },
+                { platform: "instagram", icon: Instagram, label: "Instagram", color: "text-pink-600" },
+                { platform: "facebook", icon: Facebook, label: "Facebook", color: "text-blue-600" },
+                { platform: "tiktok", icon: Send, label: "TikTok", color: "text-slate-800" },
+                { platform: "twitter", icon: Send, label: "X (Twitter)", color: "text-slate-800" },
+              ].map(({ platform, icon: Icon, label, color }) => {
+                const conn = socialConnections.find((c) => c.platform === platform);
+                const isConnected = conn?.isConnected;
+                return (
+                  <div key={platform} className="flex items-center justify-between p-3 rounded-lg border border-slate-200">
+                    <div className="flex items-center gap-3">
+                      <Icon className={`h-5 w-5 ${color}`} />
+                      <div>
+                        <p className="text-sm font-medium">{label}</p>
+                        <p className="text-xs text-muted-foreground">{isConnected ? conn?.accountName : "Not connected"}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant={isConnected ? "outline" : "default"}
+                        onClick={() => handleToggleConnection(platform)}
+                      >
+                        {isConnected ? "Disconnect" : "Connect"}
+                      </Button>
+                      {isConnected && (
+                        <Button
+                          size="sm"
+                          className="btn-gradient"
+                          disabled={publishingPlatform === platform}
+                          onClick={() => handlePublish(platform)}
+                        >
+                          {publishingPlatform === platform ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <>Publish</>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Publish history */}
+            {publishHistory.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold mb-2">Publish History</h4>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {publishHistory.map((pub, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-slate-100">
+                      <span className="capitalize font-medium">{pub.platform}</span>
+                      <Badge variant={pub.status === "published" ? "default" : "secondary"} className="text-xs">
+                        {pub.status}
+                      </Badge>
+                      {pub.externalUrl && (
+                        <a href={pub.externalUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline">
+                          View →
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-2">
+              <AlertCircle className="h-3.5 w-3.5 inline mr-1" />
+              OAuth integration requires real platform API credentials. Currently running in demo mode — publish creates a mock record to test the UI flow.
+            </p>
+          </div>
         </DialogContent>
       </Dialog>
 
