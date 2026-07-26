@@ -791,6 +791,9 @@ function VidoraApp() {
   const [headerScrolled, setHeaderScrolled] = useState(false);
   // ── Contact dialog (opened from footer) ──
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
+  // ── Docs & API Reference dialogs (opened from footer) ──
+  const [docsDialogOpen, setDocsDialogOpen] = useState(false);
+  const [apiRefDialogOpen, setApiRefDialogOpen] = useState(false);
   // ── Admin: Token Package Management ──
   const [adminPackages, setAdminPackages] = useState<AdminTokenPackage[]>([]);
   const [editingPackage, setEditingPackage] = useState<AdminTokenPackage | null>(null);
@@ -3086,133 +3089,6 @@ function VidoraApp() {
                 </section>
               )}
 
-              {/* Footer */}
-              <footer className="mt-auto border-t bg-slate-50/50">
-                <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-8">
-                    <div className="sm:col-span-2">
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-                          <Clapperboard className="h-3.5 w-3.5 text-white" />
-                        </div>
-                        <span className="font-extrabold text-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">Vidora</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground leading-relaxed max-w-sm">
-                        Professional AI video studio. Create stunning videos from scripts, text prompts, voice, or images with AI-powered scene generation.
-                      </p>
-                      <div className="flex items-center gap-3 mt-4">
-                        <a
-                          href="https://youtube.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors"
-                          aria-label="YouTube"
-                          title="Follow on YouTube"
-                        >
-                          <Youtube className="h-4 w-4" />
-                        </a>
-                        <a
-                          href="https://instagram.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-pink-600 hover:border-pink-200 transition-colors"
-                          aria-label="Instagram"
-                          title="Follow on Instagram"
-                        >
-                          <Instagram className="h-4 w-4" />
-                        </a>
-                        <a
-                          href="https://facebook.com"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-colors"
-                          aria-label="Facebook"
-                          title="Follow on Facebook"
-                        >
-                          <Facebook className="h-4 w-4" />
-                        </a>
-                        <a
-                          href="mailto:hello@lightworldtech.com"
-                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-violet-600 hover:border-violet-200 transition-colors"
-                          aria-label="Email"
-                          title="Email us"
-                        >
-                          <MailIcon className="h-4 w-4" />
-                        </a>
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
-                        <Layers className="h-3.5 w-3.5 text-violet-500" />Product
-                      </h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li>
-                          <button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors text-left">
-                            Create Video
-                          </button>
-                        </li>
-                        <li>
-                          <button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors text-left">
-                            Templates
-                          </button>
-                        </li>
-                        <li>
-                          <button onClick={() => handleTryDemo()} className="hover:text-violet-500 transition-colors text-left">
-                            Features
-                          </button>
-                        </li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
-                        <Shield className="h-3.5 w-3.5 text-fuchsia-500" />Support
-                      </h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li>
-                          <a
-                            href="/docs"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-violet-500 transition-colors flex items-center gap-1"
-                          >
-                            <BookOpen className="h-3 w-3" />Documentation
-                          </a>
-                        </li>
-                        <li>
-                          <a
-                            href="/api/reference"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-violet-500 transition-colors flex items-center gap-1"
-                          >
-                            <Code className="h-3 w-3" />API Reference
-                          </a>
-                        </li>
-                        <li>
-                          <button
-                            onClick={() => setContactDialogOpen(true)}
-                            className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
-                          >
-                            <Phone className="h-3 w-3" />Contact
-                          </button>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                  <Separator className="my-6" />
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <p className="text-xs text-muted-foreground text-center sm:text-left">
-                      &copy; {new Date().getFullYear()} Vidora AI · A product of LightWorld Technologies.
-                    </p>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                      <Globe className="h-3 w-3" />
-                      <a href="https://vidora.lightworldtech.com" className="hover:text-violet-500 transition-colors">
-                        vidora.lightworldtech.com
-                      </a>
-                    </p>
-                  </div>
-                </div>
-              </footer>
             </motion.div>
           )}
 
@@ -5605,6 +5481,140 @@ function VidoraApp() {
         </nav>
       )}
 
+      {/* ── Global Footer (renders on ALL views) ── */}
+      <footer className="mt-auto border-t bg-slate-50/50 pb-20 md:pb-0">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-8">
+            <div className="sm:col-span-2">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                  <Clapperboard className="h-3.5 w-3.5 text-white" />
+                </div>
+                <span className="font-extrabold text-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">Vidora</span>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed max-w-sm">
+                Professional AI video studio. Create stunning videos from scripts, text prompts, voice, or images with AI-powered scene generation.
+              </p>
+              <div className="flex items-center gap-3 mt-4">
+                <a
+                  href="https://youtube.com/@vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors"
+                  aria-label="YouTube"
+                  title="@vidorapro on YouTube"
+                >
+                  <Youtube className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://instagram.com/vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-pink-600 hover:border-pink-200 transition-colors"
+                  aria-label="Instagram"
+                  title="@vidorapro on Instagram"
+                >
+                  <Instagram className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://facebook.com/vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-colors"
+                  aria-label="Facebook"
+                  title="@vidorapro on Facebook"
+                >
+                  <Facebook className="h-4 w-4" />
+                </a>
+                <a
+                  href="mailto:vidora@lightworldtech.com"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-violet-600 hover:border-violet-200 transition-colors"
+                  aria-label="Email"
+                  title="vidora@lightworldtech.com"
+                >
+                  <MailIcon className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://wa.me/233243618186"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-emerald-600 hover:border-emerald-200 transition-colors"
+                  aria-label="WhatsApp"
+                  title="Chat on WhatsApp: 0243618186"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+            <div>
+              <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-violet-500" />Product
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>
+                  <button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors text-left">
+                    Create Video
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors text-left">
+                    Templates
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => handleTryDemo()} className="hover:text-violet-500 transition-colors text-left">
+                    Features
+                  </button>
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-fuchsia-500" />Support
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>
+                  <button
+                    onClick={() => setDocsDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <BookOpen className="h-3 w-3" />Documentation
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setApiRefDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <Code className="h-3 w-3" />API Reference
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setContactDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <Phone className="h-3 w-3" />Contact
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <Separator className="my-6" />
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground text-center sm:text-left">
+              &copy; {new Date().getFullYear()} Vidora AI · A product of LightWorld Technologies.
+            </p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Globe className="h-3 w-3" />
+              <a href="https://vidora.lightworldtech.com" className="hover:text-violet-500 transition-colors" target="_blank" rel="noopener noreferrer">
+                vidora.lightworldtech.com
+              </a>
+            </p>
+          </div>
+        </div>
+      </footer>
+
       {/* ═══════════════════════════════════════════════════════
           MOBILE NAVIGATION DRAWER (hamburger menu)
           ═══════════════════════════════════════════════════════ */}
@@ -6531,7 +6541,7 @@ function VidoraApp() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <a
-              href="mailto:hello@lightworldtech.com"
+              href="mailto:vidora@lightworldtech.com"
               className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-colors group"
             >
               <div className="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 group-hover:bg-violet-200 transition-colors shrink-0">
@@ -6539,11 +6549,11 @@ function VidoraApp() {
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold">Email Us</p>
-                <p className="text-xs text-muted-foreground truncate">hello@lightworldtech.com</p>
+                <p className="text-xs text-muted-foreground truncate">vidora@lightworldtech.com</p>
               </div>
             </a>
             <a
-              href="https://wa.me/233200000000"
+              href="https://wa.me/233243618186"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
@@ -6553,7 +6563,7 @@ function VidoraApp() {
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold">WhatsApp</p>
-                <p className="text-xs text-muted-foreground truncate">Chat with our team</p>
+                <p className="text-xs text-muted-foreground truncate">0243618186</p>
               </div>
             </a>
             <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
@@ -6582,11 +6592,156 @@ function VidoraApp() {
               className="btn-gradient"
               onClick={() => {
                 setContactDialogOpen(false);
-                window.location.href = "mailto:hello@lightworldtech.com";
+                window.location.href = "mailto:vidora@lightworldtech.com";
               }}
             >
               <MailIcon className="h-4 w-4 mr-1.5" /> Send Email
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Documentation Dialog (opened from footer) ── */}
+      <Dialog open={docsDialogOpen} onOpenChange={setDocsDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <BookOpen className="h-4 w-4 text-white" />
+              </div>
+              Vidora Documentation
+            </DialogTitle>
+            <DialogDescription>
+              Everything you need to create AI-powered videos with Vidora.
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4 -mr-4">
+            <div className="space-y-5 text-sm">
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Sparkles className="h-4 w-4 text-violet-500" />Quick Start</h3>
+                <ol className="space-y-2 text-muted-foreground list-decimal list-inside pl-1">
+                  <li>Click <strong className="text-foreground">Start Creating</strong> from the home page.</li>
+                  <li>Choose an input mode: <strong className="text-foreground">Text</strong>, <strong className="text-foreground">Voice</strong>, or <strong className="text-foreground">Image</strong>.</li>
+                  <li>Write or paste your script, then click <strong className="text-foreground">Enhance Prompt</strong> to let AI refine it.</li>
+                  <li>Pick a visual style (Cinematic, Anime, Photorealistic, etc.) and aspect ratio.</li>
+                  <li>Generate scenes — each scene gets an AI image + 10s video clip.</li>
+                  <li>Open the Studio to arrange, dub, subtitle, and add music.</li>
+                  <li>Export the final video or share a public link.</li>
+                </ol>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Wand2 className="h-4 w-4 text-fuchsia-500" />AI Director Controls</h3>
+                <p className="text-muted-foreground mb-2">Per-scene cinematic controls:</p>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li><strong className="text-foreground">Camera:</strong> Aerial Drone, Dolly Zoom, Crane Shot, Handheld, Static Wide.</li>
+                  <li><strong className="text-foreground">Lighting:</strong> Golden Hour, Neon, Soft Box, Backlit, Natural.</li>
+                  <li><strong className="text-foreground">Mood:</strong> Epic, Intimate, Tense, Dreamy, Melancholic.</li>
+                  <li><strong className="text-foreground">Music:</strong> Orchestral, Lo-fi, Electronic, Ambient, Cinematic.</li>
+                  <li><strong className="text-foreground">Transition:</strong> Cut, Fade, Dissolve, Wipe, Zoom.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Languages className="h-4 w-4 text-violet-500" />Dubbing & Subtitles</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li>Generate dubbed audio in <strong className="text-foreground">30+ languages</strong> including English, French, Twi, Yoruba, Hausa, Swahili.</li>
+                  <li>Each dubbed track appears as a playable audio row inside the scene card.</li>
+                  <li>Auto-generated SRT subtitles can be toggled on/off per scene.</li>
+                  <li>Delete a dubbed track anytime — the source audio file is cleaned up.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Share2 className="h-4 w-4 text-fuchsia-500" />Sharing & Brand Kit</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li><strong className="text-foreground">Share Pages:</strong> generate a public link with optional password protection.</li>
+                  <li><strong className="text-foreground">Brand Kit:</strong> upload logo, brand colors, fonts — auto-applied to intros/outros.</li>
+                  <li><strong className="text-foreground">Embed:</strong> copy an iframe snippet for any external site.</li>
+                  <li><strong className="text-foreground">Analytics:</strong> view counts tracked per share page.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Coins className="h-4 w-4 text-amber-500" />Tokens & Billing</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li>Each image generation costs <strong className="text-foreground">1 token</strong>, each video clip <strong className="text-foreground">3 tokens</strong>.</li>
+                  <li>Buy tokens via Paystack (Ghana), Hubtel, or Stripe (international).</li>
+                  <li>Free guests get a no-signup demo. Sign in to save projects and earn bonus tokens.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><MailIcon className="h-4 w-4 text-violet-500" />Need More Help?</h3>
+                <p className="text-muted-foreground">
+                  Reach us at <a href="mailto:vidora@lightworldtech.com" className="text-violet-600 hover:underline font-medium">vidora@lightworldtech.com</a> or WhatsApp <a href="https://wa.me/233243618186" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline font-medium">0243618186</a>. You can also use the AI Assistant chat bubble (bottom-right) for instant answers.
+                </p>
+              </section>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDocsDialogOpen(false)}>Close</Button>
+            <Button className="btn-gradient" onClick={() => { setDocsDialogOpen(false); setCurrentView("create"); }}>
+              <Sparkles className="h-4 w-4 mr-1.5" /> Start Creating
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── API Reference Dialog (opened from footer) ── */}
+      <Dialog open={apiRefDialogOpen} onOpenChange={setApiRefDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <Code className="h-4 w-4 text-white" />
+              </div>
+              Vidora API Reference
+            </DialogTitle>
+            <DialogDescription>
+              REST endpoints for projects, scenes, and AI generation. All routes are relative to your deployment origin.
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4 -mr-4">
+            <div className="space-y-4 text-sm font-mono">
+              {[
+                { method: "GET", path: "/api/projects", desc: "List all video projects for the signed-in user." },
+                { method: "POST", path: "/api/projects", desc: "Create a new video project. Body: { title, description, style, aspectRatio }." },
+                { method: "GET", path: "/api/projects/:id", desc: "Fetch a single project with all scenes, characters, and translations." },
+                { method: "PUT", path: "/api/projects/:id", desc: "Update project metadata or reorder scenes." },
+                { method: "DELETE", path: "/api/projects/:id", desc: "Delete a project and its scenes." },
+                { method: "POST", path: "/api/projects/:id/scenes", desc: "Add a new scene to a project." },
+                { method: "PUT", path: "/api/projects/:id/scenes/:sceneId", desc: "Update scene prompt, AI Director controls, status." },
+                { method: "DELETE", path: "/api/projects/:id/scenes/:sceneId", desc: "Delete a scene." },
+                { method: "POST", path: "/api/enhance-prompt", desc: "LLM-powered prompt enhancement. Body: { prompt }." },
+                { method: "POST", path: "/api/generate-scene", desc: "Generate an AI image for a scene. Body: { sceneId, prompt, style }." },
+                { method: "POST", path: "/api/generate-video", desc: "Batch-generate video clips for all ready scenes in a project." },
+                { method: "POST", path: "/api/transcribe", desc: "ASR — transcribe an uploaded audio file to text." },
+                { method: "POST", path: "/api/analyze-video", desc: "VLM — analyze an uploaded video and return scene descriptions." },
+                { method: "GET", path: "/api/scenes/:id/dubbing", desc: "List dubbed audio translations for a scene + language catalog." },
+                { method: "POST", path: "/api/scenes/:id/dubbing", desc: "Generate a dubbed audio track. Body: { lang }." },
+                { method: "DELETE", path: "/api/scenes/:id/dubbing?lang=xx", desc: "Delete a single dubbed translation by language code." },
+                { method: "GET", path: "/api/history", desc: "List generation history for the signed-in user." },
+                { method: "GET", path: "/api/payments/packages", desc: "List available token packages." },
+                { method: "POST", path: "/api/assistant/chat", desc: "AI assistant chat. Body: { messages: [{role, content}] }." },
+              ].map((endpoint) => (
+                <div key={endpoint.path + endpoint.method} className="border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${endpoint.method === "GET" ? "bg-emerald-100 text-emerald-700" : endpoint.method === "POST" ? "bg-violet-100 text-violet-700" : endpoint.method === "PUT" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"}`}>{endpoint.method}</span>
+                    <code className="text-xs text-foreground break-all">{endpoint.path}</code>
+                  </div>
+                  <p className="text-xs text-muted-foreground font-sans pl-1">{endpoint.desc}</p>
+                </div>
+              ))}
+              <div className="border border-violet-200 bg-violet-50/50 rounded-lg p-3 mt-4 font-sans">
+                <p className="text-xs text-muted-foreground">
+                  <strong className="text-violet-700">Auth:</strong> All endpoints except <code className="text-violet-700">/api/assistant/chat</code> and the public share page require a NextAuth session cookie. Guest demo projects (no userId) are accessible without auth.
+                </p>
+              </div>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApiRefDialogOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
