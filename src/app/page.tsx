@@ -1511,15 +1511,19 @@ function VidoraApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, tokensPurchased: tokens, currency, packageId: pkgId }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ success: false, error: "Invalid server response" }));
       if (data.success && data.authorizationUrl) {
         window.open(data.authorizationUrl, "_blank");
-        toast({ title: "Redirecting to payment..." });
+        toast({ title: "Redirecting to payment...", description: "Complete your payment in the new tab." });
       } else {
-        toast({ title: data.error || "Payment initialization failed", variant: "destructive" });
+        toast({
+          title: "Payment initialization failed",
+          description: data.error || "Please try again or contact support.",
+          variant: "destructive",
+        });
       }
     } catch {
-      toast({ title: "Payment failed", variant: "destructive" });
+      toast({ title: "Payment failed", description: "Network error. Please check your connection.", variant: "destructive" });
     }
   };
 
@@ -1702,6 +1706,29 @@ function VidoraApp() {
       .then((d) => d.success && setTokenPackages(d.packages))
       .catch(() => {});
   }, []);
+
+  // Handle payment redirect callbacks (?payment=success|cancelled|error)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get("payment");
+    if (!paymentStatus) return;
+
+    if (paymentStatus === "success") {
+      toast({ title: "Payment successful!", description: "Your tokens have been credited to your account." });
+      // Refresh token balance
+      if (session?.user) fetchUserProfile();
+    } else if (paymentStatus === "cancelled") {
+      toast({ title: "Payment cancelled", description: "You cancelled the payment. No tokens were charged.", variant: "destructive" });
+    } else if (paymentStatus === "error") {
+      toast({ title: "Payment failed", description: "The payment could not be verified. Please try again or contact support.", variant: "destructive" });
+    }
+
+    // Clean the URL so the toast doesn't re-trigger on refresh
+    const url = new URL(window.location.href);
+    url.searchParams.delete("payment");
+    window.history.replaceState({}, "", url.toString());
+  }, [session?.user, fetchUserProfile, toast]);
 
   useEffect(() => {
     if (currentView === "admin" && session) handleAdminLoadData();

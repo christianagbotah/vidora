@@ -65,10 +65,12 @@ export async function POST(req: NextRequest) {
       await db.payment.update({
         where: { id: payment.id },
         data: { status: "failed", metadata: result.error },
-      });
+      }).catch(() => {/* ignore update failure — don't mask the original error */});
+      console.error("Payment gateway init failed:", { gateway: gatewayName, reference, error: result.error });
+      // 422 = gateway/config error (not a server crash). The error message is actionable.
       return NextResponse.json(
         { success: false, error: result.error || "Payment initialization failed" },
-        { status: 500 }
+        { status: 422 }
       );
     }
 
@@ -80,8 +82,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("Payment init error:", error);
+    const message = error instanceof Error ? error.message : "Payment initialization failed";
     return NextResponse.json(
-      { success: false, error: "Payment initialization failed" },
+      { success: false, error: message },
       { status: 500 }
     );
   }
