@@ -592,6 +592,17 @@ function VidoraApp() {
   const [isGeneratingPreviewImage, setIsGeneratingPreviewImage] = useState(false);
   const [previewQuota, setPreviewQuota] = useState<{ storyboard: { used: number; limit: number }; image: { used: number; limit: number } } | null>(null);
 
+  /* ── Demo Mode State ── */
+  // Lets users experience the FULL video generation UX (storyboard → scene
+  // images → video clips → playback) using pre-rendered assets, WITHOUT
+  // requiring Z.ai balance or tokens. Great for evaluation & demos.
+  const [isCreatingDemo, setIsCreatingDemo] = useState(false);
+  const [demoTemplates, setDemoTemplates] = useState<Array<{
+    id: string; title: string; description: string; style: string;
+    coverImage: string; accentColor: string; tagline: string; sceneCount: number;
+    targetDuration: number; projectType: string; aspectRatio: string;
+  }>>([]);
+
   /* ── Auth State ── */
   const { data: session, status: authStatus } = useSession();
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
@@ -1333,6 +1344,64 @@ function VidoraApp() {
     if (enhancedText) return enhancedText;
     return textPrompt;
   };
+
+  /* ──────────────────────────────────────────────────────────────
+     DEMO MODE HANDLER
+     Creates a fully-populated demo project (with pre-rendered scene
+     images + video clips) so users can explore the studio end-to-end
+     without needing tokens or Z.ai balance.
+     ────────────────────────────────────────────────────────────── */
+  const handleTryDemo = async (templateId?: string) => {
+    setIsCreatingDemo(true);
+    try {
+      const res = await fetch("/api/demo/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId: templateId ?? null }),
+      });
+      const data = await res.json();
+      if (data.success && data.project) {
+        toast({
+          title: "Demo project ready! 🎬",
+          description: data.message || "Explore the studio to see all scenes.",
+        });
+        // Open the demo project in the studio exactly like a real project
+        const p = data.project as VideoProject;
+        setCurrentProject(p);
+        if (p.characters) setCharacters(p.characters);
+        setCurrentView("studio");
+        // Refresh projects list so it appears in the gallery too
+        fetchProjects();
+      } else {
+        toast({
+          title: "Demo failed",
+          description: data.error || "Could not create demo project.",
+          variant: "destructive",
+        });
+      }
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to create demo project. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingDemo(false);
+    }
+  };
+
+  // Fetch demo templates for the home showcase
+  const fetchDemoTemplates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/demo/templates");
+      const data = await res.json();
+      if (data.success && Array.isArray(data.templates)) {
+        setDemoTemplates(data.templates);
+      }
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => { fetchDemoTemplates(); }, [fetchDemoTemplates]);
 
   const handleGenerateStoryboardPreview = async () => {
     if (authStatus !== "authenticated") {
@@ -2308,12 +2377,28 @@ function VidoraApp() {
                       <Button
                         size="lg"
                         variant="outline"
+                        onClick={() => handleTryDemo()}
+                        disabled={isCreatingDemo}
+                        className="glass-card text-white hover:text-white hover:bg-white/15 px-6 py-4 h-auto border-amber-300/40"
+                      >
+                        {isCreatingDemo ? (
+                          <><Loader2 className="h-4 w-4 sm:h-5 sm:w-5 mr-2 animate-spin" />Loading demo…</>
+                        ) : (
+                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-amber-300" />Try Live Demo</>
+                        )}
+                      </Button>
+                      <Button
+                        size="lg"
+                        variant="outline"
                         onClick={() => setCurrentView("gallery")}
                         className="glass-card text-white/80 hover:text-white hover:bg-white/10 px-6 py-4 h-auto"
                       >
                         <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
                       </Button>
                     </div>
+                    <p className="text-xs text-amber-200/80 pt-1">
+                      ✨ No signup needed — the demo loads a finished video project instantly.
+                    </p>
                     <div className="flex items-center justify-center gap-6 sm:gap-8 pt-4 text-sm flex-wrap">
                       {[
                         { icon: Users, label: "Character", sub: "System" },
@@ -2366,6 +2451,90 @@ function VidoraApp() {
                   ))}
                 </motion.div>
               </section>
+
+              {/* ── Demo Showcase ── */}
+              {demoTemplates.length > 0 && (
+                <section className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
+                  <div className="text-center mb-8">
+                    <Badge className="px-3 py-1 text-xs font-semibold bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 mb-3">
+                      <Play className="h-3 w-3 mr-1.5" />Instant Demo · No Signup
+                    </Badge>
+                    <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
+                      See It In Action — Pick a Demo
+                    </h2>
+                    <p className="text-muted-foreground mt-1 max-w-2xl mx-auto">
+                      Explore a fully-generated video project with scenes, AI imagery, and playable clips — no tokens or account required.
+                    </p>
+                  </div>
+                  <motion.div {...stagger} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                    {demoTemplates.map((tpl) => (
+                      <motion.div key={tpl.id} {...fadeItem}>
+                        <Card
+                          className="card-glow cursor-pointer border-0 shadow-lg shadow-black/5 bg-white overflow-hidden group h-full flex flex-col"
+                          onClick={() => handleTryDemo(tpl.id)}
+                        >
+                          <div className="relative aspect-video overflow-hidden">
+                            <img
+                              src={tpl.coverImage}
+                              alt={tpl.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            />
+                            <div className={`absolute inset-0 bg-gradient-to-t ${tpl.accentColor} opacity-30 mix-blend-multiply`} />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                            <div className="absolute top-3 left-3">
+                              <Badge className="text-xs font-semibold bg-black/60 text-amber-200 border-amber-400/40 backdrop-blur-sm">
+                                <Play className="h-3 w-3 mr-1" />Demo
+                              </Badge>
+                            </div>
+                            <div className="absolute bottom-3 left-3 right-3">
+                              <p className="text-white text-xs font-medium drop-shadow">{tpl.tagline}</p>
+                            </div>
+                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="h-14 w-14 rounded-full bg-white/95 flex items-center justify-center shadow-2xl">
+                                <Play className="h-6 w-6 text-violet-700 ml-0.5" fill="currentColor" />
+                              </div>
+                            </div>
+                          </div>
+                          <CardHeader className="pb-2 pt-4 flex-1">
+                            <CardTitle className="text-base font-bold leading-tight">{tpl.title.replace(/\s*—.*$/, "")}</CardTitle>
+                            <CardDescription className="text-sm leading-relaxed line-clamp-2 mt-1">
+                              {tpl.description}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="pt-0 pb-4">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1.5">
+                                <Film className="h-3.5 w-3.5" />
+                                {tpl.sceneCount} scenes
+                              </span>
+                              <span className="flex items-center gap-1.5">
+                                <Clock className="h-3.5 w-3.5" />
+                                {tpl.targetDuration}s
+                              </span>
+                              <span className="flex items-center gap-1.5 capitalize">
+                                <Palette className="h-3.5 w-3.5" />
+                                {tpl.style}
+                              </span>
+                            </div>
+                            <Button
+                              size="sm"
+                              className="w-full mt-3 btn-gradient"
+                              disabled={isCreatingDemo}
+                              onClick={(e) => { e.stopPropagation(); handleTryDemo(tpl.id); }}
+                            >
+                              {isCreatingDemo ? (
+                                <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Loading…</>
+                              ) : (
+                                <><Play className="h-4 w-4 mr-1.5" />Open Demo</>
+                              )}
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                </section>
+              )}
 
               {/* Features Showcase */}
               <section className="max-w-6xl mx-auto px-4 sm:px-6 py-12">
