@@ -536,3 +536,60 @@ Stage Summary:
 - Mobile header REDESIGNED: hamburger drawer (Sheet) replaces dropdown, logo + Sign In always visible
 - Native-app feel: slide-in drawer with user info card, nav links, and contextual CTAs
 - Commit 593e535 pushed to GitHub for VPS deployment
+
+---
+Task ID: fix-hubtel-500
+Agent: main
+Task: Fix 500 error on POST /api/payments/initialize (Hubtel gateway)
+
+Work Log:
+- User reported: Failed to load resource: 500 on /api/payments/initialize
+- Investigated route: /api/payments/initialize/route.ts — route creates payment record then calls gateway.initializePayment()
+- If gateway returns { success: false }, route returned HTTP 500 — masking config errors as server crashes
+- Investigated Hubtel gateway in /src/lib/payments/index.ts:
+  * WRONG endpoint: https://api.hubtel.com/v2/merchant-account/mobile-money/online-checkout (does not exist)
+  * Hubtel returns HTML 404 → res.json() throws SyntaxError → catch block returns generic "Hubtel payment initialization failed"
+  * Wrong field names (camelCase instead of PascalCase)
+  * Missing required invoice/items/store/actions structure
+- Researched correct Hubtel API via web search + cloned 2 reference repos (BigBobLittle/hubtelmomo, paulmajora/hubtelpayment)
+- Found correct endpoint: POST https://api.hubtel.com/v1/merchantaccount/onlinecheckout/invoice/create
+  * Auth: Basic client_id:client_secret
+  * Body: { invoice: { items, total_amount, description }, store: { name, tagline, website_url }, actions: { cancel_url, return_url }, custom_data: {} }
+  * Response: { response_code: "00", response_text: "<checkout URL>", token: "..." }
+  * Customer enters phone number on Hubtel's hosted checkout page (no phone needed in our request)
+- Rewrote HubtelGateway.initializePayment():
+  * Correct v1 Online Checkout endpoint
+  * Correct PascalCase field names with invoice/items/store/actions structure
+  * amount formatted as string with 2 decimal places (unit_price, total_price)
+  * Non-JSON response handling: res.text() + try/catch JSON.parse
+  * Success check: response_code "00"/"0000" + response_text contains URL
+  * Fallback: data.checkoutUrl if present
+  * Error: surfaces actual Hubtel error message (data.message/responseMessage/response_text/error)
+  * Console logs full response for debugging
+- Rewrote HubtelGateway.verifyPayment():
+  * Correct v1 status endpoint: /v1/merchantaccount/onlinecheckout/invoice/status/{reference}
+  * Checks status (completed/paid/success) and response_code (00/0000)
+  * Non-JSON response handling
+  * Surfaces actual error messages
+- Updated route /api/payments/initialize:
+  * Returns 422 (Unprocessable Entity) for gateway config errors instead of 500
+  * Console logs gateway name + reference + error for debugging
+  * Catches DB update failure separately (doesn't mask original error)
+  * Catch block surfaces actual error message (not generic)
+- Updated frontend handleBuyTokens:
+  * Safe JSON parse (.catch() fallback)
+  * Toast shows title + description (actual error message from gateway)
+  * Better error descriptions for network failures
+- Added payment redirect callback handler:
+  * useEffect checks window.location.search for ?payment=success|cancelled|error
+  * Shows appropriate toast (success/cancel/error) with description
+  * Refreshes token balance on success (calls fetchUserProfile)
+  * Cleans URL with history.replaceState (no re-trigger on refresh)
+- Verified: lint passes, dev server responds 200, /api/payments/packages works
+- Commit 8ecd31d pushed to origin/main
+
+Stage Summary:
+- Hubtel 500 error FIXED: was calling non-existent v2 endpoint, now uses correct v1 Online Checkout API
+- Error transparency IMPROVED: actual Hubtel error messages now surface to the user's toast notification
+- Payment flow COMPLETE: Hubtel returns checkout URL → user redirected → Hubtel redirects back to /api/payments/verify?reference=XXX&status=success → tokens credited → user sees success toast
+- Status code CORRECT: 422 for gateway config errors (not 500), 500 only for true server errors
