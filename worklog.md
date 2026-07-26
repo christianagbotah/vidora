@@ -1302,3 +1302,40 @@ Stage Summary:
 - Local dev workflow when schema changes are needed: `bash scripts/local-db-push.sh` (auto-swap + restore, no risk)
 - VPS doesn't need the hook (VPS only pulls+deploys, doesn't commit). If setting up a new dev clone, install the hook: `ln -sf ../../scripts/pre-commit-guard.sh .git/hooks/pre-commit`
 - Remote now has 3 commits for the user to pull: f45049a (dubbing UI) + a83f6e7 (.env untrack) + 2fc54c7 (postgres guardrails)
+
+---
+Task ID: push-5
+Agent: main (orchestrator)
+Task: UI improvements — vidora-bordered hero buttons, sticky header, AI chat, Top button, linked footer
+
+Work Log:
+- Read current hero buttons (lines 2774-2794), header (line 2661), footer (lines 3065-3100) in page.tsx
+- Loaded LLM skill to understand zai.chat signature (systemPrompt + userPrompt, returns string)
+- Created new files:
+  - src/app/api/assistant/chat/route.ts: POST endpoint for AI chat. System prompt makes it a Vidora product expert. In-memory rate limiting (5 msg/60s per IP). Folds conversation history (last 6 msgs) into userPrompt. Graceful ZAIError handling.
+  - src/components/AIAssistant.tsx: Floating chat widget. Gradient launcher button (bottom-right) with pulse ring + online indicator. Full chat panel with header, scrollable messages, typing indicator (animated dots), textarea input with Enter-to-send, quick-reply suggestion buttons. Framer Motion animations.
+  - src/components/ScrollToTop.tsx: Floating "Top" button (bottom-left). Appears after 400px scroll. Smooth-scrolls to top. Framer Motion enter/exit.
+
+- Updated src/app/page.tsx:
+  - Added imports: AIAssistant, ScrollToTop, + new lucide icons (ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon)
+  - Hero buttons: 'Try Live Demo' → !border-2 !border-violet-400/70 + violet shadow; 'Browse Templates' → !border-2 !border-fuchsia-400/70 + fuchsia shadow. Used ! important to override shadcn Button variant=outline border color (CSS layering issue).
+  - Sticky header: added headerScrolled state + scroll listener (toggles at scrollY>10). Header className now transitions: at top = bg-background/70 border-transparent no-shadow; scrolled = bg-background/95 shadow-md border-slate-200/80. Also added scrollTo(0) on view change.
+  - Footer: rewrote with all links wired. Social (YouTube/Instagram/Facebook/Email as <a> target=_blank). Product (Create Video→create view, Templates→gallery view, Features→handleTryDemo). Support (Documentation→/docs link, API Reference→/api/reference link, Contact→opens dialog). Added social icon buttons in brand section. Added website link + copyright.
+  - Contact Dialog: new Dialog with Email card (mailto), WhatsApp card (wa.me link), Website card, AI Assistant tip, Send Email CTA button. Controlled by contactDialogOpen state.
+  - Mounted <AIAssistant /> + <ScrollToTop /> globally at end of VidoraApp return (outside view switching, always visible).
+
+BROWSER VERIFICATION (agent-browser):
+- Hero button borders: computed style confirms 2px width + violet/fuchsia oklab colors with 0.7 alpha
+- AI chat: opened bubble → panel appeared with greeting + 4 suggestions. Filled "What is Vidora?" → clicked send → got real LLM reply "Vidora is an AI video creation studio..." in 1.5s (POST /api/assistant/chat 200)
+- Top button: scrolled to 1500px → button appeared → clicked via DOM (nextjs-portal overlay blocked direct click) → scrollY went 1500→0
+- Header scroll: at top shadow=false, scrolled shadow=true (transition confirmed)
+- Contact dialog: clicked footer Contact → dialog opened with Email Us / WhatsApp / Send Email
+- Footer links: all 7 verified (YouTube, Instagram, Facebook, mailto, /docs, /api/reference, website URL) with correct hrefs + targets
+- Mobile 390px: chat button (x=310, right=366) + top button (x=24, right=72) → no overlap
+- Lint: clean
+
+Stage Summary:
+- Committed b420168, pushed to origin/main (2fc54c7..b420168)
+- All 5 requested features implemented + verified end-to-end
+- AI assistant uses Z.ai LLM (glm-4.5) — working, balance appears restored
+- VPS pull will get: dubbing UI + .env untrack + postgres guardrails + this UI batch (4 commits since user's last pull)
