@@ -471,3 +471,36 @@ Stage Summary:
 - AI Enhance button CONFIRMED WORKING: API returns enhanced prompt, text appears in violet box in UI
 - Mobile header CONFIRMED: compact dropdown menu on mobile, inline buttons on desktop
 - VPS next steps for user: git pull && bun install && bun run db:generate && bun run db:push && bun run build && pm2 restart vidora
+
+---
+Task ID: admin-config-mobile-fix
+Agent: main
+Task: Fix admin config save bug (only one field saves per click) and mobile responsiveness (header overflow, native app feel)
+
+Work Log:
+- Diagnosed admin config save bug: Tabs onValueChange fired handleAdminLoadData() which reloaded ALL configs from server, wiping unsaved field changes mid-edit
+- Added separate configForm state (editable working copy) distinct from adminConfigs (loaded snapshot)
+- Added updateConfigField() helper for safe field updates
+- Rewrote handleSaveGatewayConfig() to save ONLY the active gateway's fields (not all 25+ config keys)
+- Added handleSetActiveGateway() for explicit gateway switching (no auto-save on tab change)
+- Added handleSaveAIConfig() for AI provider fields
+- Backend PUT /api/admin/config now uses db.$transaction for atomic multi-field saves
+- Added savingConfigKey state with Loader2 spinner on each save button
+- Redesigned Payment Gateway card: explicit "Select Active Payment Gateway" selector + tabbed field forms
+- Updated all AI provider inputs to use configForm + updateConfigField
+- Rewrote mobile header: compact logo (text-base), token badge, user dropdown only (no inline buttons)
+- Added mobile bottom navigation bar (Home, Stats, Create, Tokens, Profile) with floating gradient Create button
+- Added pb-20 md:pb-0 to main content so bottom nav never covers content
+- Added safe-area-inset-bottom support for iOS notch devices
+- Created public/manifest.json for PWA standalone app installation
+- Added viewport config in layout.tsx (viewportFit=cover, themeColor=#7c3aed)
+- Added appleWebApp metadata for iOS home screen app support
+- Verified with Agent Browser: mobile (390x844) and desktop (1440x900) both render correctly
+- Lint passes cleanly, dev server compiles without errors
+
+Stage Summary:
+- Admin config save bug FIXED: all fields save atomically in one transaction, no more mid-edit reloads
+- Active gateway selector is now explicit (3 buttons), separate from tab navigation
+- Mobile UI completely redesigned: compact header + bottom nav bar = native app feel
+- PWA manifest added so users can "Add to Home Screen" on mobile
+- Commit 6ca6711 pushed to origin/main
