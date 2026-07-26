@@ -47,6 +47,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from "@/components/ui/sheet";
 import DeviceSimulator from "@/components/DeviceSimulator";
+import { AIStatusBadge } from "@/components/AIStatusBadge";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -1886,6 +1887,8 @@ function VidoraApp() {
             </Badge>
           </button>
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* AI Service Status — proactive health indicator */}
+            <AIStatusBadge compact />
             {/* Desktop: inline buttons */}
             {session?.user && (
               <div className="hidden md:flex items-center gap-1.5">
