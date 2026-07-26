@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
+import { zai, ZAIError } from "@/lib/zai";
+import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
+import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
@@ -115,6 +119,16 @@ async function pollTaskUntilDone(
 
 export async function POST(req: NextRequest) {
   try {
+    // ── Authentication ──
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json(
+        { success: false, error: "Please sign in to generate videos" },
+        { status: 401 }
+      );
+    }
+    const userId = (session.user as Record<string, unknown>).id as string;
+
     const { projectId } = await req.json();
     if (!projectId) {
       return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
@@ -126,6 +140,10 @@ export async function POST(req: NextRequest) {
     });
     if (!project) {
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
+    // Ensure the user owns this project
+    if (project.userId && project.userId !== userId) {
+      return NextResponse.json({ success: false, error: "You don't have access to this project" }, { status: 403 });
     }
     if (project.scenes.length === 0) {
       return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
@@ -153,6 +171,45 @@ export async function POST(req: NextRequest) {
         sceneCount: project.scenes.length,
         alreadyDone: true,
       });
+    }
+
+    // ── Token Check ──
+    // Calculate the token cost for this generation batch.
+    // Each scene = 1 video clip + 1 thumbnail image.
+    const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
+    const totalTokensNeeded = scenesToProcess.length * tokensPerScene;
+
+    const tokenCheck = await checkTokens(userId, totalTokensNeeded);
+    if (!tokenCheck.hasEnough) {
+      const costBreakdown = calculateProjectCost(scenesToProcess.length, { withNarration: false });
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Insufficient tokens. You need ${totalTokensNeeded} tokens to generate ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}, but you have ${tokenCheck.balance}.`,
+          tokensNeeded: totalTokensNeeded,
+          tokensAvailable: tokenCheck.balance,
+          costBreakdown,
+        },
+        { status: 402 } // 402 Payment Required
+      );
+    }
+
+    // ── Deduct Tokens ──
+    // Deduct all tokens upfront. If generation fails, we refund per failed scene.
+    const deduction = await deductTokensForOperation({
+      userId,
+      operation: "video_gen",
+      description: `Generate ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""} for "${project.title}"`,
+      referenceId: projectId,
+      customTokens: totalTokensNeeded,
+      customCostUsd: scenesToProcess.length * (PRICING.video_gen.costUsd + PRICING.image_gen.costUsd),
+    });
+
+    if (!deduction.success) {
+      return NextResponse.json(
+        { success: false, error: deduction.error || "Failed to process tokens" },
+        { status: 402 }
+      );
     }
 
     await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
@@ -209,6 +266,21 @@ export async function POST(req: NextRequest) {
           const failed = allScenes.filter((s) => s.status === "failed").length;
           const pending = allScenes.filter((s) => !s.videoUrl && s.status !== "failed").length;
           console.log(`Project ${projectId}: done with ${completed} completed, ${failed} failed, ${pending} pending`);
+
+          // ── Refund tokens for failed scenes ──
+          // We charged upfront for all scenes; refund the ones that failed
+          // so the user doesn't pay for failed generations.
+          if (failed > 0) {
+            const refundAmount = failed * tokensPerScene;
+            await refundTokens({
+              userId,
+              amount: refundAmount,
+              description: `Refund: ${failed} failed scene${failed > 1 ? "s" : ""} in "${project.title}"`,
+              referenceId: projectId,
+              operation: "video_gen",
+            }).catch((e) => console.error("Failed to refund tokens:", e));
+            console.log(`Project ${projectId}: refunded ${refundAmount} tokens for ${failed} failed scenes`);
+          }
         }
       } catch (fatalErr) {
         // Top-level catch ensures no unhandled promise rejection crashes the process
@@ -218,6 +290,16 @@ export async function POST(req: NextRequest) {
           where: { projectId, status: "generating" },
           data: { status: "failed" },
         }).catch(() => {});
+
+        // ── Full refund on fatal crash ──
+        // Since we deducted tokens upfront, refund the full amount
+        await refundTokens({
+          userId,
+          amount: totalTokensNeeded,
+          description: `Full refund: generation failed for "${project.title}"`,
+          referenceId: projectId,
+          operation: "video_gen",
+        }).catch((e) => console.error("Failed to refund tokens on crash:", e));
       }
     })();
 
@@ -227,6 +309,8 @@ export async function POST(req: NextRequest) {
       message: `Generating ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}${skipped > 0 ? ` (${skipped} already done)` : ""}. Videos will appear as they complete.`,
       sceneCount: scenesToProcess.length,
       totalScenes: project.scenes.length,
+      tokensCharged: totalTokensNeeded,
+      remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

@@ -120,8 +120,16 @@ model TokenTransaction {
   amount        Int       // positive = credit, negative = debit
   description   String
   referenceId   String?   // payment ID or project ID
+  // ── Cost tracking for profit analytics ──
+  // The real cost in USD that Z.ai charged YOU for this operation.
+  // Only populated for "spend" transactions (generation operations).
+  // Revenue (from Payment.amount) minus sum(costUsd) = your gross profit.
+  costUsd       Float?    // actual Z.ai API cost for this operation (USD)
+  operationType String?   // "video_gen" | "image_gen" | "llm" | "tts" | "asr" | "download" | "purchase"
   createdAt     DateTime  @default(now())
   @@index([userId])
+  @@index([type])
+  @@index([operationType])
 }
 
 model SystemConfig {

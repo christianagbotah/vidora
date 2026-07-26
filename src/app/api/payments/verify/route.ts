@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveGateway } from "@/lib/payments";
 import { db } from "@/lib/db";
+import { creditPurchase } from "@/lib/tokens";
+import { TOKEN_PACKAGES, getEffectiveTokens } from "@/lib/pricing";
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,27 +47,31 @@ export async function POST(req: NextRequest) {
         data: { status: "completed" },
       });
 
-      // Credit user tokens
-      await db.user.update({
-        where: { id: payment.userId },
-        data: { tokens: { increment: payment.tokensPurchased } },
-      });
+      // ── Credit tokens with bonus ──
+      // Look up the package to calculate bonus tokens (e.g., 20% extra on Basic)
+      // The payment.metadata may store the package ID, or we infer from tokensPurchased
+      let baseTokens = payment.tokensPurchased;
+      let bonusTokens = 0;
+      const pkg = TOKEN_PACKAGES.find((p) => p.tokens === payment.tokensPurchased);
+      if (pkg) {
+        baseTokens = pkg.tokens;
+        bonusTokens = getEffectiveTokens(pkg) - pkg.tokens;
+      }
 
-      // Record transaction
-      await db.tokenTransaction.create({
-        data: {
-          userId: payment.userId,
-          type: "purchase",
-          amount: payment.tokensPurchased,
-          description: `Purchased ${payment.tokensPurchased} tokens via ${payment.gateway}`,
-          referenceId: payment.id,
-        },
+      const creditResult = await creditPurchase({
+        userId: payment.userId,
+        baseTokens,
+        bonusTokens,
+        paymentId: payment.id,
+        description: `Purchased ${baseTokens} tokens via ${payment.gateway}`,
       });
 
       return NextResponse.json({
         success: true,
         verified: true,
-        tokensPurchased: payment.tokensPurchased,
+        tokensPurchased: baseTokens + bonusTokens,
+        bonusTokens,
+        newBalance: creditResult.newBalance,
       });
     }
 
@@ -125,18 +131,22 @@ export async function GET(req: NextRequest) {
 
     if (result.success && result.verified) {
       await db.payment.update({ where: { id: payment.id }, data: { status: "completed" } });
-      await db.user.update({
-        where: { id: payment.userId },
-        data: { tokens: { increment: payment.tokensPurchased } },
-      });
-      await db.tokenTransaction.create({
-        data: {
-          userId: payment.userId,
-          type: "purchase",
-          amount: payment.tokensPurchased,
-          description: `Purchased ${payment.tokensPurchased} tokens via ${payment.gateway}`,
-          referenceId: payment.id,
-        },
+
+      // Credit tokens with bonus (same logic as POST handler)
+      let baseTokens = payment.tokensPurchased;
+      let bonusTokens = 0;
+      const pkg = TOKEN_PACKAGES.find((p) => p.tokens === payment.tokensPurchased);
+      if (pkg) {
+        baseTokens = pkg.tokens;
+        bonusTokens = getEffectiveTokens(pkg) - pkg.tokens;
+      }
+
+      await creditPurchase({
+        userId: payment.userId,
+        baseTokens,
+        bonusTokens,
+        paymentId: payment.id,
+        description: `Purchased ${baseTokens} tokens via ${payment.gateway}`,
       });
       return NextResponse.redirect(new URL("/?payment=success", req.url));
     }
