@@ -44,7 +44,10 @@ export type OperationType =
   | "download"
   | "continuity_check"
   | "prompt_enhance"
-  | "scene_split";
+  | "scene_split"
+  | "preview_storyboard"
+  | "preview_image"
+  | "purchase";
 
 export interface OperationPricing {
   /** Tokens charged to the user */
@@ -126,7 +129,45 @@ export const PRICING: Record<OperationType, OperationPricing> = {
     costUsd: 0,
     label: "Video download",
   },
+
+  // ── FREE Previews (customer-acquisition cost, NOT charged to user) ──
+  // These give prospects a taste of what they'll get BEFORE they buy tokens.
+  // Cost is absorbed by the owner as marketing/CAC. Rate-limited per user/day.
+  //   • Storyboard: LLM-only scene breakdown. ~$0.002 per call.
+  //   • Image preview: ONE watermarked low-res still. ~$0.03 per call.
+  // The watermark makes the image commercially unusable, so users must buy
+  // tokens to get the clean, full-HD, multi-scene video.
+  preview_storyboard: {
+    tokens: 0, // FREE
+    costUsd: 0.002,
+    label: "AI storyboard preview (free)",
+  },
+  preview_image: {
+    tokens: 0, // FREE
+    costUsd: 0.03,
+    label: "Watermarked style preview (free)",
+  },
+
+  // ── Purchase (not an AI op; used for token-package crediting) ──
+  purchase: {
+    tokens: 0,
+    costUsd: 0,
+    label: "Token package purchase",
+  },
 };
+
+/**
+ * Daily free-preview limits per user.
+ * Resets at local midnight (tracked by previewDate = YYYY-MM-DD).
+ *
+ * Economics: at 10 storyboards + 3 images/day = $0.02 + $0.09 = $0.11 worst case
+ * per user per day. Even at 2% conversion to a GHS 12 (Basic) package, each
+ * converting user generates ~$2.50 revenue vs ~$0.11 CAC → healthy margin.
+ */
+export const PREVIEW_LIMITS = {
+  storyboardPerDay: 10,
+  imagePerDay: 3,
+} as const;
 
 /**
  * Calculate the total token cost for generating a full video project.

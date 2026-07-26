@@ -17,6 +17,12 @@ model User {
   role          String    @default("user")  // "user" | "admin"
   tokens        Int       @default(0)      // credit/token balance
   isActive      Boolean   @default(true)
+  // ── Free Preview rate-limiting (resets daily) ──
+  // previewDate is the YYYY-MM-DD of the current usage window.
+  // When it doesn't match today, counters reset to 0.
+  previewDate             String?  // YYYY-MM-DD
+  previewStoryboardCount  Int      @default(0)  // max 10/day
+  previewImageCount       Int      @default(0)  // max 3/day
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   projects      VideoProject[]

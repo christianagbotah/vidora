@@ -558,6 +558,16 @@ function VidoraApp() {
   const [showProjectSettings, setShowProjectSettings] = useState(true);
   const [updatingSettings, setUpdatingSettings] = useState(false);
 
+  /* ── Free Preview State ── */
+  // The "try before you buy" funnel: users can generate a free AI storyboard
+  // and a free watermarked style image BEFORE buying tokens. Rate-limited/day.
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewStoryboard, setPreviewStoryboard] = useState<Record<string, unknown> | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
+  const [isGeneratingPreviewImage, setIsGeneratingPreviewImage] = useState(false);
+  const [previewQuota, setPreviewQuota] = useState<{ storyboard: { used: number; limit: number }; image: { used: number; limit: number } } | null>(null);
+
   /* ── Auth State ── */
   const { data: session, status: authStatus } = useSession();
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
@@ -1265,6 +1275,121 @@ function VidoraApp() {
       toast({ title: "Error creating project", variant: "destructive" });
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  /* ──────────────────────────────────────────────────────────────
+     FREE PREVIEW HANDLERS
+     Lets users see a storyboard + watermarked style image BEFORE
+     buying tokens. Rate-limited per user/day by the backend.
+  ────────────────────────────────────────────────────────────── */
+
+  const fetchPreviewUsage = useCallback(async () => {
+    if (authStatus !== "authenticated") return;
+    try {
+      const res = await fetch("/api/preview/usage");
+      const data = await res.json();
+      if (data.success) setPreviewQuota(data.usage);
+    } catch { /* non-fatal */ }
+  }, [authStatus]);
+
+  // Fetch preview quota whenever the create view is shown
+  useEffect(() => {
+    if (currentView === "create") fetchPreviewUsage();
+  }, [currentView, fetchPreviewUsage]);
+
+  const getCurrentIdeaText = (): string => {
+    if (inputMode === "script") return scriptText;
+    if (enhancedText) return enhancedText;
+    return textPrompt;
+  };
+
+  const handleGenerateStoryboardPreview = async () => {
+    if (authStatus !== "authenticated") {
+      toast({ title: "Please sign in", description: "Sign in to generate a free preview.", variant: "destructive" });
+      setAuthDialogOpen(true);
+      return;
+    }
+    const idea = getCurrentIdeaText();
+    if (!idea.trim() || idea.trim().length < 10) {
+      toast({ title: "Describe your idea first", description: "Write at least a sentence about your video so the AI can build a storyboard.", variant: "destructive" });
+      return;
+    }
+
+    setIsGeneratingStoryboard(true);
+    setPreviewStoryboard(null);
+    setPreviewImageUrl(null);
+    setPreviewModalOpen(true);
+    try {
+      const res = await fetch("/api/preview/storyboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idea,
+          style: selectedStyle,
+          aspectRatio: selectedAspect,
+          targetDuration: effectiveDuration,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPreviewStoryboard(data.storyboard);
+        setPreviewQuota(data.previewQuota ? { storyboard: data.previewQuota, image: previewQuota?.image ?? { used: 0, limit: 3 } } : previewQuota);
+        toast({ title: "Storyboard ready!", description: "See your scene-by-scene plan below." });
+      } else {
+        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+      }
+      // Always refresh quota (backend may have refunded on server-side failure)
+      fetchPreviewUsage();
+    } catch {
+      toast({ title: "Preview failed", description: "Network error. Please try again.", variant: "destructive" });
+    } finally {
+      setIsGeneratingStoryboard(false);
+    }
+  };
+
+  const handleGeneratePreviewImage = async () => {
+    if (authStatus !== "authenticated") {
+      toast({ title: "Please sign in", description: "Sign in to generate a free preview.", variant: "destructive" });
+      setAuthDialogOpen(true);
+      return;
+    }
+    // Use the first scene's visualPrompt from the storyboard, or fall back to the raw idea
+    let prompt = "";
+    const scenes = previewStoryboard?.scenes as Array<Record<string, unknown>> | undefined;
+    if (scenes && scenes.length > 0 && typeof scenes[0].visualPrompt === "string") {
+      prompt = scenes[0].visualPrompt as string;
+    } else {
+      prompt = getCurrentIdeaText();
+    }
+    if (!prompt.trim() || prompt.trim().length < 10) {
+      toast({ title: "Generate a storyboard first", description: "Create the storyboard, then preview the visual style.", variant: "destructive" });
+      return;
+    }
+
+    setIsGeneratingPreviewImage(true);
+    setPreviewImageUrl(null);
+    setPreviewModalOpen(true);
+    try {
+      const res = await fetch("/api/preview/image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, style: selectedStyle }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPreviewImageUrl(data.imageUrl);
+        setPreviewQuota(data.previewQuota ? { image: data.previewQuota, storyboard: previewQuota?.storyboard ?? { used: 0, limit: 10 } } : previewQuota);
+        toast({ title: "Style preview ready!", description: "Watermarked preview — buy tokens for the full HD video." });
+      } else {
+        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+      }
+      // Always refresh quota (backend may have refunded on server-side failure)
+      fetchPreviewUsage();
+    } catch {
+      toast({ title: "Preview failed", description: "Network error. Please try again.", variant: "destructive" });
+    } finally {
+      setIsGeneratingPreviewImage(false);
     }
   };
 
@@ -2563,6 +2688,75 @@ function VidoraApp() {
                   </CardContent>
                 </Card>
               )}
+
+              {/* ── FREE PREVIEW (try before you buy) ── */}
+              {/* Lets users see a storyboard + watermarked style image before
+                  spending tokens. Costs the owner ~$0.03 per user/day max
+                  (rate-limited), accepted as customer-acquisition cost. */}
+              <Card className="border-2 border-dashed border-emerald-300 bg-emerald-50/40 shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
+                      <Eye className="h-3.5 w-3.5" />
+                    </div>
+                    Free Preview — try before you buy
+                    <Badge variant="outline" className="text-xs ml-1 text-emerald-600 border-emerald-300">0 tokens</Badge>
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    See exactly what your video will look like — for free. Get an AI storyboard and a watermarked style preview, then unlock the full HD video with tokens.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={handleGenerateStoryboardPreview}
+                      disabled={isGeneratingStoryboard}
+                      variant="outline"
+                      className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                    >
+                      {isGeneratingStoryboard ? (
+                        <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Building storyboard...</>
+                      ) : (
+                        <><FileText className="h-4 w-4 mr-1.5" />Free Storyboard</>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleGeneratePreviewImage}
+                      disabled={isGeneratingPreviewImage || !previewStoryboard}
+                      variant="outline"
+                      className="border-violet-300 text-violet-700 hover:bg-violet-100"
+                    >
+                      {isGeneratingPreviewImage ? (
+                        <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Generating preview...</>
+                      ) : (
+                        <><ImageIcon className="h-4 w-4 mr-1.5" />Preview Visual Style</>
+                      )}
+                    </Button>
+                  </div>
+                  {/* Daily quota indicators */}
+                  {previewQuota && (
+                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <FileText className="h-3 w-3" />
+                        Storyboards: <strong className="text-slate-700">{previewQuota.storyboard.used}/{previewQuota.storyboard.limit}</strong> used today
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <ImageIcon className="h-3 w-3" />
+                        Image previews: <strong className="text-slate-700">{previewQuota.image.used}/{previewQuota.image.limit}</strong> used today
+                      </span>
+                    </div>
+                  )}
+                  {previewStoryboard && (
+                    <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs">
+                      <p className="font-bold text-emerald-700 mb-1">Storyboard ready! ✓</p>
+                      <p className="text-muted-foreground">
+                        {Array.isArray(previewStoryboard.scenes) ? (previewStoryboard.scenes as unknown[]).length : 0} scenes planned.
+                        {previewImageUrl ? " Style preview generated — view both in the preview panel." : " Now click \"Preview Visual Style\" to see how it will look."}
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* Create Button */}
               <div className="flex items-center gap-4 pt-2">
@@ -4793,6 +4987,153 @@ function VidoraApp() {
               </button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════
+          FREE PREVIEW MODAL
+          Shows the AI storyboard + watermarked style image with a
+          strong CTA to buy tokens for the full HD video.
+          ═══════════════════════════════════════════════════════ */}
+      <Dialog open={previewModalOpen} onOpenChange={(open) => {
+        // Prevent closing while a generation is in flight (avoid orphaned requests)
+        if (!open && (isGeneratingStoryboard || isGeneratingPreviewImage)) return;
+        setPreviewModalOpen(open);
+      }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
+                <Eye className="h-4 w-4" />
+              </div>
+              Free Preview
+              {previewQuota && (
+                <Badge variant="outline" className="text-xs ml-1">
+                  {previewQuota.storyboard.used}/{previewQuota.storyboard.limit} stories · {previewQuota.image.used}/{previewQuota.image.limit} images today
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Your video at a glance — storyboard plan and a watermarked style preview. Buy tokens to generate the full HD, multi-scene video.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Loading: Storyboard */}
+            {isGeneratingStoryboard && !previewStoryboard && (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <Loader2 className="h-10 w-10 animate-spin text-emerald-500 mb-3" />
+                <p className="font-semibold text-slate-700">Building your storyboard...</p>
+                <p className="text-sm text-muted-foreground mt-1">The AI is breaking your idea into scenes, shots, and narration.</p>
+              </div>
+            )}
+
+            {/* Storyboard content */}
+            {previewStoryboard && (
+              <div className="space-y-3">
+                {/* Title + logline */}
+                <div className="rounded-xl bg-gradient-to-br from-violet-50 to-fuchsia-50 border border-violet-200 p-4">
+                  {typeof previewStoryboard.title === "string" && (
+                    <h3 className="text-lg font-bold text-slate-800">{previewStoryboard.title}</h3>
+                  )}
+                  {typeof previewStoryboard.logline === "string" && (
+                    <p className="text-sm text-slate-600 mt-1 italic">"{previewStoryboard.logline}"</p>
+                  )}
+                  <div className="flex flex-wrap gap-3 mt-2 text-xs text-muted-foreground">
+                    {typeof previewStoryboard.estimatedDurationSec === "number" && (
+                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" />~{previewStoryboard.estimatedDurationSec}s total</span>
+                    )}
+                    {Array.isArray(previewStoryboard.scenes) && (
+                      <span className="flex items-center gap-1"><Film className="h-3 w-3" />{(previewStoryboard.scenes as unknown[]).length} scenes</span>
+                    )}
+                    {typeof previewStoryboard.styleNotes === "string" && (
+                      <span className="flex items-center gap-1"><Palette className="h-3 w-3" />{previewStoryboard.styleNotes.slice(0, 80)}{previewStoryboard.styleNotes.length > 80 ? "…" : ""}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Scene list */}
+                {Array.isArray(previewStoryboard.scenes) && (
+                  <ScrollArea className="max-h-72 rounded-lg border border-slate-200">
+                    <div className="p-3 space-y-2">
+                      {(previewStoryboard.scenes as Array<Record<string, unknown>>).map((scene, i) => (
+                        <div key={i} className="rounded-lg bg-white border border-slate-100 p-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-violet-600">Scene {scene.sceneNumber ?? i + 1}</span>
+                            <div className="flex gap-2 text-[10px] text-muted-foreground">
+                              {typeof scene.shotType === "string" && <Badge variant="outline" className="text-[10px] py-0"><Camera className="h-2.5 w-2.5 mr-0.5" />{scene.shotType}</Badge>}
+                              {typeof scene.durationSec === "number" && <Badge variant="outline" className="text-[10px] py-0"><Timer className="h-2.5 w-2.5 mr-0.5" />{scene.durationSec}s</Badge>}
+                              {typeof scene.mood === "string" && <Badge variant="outline" className="text-[10px] py-0">{scene.mood}</Badge>}
+                            </div>
+                          </div>
+                          {typeof scene.title === "string" && scene.title && (
+                            <p className="text-sm font-semibold text-slate-800">{scene.title}</p>
+                          )}
+                          {typeof scene.visualPrompt === "string" && (
+                            <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">{scene.visualPrompt}</p>
+                          )}
+                          {typeof scene.narration === "string" && scene.narration && (
+                            <p className="text-xs text-violet-500 mt-1 italic flex items-start gap-1">
+                              <Quote className="h-3 w-3 mt-0.5 shrink-0" />{scene.narration}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
+              </div>
+            )}
+
+            {/* Style preview image */}
+            {isGeneratingPreviewImage && !previewImageUrl && (
+              <div className="flex flex-col items-center justify-center py-10 text-center rounded-xl bg-slate-50 border border-dashed border-slate-200">
+                <Loader2 className="h-8 w-8 animate-spin text-violet-500 mb-2" />
+                <p className="text-sm font-semibold text-slate-700">Generating your style preview...</p>
+                <p className="text-xs text-muted-foreground mt-1">Creating a watermarked image of Scene 1. This takes ~15-30 seconds.</p>
+              </div>
+            )}
+            {previewImageUrl && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <ImageIcon className="h-4 w-4 text-violet-500" />
+                  <p className="text-sm font-semibold text-slate-700">Style Preview (watermarked)</p>
+                  <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">Low-res · watermarked</Badge>
+                </div>
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                  <img src={previewImageUrl} alt="Watermarked style preview" className="w-full h-auto" />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This watermarked image shows the art style, lighting, and composition. Buy tokens to generate the clean, full-HD, multi-scene video — no watermark, downloadable.
+                </p>
+              </div>
+            )}
+
+            {/* CTA: buy tokens to unlock full video */}
+            <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 p-4 flex flex-col sm:flex-row items-center gap-3">
+              <div className="flex-1 text-center sm:text-left">
+                <p className="font-bold text-amber-800 flex items-center gap-1.5"><Coins className="h-4 w-4" />Ready to create the real thing?</p>
+                <p className="text-xs text-amber-700 mt-0.5">Buy tokens to generate all scenes in full HD — no watermark, fully downloadable.</p>
+              </div>
+              <Button
+                className="btn-amber shrink-0"
+                onClick={() => { setPreviewModalOpen(false); setCurrentView("buy-tokens"); }}
+              >
+                <Coins className="h-4 w-4 mr-1.5" />Buy Tokens
+              </Button>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setPreviewModalOpen(false)}>Close</Button>
+            <Button
+              variant="outline"
+              className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+              onClick={() => { setPreviewModalOpen(false); }}
+            >
+              <Sparkles className="h-4 w-4 mr-1.5" />Create Full Video
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
