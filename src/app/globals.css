@@ -356,3 +356,16 @@
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.3), rgba(245, 158, 11, 0.3), transparent);
 }
+
+/* ── Header label visibility ── */
+/* Text labels in the header buttons are hidden by default (icon-only)
+   and shown on xl screens (1280px+) where there's room for full labels.
+   Uses a custom class instead of Tailwind's xl: variant for reliability. */
+.header-label {
+  display: none;
+}
+@media (min-width: 80rem) {
+  .header-label {
+    display: inline;
+  }
+}

@@ -1995,8 +1995,8 @@ function VidoraApp() {
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2 min-w-0">
+      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl overflow-hidden">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-1.5 sm:gap-2 min-w-0 overflow-hidden">
           <button
             onClick={() => currentView !== "home" ? setCurrentView("home") : undefined}
             className="flex items-center gap-2 font-bold text-base sm:text-lg hover:opacity-80 transition-opacity shrink-0"
@@ -2011,39 +2011,39 @@ function VidoraApp() {
               PRO
             </Badge>
           </button>
-          <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+          <div className="flex items-center gap-1 min-w-0 overflow-hidden">
             {/* AI Service Status — proactive health indicator */}
             <AIStatusBadge compact />
-            {/* Desktop (lg+): inline buttons with labels */}
+            {/* Desktop (lg+): inline buttons — icon always, label on xl+ */}
             {session?.user && (
-              <div className="hidden lg:flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600">
-                  <BarChart3 className="h-4 w-4 mr-1" />Dashboard
+              <div className="hidden lg:flex items-center gap-0.5">
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("dashboard")} className="hover:bg-violet-50 text-violet-600 px-2 sm:px-2.5" title="Dashboard">
+                  <BarChart3 className="h-4 w-4" /><span className="ml-1 header-label">Dashboard</span>
                 </Button>
                 {userProfile?.role === "admin" && (
-                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600">
-                    <ShieldCheck className="h-4 w-4 mr-1" />Admin
+                  <Button variant="ghost" size="sm" onClick={() => setCurrentView("admin")} className="hover:bg-violet-50 text-violet-600 px-2 sm:px-2.5" title="Admin">
+                    <ShieldCheck className="h-4 w-4" /><span className="ml-1 header-label">Admin</span>
                   </Button>
                 )}
-                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
-                  <Coins className="h-4 w-4 mr-1" /><span className="font-bold">{userTokens}</span>
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0 px-2 sm:px-2.5" title={`${userTokens} tokens`}>
+                  <Coins className="h-4 w-4" /><span className="ml-1 font-bold text-xs sm:text-sm">{userTokens}</span>
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600">
-                  <User className="h-4 w-4 mr-1" />Profile
+                <Button variant="ghost" size="sm" onClick={() => setCurrentView("profile")} className="hover:bg-slate-50 text-slate-600 px-2 sm:px-2.5" title="Profile">
+                  <User className="h-4 w-4" /><span className="ml-1 header-label">Profile</span>
                 </Button>
-                <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500">
-                  <LogOut className="h-4 w-4 mr-1" />Sign Out
+                <Button variant="ghost" size="sm" onClick={handleSignOut} className="hover:bg-red-50 text-red-500 px-2 sm:px-2.5" title="Sign Out">
+                  <LogOut className="h-4 w-4" /><span className="ml-1 header-label">Sign Out</span>
                 </Button>
               </div>
             )}
             {/* Tablet/mobile (below lg): token badge + hamburger drawer */}
             <div className="flex lg:hidden items-center gap-1.5">
               {session?.user ? (
-                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0">
+                <Button variant="outline" size="sm" onClick={() => setCurrentView("buy-tokens")} className="border-amber-200 text-amber-600 hover:bg-amber-50 shrink-0 px-2">
                   <Coins className="h-4 w-4" /><span className="ml-1 text-xs font-bold">{userTokens}</span>
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="btn-gradient shrink-0">
+                <Button size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="btn-gradient shrink-0 px-3">
                   <LogIn className="h-4 w-4" /><span className="ml-1">Sign In</span>
                 </Button>
               )}
@@ -2053,7 +2053,7 @@ function VidoraApp() {
             </div>
             {/* Desktop (lg+): Sign In button for logged-out users */}
             {!session?.user && (
-              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hidden lg:inline-flex hover:bg-violet-50 shrink-0">
+              <Button variant="outline" size="sm" onClick={() => { setAuthMode("login"); setAuthDialogOpen(true); }} className="hidden lg:inline-flex hover:bg-violet-50 shrink-0 px-3">
                 <LogIn className="h-4 w-4" /><span className="ml-1.5">Sign In</span>
               </Button>
             )}
