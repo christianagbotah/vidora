@@ -21,7 +21,10 @@ export async function GET(
     const project = await db.videoProject.findUnique({
       where: { id },
       include: {
-        scenes: { orderBy: { sceneNumber: "asc" } },
+        scenes: {
+          orderBy: { sceneNumber: "asc" },
+          include: { translations: { orderBy: { lang: "asc" } } },
+        },
         characters: { orderBy: { createdAt: "asc" } },
       },
     });
@@ -71,7 +74,13 @@ export async function PUT(
         ...(status && { status }),
         ...(targetDuration !== undefined && { targetDuration }),
       },
-      include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: true },
+      include: {
+        scenes: {
+          orderBy: { sceneNumber: "asc" },
+          include: { translations: { orderBy: { lang: "asc" } } },
+        },
+        characters: true,
+      },
     });
 
     return NextResponse.json({ success: true, project });

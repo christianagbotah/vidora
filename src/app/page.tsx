@@ -231,7 +231,7 @@ function SortableSceneCard({
   onPreview, onGenerate, onRetry, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
   isGeneratingNarration,
-  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, musicTracks,
+  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
   onPreview: (url: string) => void;
@@ -249,6 +249,7 @@ function SortableSceneCard({
   onGenerateSubtitles: (sceneId: string) => void;
   onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
   onGenerateDubbing: (sceneId: string, lang: string, langName: string) => void;
+  onDeleteDubbing: (sceneId: string, lang: string, langName: string) => void;
   musicTracks: Array<{ id: string; title: string; mood: string; url: string; duration: number }>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } = useSortable({ id: scene.id });
@@ -582,6 +583,54 @@ function SortableSceneCard({
                 </div>
               </div>
             </div>
+
+            {/* ── Dubbed Audio Tracks (translations) ── */}
+            {scene.translations && scene.translations.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Languages className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Dubbed Audio ({scene.translations.length})
+                  </span>
+                </div>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {scene.translations
+                    .filter((t) => t.status === "ready" && t.narrationUrl)
+                    .map((t) => {
+                      const langMeta = ALL_DUBBING_LANGUAGES.find((l) => l.code === t.lang);
+                      return (
+                        <div
+                          key={t.id}
+                          className="flex items-center gap-2 rounded-lg bg-violet-50/50 border border-violet-100 p-1.5"
+                        >
+                          <span className="text-base shrink-0">{langMeta?.flag || "🌐"}</span>
+                          <span className="text-xs font-medium shrink-0 min-w-[70px]">{t.langName}</span>
+                          <audio
+                            controls
+                            src={t.narrationUrl!}
+                            className="h-7 flex-1 min-w-0"
+                            preload="none"
+                          />
+                          <button
+                            onClick={() => onDeleteDubbing(scene.id, t.lang, t.langName)}
+                            className="shrink-0 p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                            title={`Delete ${t.langName} dubbing`}
+                            aria-label={`Delete ${t.langName} dubbing`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  {scene.translations.some((t) => t.status === "generating") && (
+                    <div className="flex items-center gap-2 text-xs text-violet-500 px-1">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Generating dubbing…</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -1620,6 +1669,8 @@ function VidoraApp() {
           title: `${langName} dubbing ready!`,
           description: data.chunks > 1 ? `Translation + voice generated (${data.chunks} segments).` : "Translation + voice generated.",
         });
+        // Reload project so the new translation + audio URL appear in the scene card
+        if (currentProject) refreshProject();
       } else {
         // Detect Z.ai balance / quota errors and give a friendlier message
         const errMsg = String(data.error || "");
@@ -1631,6 +1682,23 @@ function VidoraApp() {
             : errMsg || "Please try again.",
           variant: "destructive",
         });
+      }
+    } catch {
+      toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
+    }
+  };
+
+  const handleDeleteDubbing = async (sceneId: string, lang: string, langName: string) => {
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}/dubbing?lang=${encodeURIComponent(lang)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${langName} dubbing removed`, description: "The translation was deleted." });
+        if (currentProject) refreshProject();
+      } else {
+        toast({ title: "Could not delete", description: data.error || "Please try again.", variant: "destructive" });
       }
     } catch {
       toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
@@ -3884,6 +3952,7 @@ function VidoraApp() {
                               onGenerateSubtitles={handleGenerateSubtitles}
                               onToggleBurnSubtitles={handleToggleBurnSubtitles}
                               onGenerateDubbing={handleGenerateDubbing}
+                              onDeleteDubbing={handleDeleteDubbing}
                               musicTracks={musicTracks}
                             />
                           ))}

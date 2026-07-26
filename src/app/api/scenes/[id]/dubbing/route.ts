@@ -256,3 +256,48 @@ export async function GET(
     return NextResponse.json({ success: false, error: "Failed to load translations" }, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/scenes/[id]/dubbing?lang=en
+ * Removes a single translation (audio + text) for the given language.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    const authResult = await requireSceneAccess(id, true);
+    if (!authResult.ok) return authResult.response;
+
+    const { searchParams } = new URL(req.url);
+    const lang = searchParams.get("lang");
+    if (!lang || !getDubbingLanguage(lang)) {
+      return NextResponse.json(
+        { success: false, error: "A valid `lang` query parameter is required" },
+        { status: 400 }
+      );
+    }
+
+    const translation = await db.sceneTranslation.findUnique({
+      where: { sceneId_lang: { sceneId: id, lang } },
+    });
+    if (!translation) {
+      return NextResponse.json({ success: false, error: "Translation not found" }, { status: 404 });
+    }
+
+    // Best-effort: delete the audio file from disk (non-fatal if missing)
+    if (translation.narrationUrl) {
+      const filename = translation.narrationUrl.split("/").pop();
+      if (filename) {
+        try { deleteAudioFile(filename); } catch { /* non-fatal */ }
+      }
+    }
+
+    await db.sceneTranslation.delete({ where: { id: translation.id } });
+    return NextResponse.json({ success: true, message: "Translation deleted" });
+  } catch (error) {
+    console.error("[dubbing DELETE]", error);
+    return NextResponse.json({ success: false, error: "Failed to delete translation" }, { status: 500 });
+  }
+}
