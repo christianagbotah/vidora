@@ -1,38 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { zai, ZAIError } from "@/lib/zai";
 import { db } from "@/lib/db";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, unlink, readdir } from "fs/promises";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import path from "path";
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetryableError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return (
-    msg.includes("429") ||
-    msg.includes("rate limit") ||
-    msg.includes("Too many requests")
-  );
-}
-
-async function withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 5): Promise<T> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (isRetryableError(err) && attempt < maxRetries) {
-        const delay = Math.min(30000, 5000 * Math.pow(2, attempt - 1));
-        console.log(`${label}: rate limited, retry ${attempt}/${maxRetries} in ${delay}ms`);
-        await sleep(delay);
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw new Error(label + ": max retries exceeded");
-}
+const execFileAsync = promisify(execFile);
 
 // Split text into chunks that fit within the 1024 char TTS limit
 function splitTextIntoChunks(text: string, maxLen = 900): string[] {
@@ -63,7 +37,42 @@ const TTS_VOICES = [
   { id: "luodo", label: "LuoDo", desc: "Expressive & engaging" },
 ];
 
+/**
+ * Concatenate multiple mp3 files into one using ffmpeg's concat demuxer.
+ * Falls back to returning the first chunk if ffmpeg fails.
+ */
+async function concatMp3Files(chunkPaths: string[], outputPath: string): Promise<boolean> {
+  if (chunkPaths.length === 1) {
+    // Single chunk — no concat needed, just copy
+    return true;
+  }
+
+  const listFile = outputPath + ".concat.txt";
+  // ffmpeg concat demuxer requires paths to be escaped and use forward slashes
+  const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
+  await writeFile(listFile, listContent, "utf-8");
+
+  try {
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-f", "concat",
+      "-safe", "0",
+      "-i", listFile,
+      "-c", "copy",
+      outputPath,
+    ], { timeout: 30_000 });
+    // Clean up the list file
+    await unlink(listFile).catch(() => {});
+    return true;
+  } catch (err) {
+    console.error("ffmpeg concat failed, falling back to first chunk:", err);
+    await unlink(listFile).catch(() => {});
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
+  const tempChunkPaths: string[] = [];
   try {
     const { projectId, sceneId, text, voice = "tongtong", speed = 1.0 } = await req.json();
 
@@ -88,63 +97,69 @@ export async function POST(req: NextRequest) {
     // Clamp speed
     const clampedSpeed = Math.max(0.5, Math.min(2.0, speed || 1.0));
 
-    const zai = await ZAI.create();
     const outputDir = path.join(process.cwd(), "public", "generated", "audio");
     await mkdir(outputDir, { recursive: true });
 
     // Split into chunks if needed, generate each chunk
     const chunks = splitTextIntoChunks(narrationText);
-    const chunkFiles: string[] = [];
 
     for (let i = 0; i < chunks.length; i++) {
-      const response = await withRetry(
-        () => zai.audio.tts.create({
-          input: chunks[i],
-          voice: voice as "tongtong" | "chuichui" | "xiaochen" | "jam" | "kazi" | "douji" | "luodo",
-          response_format: "mp3",
-          speed: clampedSpeed,
-          stream: false,
-        }),
-        `TTS chunk ${i + 1}/${chunks.length}`
-      );
+      const arrayBuffer = await zai.tts({
+        input: chunks[i],
+        voice: voice as string,
+        speed: clampedSpeed,
+        retry: { label: `TTS chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
+      });
 
-      // SDK returns a Response object — use arrayBuffer
-      const arrayBuffer = await response.arrayBuffer();
       const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-
       const chunkFile = path.join(outputDir, `chunk_${sceneId}_${i}_${Date.now()}.mp3`);
       await writeFile(chunkFile, buffer);
-      chunkFiles.push(chunkFile);
-
-      if (i < chunks.length - 1) await sleep(500);
+      tempChunkPaths.push(chunkFile);
     }
 
-    // Use the first chunk as the narration URL (single file is good enough for UI playback)
-    const narrationUrl = `/generated/audio/${path.basename(chunkFiles[0])}`;
+    // Generate final narration file — concatenate all chunks with ffmpeg
+    const finalFilename = `narration_${sceneId}_${Date.now()}.mp3`;
+    const finalPath = path.join(outputDir, finalFilename);
+    const concatenated = await concatMp3Files(tempChunkPaths, finalPath);
 
-    // If multiple chunks, also save a combined file (TODO: concat with ffmpeg for production)
-    const finalNarrationUrl = chunkFiles.length === 1
-      ? narrationUrl
-      : narrationUrl; // For now, use first chunk
+    let narrationUrl: string;
+    if (concatenated) {
+      narrationUrl = `/generated/audio/${finalFilename}`;
+      // Clean up the individual chunk files (keep only the final)
+      for (const p of tempChunkPaths) {
+        await unlink(p).catch(() => {});
+      }
+    } else {
+      // Fallback: use the first chunk
+      narrationUrl = `/generated/audio/${path.basename(tempChunkPaths[0])}`;
+    }
 
     await db.videoScene.update({
       where: { id: sceneId },
-      data: { narrationUrl: finalNarrationUrl },
+      data: { narrationUrl, narrationVoice: voice },
     });
 
-    console.log(`Narration generated for scene ${sceneId}: ${finalNarrationUrl} (${chunks.length} chunk(s))`);
+    console.log(`Narration generated for scene ${sceneId}: ${narrationUrl} (${chunks.length} chunk(s), concatenated=${concatenated})`);
 
     return NextResponse.json({
       success: true,
-      narrationUrl: finalNarrationUrl,
+      narrationUrl,
       text: narrationText,
       voice,
       chunks: chunks.length,
+      concatenated,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to generate narration:", error);
-    return NextResponse.json({ success: false, error: "Failed to generate narration: " + message }, { status: 500 });
+    // Clean up any orphaned chunk files on failure
+    for (const p of tempChunkPaths) {
+      await unlink(p).catch(() => {});
+    }
+    return NextResponse.json(
+      { success: false, error: "Failed to generate narration: " + message },
+      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
+    );
   }
 }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
 
 /**
  * AI Director Mode — Enhance scene prompts with camera movements, lighting, mood, and cinematography.
@@ -24,25 +24,6 @@ const LIGHTING = [
   "underwater caustics", "firelight warm glow", "fluorescent clinical", "dramatic chiaroscuro",
 ];
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 3): Promise<T> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt < maxRetries) {
-        await sleep(3000 * attempt);
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw new Error(label + ": max retries exceeded");
-}
-
 export async function POST(req: NextRequest) {
   try {
     const { prompt, sceneIndex, totalScenes, style, mood, cameraMove, lighting } = await req.json();
@@ -50,8 +31,6 @@ export async function POST(req: NextRequest) {
     if (!prompt) {
       return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
     }
-
-    const zai = await ZAI.create();
 
     const systemPrompt = [
       "You are an elite AI Film Director and Cinematographer.",
@@ -78,22 +57,14 @@ export async function POST(req: NextRequest) {
       prompt,
     ].filter(Boolean).join("\n");
 
-    const completion = await withRetry(
-      () => zai.chat.completions.create({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        thinking: { type: "disabled" },
-      }),
-      "AI Director prompt enhancement"
-    );
+    const raw = await zai.chat({
+      systemPrompt,
+      userPrompt,
+      thinking: "disabled",
+      retry: { label: "AI Director prompt enhancement", timeoutMs: 45_000, maxRetries: 3 },
+    });
 
-    const enhancedPrompt = completion.choices[0]?.message?.content?.trim()
-      .replace(/^```[a-z]*\n?/g, "")
-      .replace(/```$/g, "")
-      .replace(/^["']|["']$/g, "")
-      .trim() || prompt;
+    const enhancedPrompt = cleanLLMOutput(raw) || prompt;
 
     // AI also suggests the mood, camera, and lighting it chose
     let aiMood = mood || "cinematic";
@@ -120,9 +91,12 @@ export async function POST(req: NextRequest) {
       lighting: aiLighting,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to enhance scene:", error);
-    return NextResponse.json({ success: false, error: "Enhancement failed: " + message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: "Enhancement failed: " + message },
+      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
+    );
   }
 }
 

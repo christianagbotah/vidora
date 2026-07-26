@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
+import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
 
 const KNOWN_CHARACTERS: Record<string, { description: string; stylePrompt: string }> = {
   // PAW Patrol
@@ -308,45 +308,52 @@ export async function POST(req: NextRequest) {
     }
 
     // Step 2: No pre-defined scenes — use AI to split and detect characters
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are a professional film storyboard assistant and character designer.",
-            "The user will give you a video concept, story, or script.",
-            "",
-            "Your job is to:",
-            "1. Break the concept into EXACTLY " + desiredSceneCount + " individual scenes for AI video generation",
-            "2. Identify all characters mentioned in the script",
-            "3. For each scene, provide visual description (NO dialogue) AND extracted dialogue",
-            "",
-            "Rules:",
-            "- Each scene PROMPT must be a self-contained VISUAL description (NO dialogue, NO text, NO on-screen text)",
-            "- Each scene should represent roughly 10 seconds of video action",
-            "- Maintain visual continuity across scenes",
-            "- Include camera movement suggestions in prompts",
-            "- For characters: describe their visual appearance (clothing, features, age, style) for AI generation",
-            "",
-            "Return ONLY valid JSON (no markdown, no code fences):",
-            '{"scenes": [{"prompt": "cinematic visual description", "title": "Scene Title", "dialogue": "extracted dialogue", "characterNames": ["Character1"]}], "characters": [{"name": "Character1", "role": "protagonist/supporting/narrator", "description": "visual appearance description for AI generation"}]}',
-          ].join("\n"),
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      thinking: { type: "disabled" },
+    const systemPrompt = [
+      "You are a professional film storyboard assistant and character designer.",
+      "The user will give you a video concept, story, or script.",
+      "",
+      "Your job is to:",
+      "1. Break the concept into EXACTLY " + desiredSceneCount + " individual scenes for AI video generation",
+      "2. Identify all characters mentioned in the script",
+      "3. For each scene, provide visual description (NO dialogue) AND extracted dialogue",
+      "",
+      "Rules:",
+      "- Each scene PROMPT must be a self-contained VISUAL description (NO dialogue, NO text, NO on-screen text)",
+      "- Each scene should represent roughly 10 seconds of video action",
+      "- Maintain visual continuity across scenes",
+      "- Include camera movement suggestions in prompts",
+      "- For characters: describe their visual appearance (clothing, features, age, style) for AI generation",
+      "",
+      "Return ONLY valid JSON (no markdown, no code fences):",
+      '{"scenes": [{"prompt": "cinematic visual description", "title": "Scene Title", "dialogue": "extracted dialogue", "characterNames": ["Character1"]}], "characters": [{"name": "Character1", "role": "protagonist/supporting/narrator", "description": "visual appearance description for AI generation"}]}',
+    ].join("\n");
+
+    const raw = await zai.chat({
+      systemPrompt,
+      userPrompt: prompt,
+      thinking: "disabled",
+      retry: { label: "Split scenes AI", timeoutMs: 90_000, maxRetries: 3 },
     });
 
-    let content = completion.choices[0]?.message?.content || "";
-    content = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const content = cleanLLMOutput(raw);
 
-    const parsed = JSON.parse(content);
+    let parsed: { scenes?: Array<Record<string, unknown>>; characters?: Array<Record<string, unknown>> };
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      // Surface the JSON parse failure to the client instead of silently falling back
+      return NextResponse.json({
+        success: false,
+        error: "The AI returned a response that could not be parsed as JSON. Please try again or rephrase your prompt.",
+        rawPreview: content.slice(0, 500),
+        fallback: true,
+        scenes: [{ prompt }],
+        characters: [],
+        isSingle: true,
+      }, { status: 422 });
+    }
 
-    const scenes: ParsedScene[] = (parsed.scenes || []).map((s: Record<string, unknown>) => ({
+    const scenes: ParsedScene[] = (parsed.scenes || []).map((s) => ({
       prompt: (s.prompt || s.text || s.description || "") as string,
       title: (s.title || undefined) as string | undefined,
       dialogue: (s.dialogue || undefined) as string | undefined,
@@ -391,17 +398,17 @@ export async function POST(req: NextRequest) {
       source: "ai",
     });
   } catch (error) {
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to split scenes:", error);
+    // Provide a graceful fallback so the UI still works, but surface the real error
     const body = await req.clone().json().catch(() => null);
-    if (body?.prompt) {
-      return NextResponse.json({
-        success: true,
-        scenes: [{ prompt: body.prompt }],
-        characters: [],
-        isSingle: true,
-        fallback: true,
-      });
-    }
-    return NextResponse.json({ success: false, error: "Failed to analyze prompt" }, { status: 500 });
+    return NextResponse.json({
+      success: false,
+      error: "Failed to analyze prompt: " + message,
+      fallback: true,
+      scenes: body?.prompt ? [{ prompt: body.prompt }] : [],
+      characters: [],
+      isSingle: true,
+    }, { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 });
   }
 }

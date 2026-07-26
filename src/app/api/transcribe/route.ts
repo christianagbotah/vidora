@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
-import { writeFile, unlink } from "fs/promises";
-import { readFile } from "fs/promises";
-import path from "path";
-import os from "os";
+import { zai, ZAIError } from "@/lib/zai";
 
 export async function POST(req: NextRequest) {
-  let tempPath: string | null = null;
   try {
     const formData = await req.formData();
     const audioFile = formData.get("audio") as File | null;
@@ -18,37 +13,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Convert the uploaded audio directly to base64 — no temp file needed.
     const bytes = await audioFile.arrayBuffer();
     const buffer = Buffer.from(bytes);
+    const base64Audio = buffer.toString("base64");
 
-    // Save to temp file
-    const ext = audioFile.name.split(".").pop() || "webm";
-    tempPath = path.join(os.tmpdir(), `audio_${Date.now()}.${ext}`);
-    await writeFile(tempPath, buffer);
-
-    const fileData = await readFile(tempPath);
-    const base64Audio = fileData.toString("base64");
-
-    const zai = await ZAI.create();
-    const response = await zai.audio.asr.create({
-      file_base64: base64Audio,
+    const transcription = await zai.asr({
+      fileBase64: base64Audio,
+      retry: { label: "Transcribe audio", timeoutMs: 120_000, maxRetries: 3 },
     });
 
     return NextResponse.json({
       success: true,
-      transcription: response.text,
+      transcription,
     });
   } catch (error) {
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to transcribe audio:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to transcribe audio" },
-      { status: 500 }
+      { success: false, error: "Failed to transcribe audio: " + message },
+      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
     );
-  } finally {
-    if (tempPath) {
-      try {
-        await unlink(tempPath);
-      } catch {}
-    }
   }
 }

@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ZAI from "z-ai-web-dev-sdk";
-import { writeFile, unlink, readFile } from "fs/promises";
-import path from "path";
-import os from "os";
+import { zai, ZAIError } from "@/lib/zai";
 
 export async function POST(req: NextRequest) {
   let tempPath: string | null = null;
@@ -20,17 +17,19 @@ export async function POST(req: NextRequest) {
     const bytes = await videoFile.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Save to temp file
+    // The ZAI vision endpoint requires a publicly-reachable URL or a data URL.
+    // We use a data URL (base64) so no file hosting is needed.
     const ext = videoFile.name.split(".").pop() || "mp4";
-    tempPath = path.join(os.tmpdir(), `video_${Date.now()}.${ext}`);
-    await writeFile(tempPath, buffer);
-
-    const zai = await ZAI.create();
+    const mimeType = ext === "webm" ? "video/webm" : ext === "mov" ? "video/quicktime" : "video/mp4";
+    const base64Video = buffer.toString("base64");
+    const dataUrl = `data:${mimeType};base64,${base64Video}`;
 
     const analyzePrompt =
-      "Analyze this video and provide a detailed scene description that could be used to recreate a similar video with AI. Describe: the visual style, camera work, subjects, actions, environment, lighting, mood, and color palette. Be specific and cinematic. Also provide a concise 1-2 sentence prompt that could be used for AI image generation to recreate this scene.";
+      "Analyze this video and provide a detailed scene description that could be used to recreate a similar video with AI. Describe: the visual style, camera work, subjects, actions, environment, lighting, mood, and color palette. Be specific and cinematic. Then on a new line starting with 'PROMPT:', provide a concise 1-2 sentence prompt that could be used for AI image generation to recreate this scene.";
 
-    const response = await zai.chat.completions.createVision({
+    const content = await zai.vision({
+      model: "glm-4v",
+      thinking: "enabled",
       messages: [
         {
           role: "user",
@@ -38,39 +37,39 @@ export async function POST(req: NextRequest) {
             { type: "text", text: analyzePrompt },
             {
               type: "video_url",
-              video_url: { url: `file://${tempPath}` },
+              video_url: { url: dataUrl },
             },
           ],
         },
       ],
-      thinking: { type: "enabled" },
+      retry: { label: "Analyze video", timeoutMs: 180_000, maxRetries: 3 },
     });
-
-    const content = response.choices[0]?.message?.content;
 
     if (!content) {
       return NextResponse.json(
-        { success: false, error: "Failed to analyze video" },
-        { status: 500 }
+        { success: false, error: "The AI returned an empty analysis. Please try a different video." },
+        { status: 422 }
       );
+    }
+
+    // Extract the concise prompt after "PROMPT:" if present
+    let suggestedPrompt = content;
+    const promptMatch = content.match(/PROMPT:\s*(.+)/i);
+    if (promptMatch) {
+      suggestedPrompt = promptMatch[1].trim();
     }
 
     return NextResponse.json({
       success: true,
       description: content,
-      suggestedPrompt: content,
+      suggestedPrompt,
     });
   } catch (error) {
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to analyze video:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to analyze video" },
-      { status: 500 }
+      { success: false, error: "Failed to analyze video: " + message },
+      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
     );
-  } finally {
-    if (tempPath) {
-      try {
-        await unlink(tempPath);
-      } catch {}
-    }
   }
 }

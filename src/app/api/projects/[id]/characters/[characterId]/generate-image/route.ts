@@ -1,34 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import ZAI from "z-ai-web-dev-sdk";
+import { zai, ZAIError } from "@/lib/zai";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetryableError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes("429") || msg.includes("rate limit") || msg.includes("Too many requests");
-}
-
-async function withRetry<T>(fn: () => Promise<T>, label: string, maxRetries = 3): Promise<T> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (isRetryableError(err) && attempt < maxRetries) {
-        const delay = Math.min(20000, 5000 * Math.pow(2, attempt - 1));
-        console.log(`${label}: rate limited, retry ${attempt}/${maxRetries} in ${delay}ms`);
-        await sleep(delay);
-      } else {
-        throw err;
-      }
-    }
-  }
-  throw new Error(label + ": max retries exceeded");
-}
 
 export async function POST(
   req: NextRequest,
@@ -50,19 +24,15 @@ export async function POST(
       "suitable for use as character reference in video generation",
     ].join(", ");
 
-    const zai = await ZAI.create();
     const outputDir = path.join(process.cwd(), "public", "generated", "characters");
     await mkdir(outputDir, { recursive: true });
 
-    const imgResponse = await withRetry(
-      () => zai.images.generations.create({
-        prompt: portraitPrompt,
-        size: "1024x1024",
-      }),
-      `Character ${character.name} image generation`
-    );
+    const imageBase64 = await zai.generateImage({
+      prompt: portraitPrompt,
+      size: "1024x1024",
+      retry: { label: `Character ${character.name} image generation`, timeoutMs: 120_000, maxRetries: 4 },
+    });
 
-    const imageBase64 = imgResponse.data[0].base64;
     const buffer = Buffer.from(imageBase64, "base64");
     const filename = `char_${characterId.slice(0, 8)}_${Date.now()}.png`;
     await writeFile(path.join(outputDir, filename), buffer);
@@ -86,7 +56,10 @@ export async function POST(
     });
   } catch (error) {
     console.error("Failed to generate character image:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ success: false, error: "Failed to generate character image: " + message }, { status: 500 });
+    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json(
+      { success: false, error: "Failed to generate character image: " + message },
+      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
+    );
   }
 }
