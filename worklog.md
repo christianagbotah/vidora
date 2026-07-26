@@ -1252,3 +1252,25 @@ Stage Summary:
 - Remote now has: schema restoration (push-1) + dubbing UI completion (push-2) = ready for VPS pull
 - VPS deploy steps for owner: (1) git pull, (2) bun install, (3) bunx prisma db push (to create SceneTranslation + other new tables in Postgres), (4) ./deploy.sh
 - All 3 originally-reported issues RESOLVED: dubbing works (English + 30 langs visible + playable), selects work, no mobile overlap
+
+---
+Task ID: push-3
+Agent: main (orchestrator)
+Task: fix VPS git pull conflict on .env (tracked despite gitignore) — untrack permanently
+
+Work Log:
+- User reported VPS deploy blocked: `git pull` failed with "Your local changes to the following files would be overwritten by merge: .env"
+- Root cause investigation: `.env` IS tracked in git (`git ls-files --error-unmatch .env` returns it), even though `.gitignore` line 34 lists `.env`. This happened because .env was force-added before .gitignore existed. Git log showed commit 72d0f6a "fix: set DATABASE_URL to PostgreSQL in committed .env for VPS deploy" — someone even committed a production postgres URL to .env at one point.
+- Verified the tracked .env only contained `DATABASE_URL=file:/home/z/my-project/db/custom.db` (local sqlite dev URL) — no production secrets currently leaked in the repo, but the tracking itself causes every deploy to conflict when the VPS .env (postgres + ZAI_API_KEY) differs.
+- Enumerated ALL env vars used by the app via `grep process.env` in src/ + reading ecosystem.config.js: DATABASE_URL, NEXTAUTH_URL, NEXTAUTH_SECRET, NEXT_PUBLIC_BASE_URL, ZAI_BASE_URL, ZAI_API_KEY, PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY, HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, HUBTEL_MERCHANT_ACCOUNT, HUBTEL_MERCHANT_ID, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, IMAGE_API_KEY, VIDEO_API_KEY, TTS_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+- Rewrote `.env.example` (was already tracked but incomplete) as a full template documenting all 20 env vars with safe placeholders + comments showing local sqlite vs production postgres DATABASE_URL formats
+- `git rm --cached .env` → untracked .env (file stays on disk locally + on VPS; .gitignore already covers it)
+- Confirmed .env still on disk locally (50 bytes, DATABASE_URL intact) and dev server still serving 200s
+- Committed a83f6e7 "fix: untrack .env to stop deploy conflicts (gitignored)" and pushed to origin/main
+
+Stage Summary:
+- VPS is currently blocked at commit 61472d7 trying to pull f45049a (dubbing UI). Now there are TWO new commits to absorb: f45049a + a83f6e7.
+- Gave user immediate unblock commands: backup .env → stash → pull → restore .env → drop stash → prisma db push → deploy.sh --no-pull
+- After the user runs those commands ONCE, .env is untracked on the VPS forever. Future `git pull` will never conflict on .env again — no more stash dance needed.
+- `.env.example` is now the documented template in the repo for future VPS setup / new developers.
+- The production .env on the VPS (with real postgres DATABASE_URL + ZAI_API_KEY + payment keys) remains the single source of truth, preserved across all future pulls automatically.
