@@ -27,6 +27,7 @@ import {
   Pencil, Power, Save, ChevronUp, ChevronDown, Sparkle, AlertCircle,
   Share2, Music2, Subtitles, Languages, BarChart2, Globe, Image as ImageIcon2,
   Building, Youtube, Instagram, Facebook, Send,
+  ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,6 +55,8 @@ import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
+import AIAssistant from "@/components/AIAssistant";
+import ScrollToTop from "@/components/ScrollToTop";
 import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES, DUBBING_LANGUAGE_COUNT } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -784,6 +787,10 @@ function VidoraApp() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // ── Sticky header: transparent at top, solid (with shadow) after scroll ──
+  const [headerScrolled, setHeaderScrolled] = useState(false);
+  // ── Contact dialog (opened from footer) ──
+  const [contactDialogOpen, setContactDialogOpen] = useState(false);
   // ── Admin: Token Package Management ──
   const [adminPackages, setAdminPackages] = useState<AdminTokenPackage[]>([]);
   const [editingPackage, setEditingPackage] = useState<AdminTokenPackage | null>(null);
@@ -871,6 +878,19 @@ function VidoraApp() {
 
   // Load projects on mount
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  // ── Sticky header: add shadow + stronger bg once the user scrolls past 10px ──
+  useEffect(() => {
+    const onScroll = () => setHeaderScrolled(window.scrollY > 10);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // ── Scroll to top whenever the view changes (so the new view starts at top) ──
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [currentView]);
 
   // Auto-trigger generation on entering studio if there are pending scenes
   useEffect(() => {
@@ -2658,7 +2678,11 @@ function VidoraApp() {
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl overflow-hidden">
+      <header className={`sticky top-0 z-50 border-b backdrop-blur-xl transition-all duration-300 overflow-hidden ${
+        headerScrolled
+          ? "bg-background/95 shadow-md shadow-black/5 border-slate-200/80"
+          : "bg-background/70 border-transparent"
+      }`}>
         <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-1.5 sm:gap-2 min-w-0 overflow-hidden">
           <button
             onClick={() => currentView !== "home" ? setCurrentView("home") : undefined}
@@ -2776,19 +2800,19 @@ function VidoraApp() {
                         variant="outline"
                         onClick={() => handleTryDemo()}
                         disabled={isCreatingDemo}
-                        className="glass-card text-white hover:text-white hover:bg-white/15 px-6 py-4 h-auto border-amber-300/40"
+                        className="glass-card text-white hover:text-white hover:bg-violet-500/20 px-6 py-4 h-auto !border-2 !border-violet-400/70 hover:!border-violet-300 shadow-lg shadow-violet-500/20"
                       >
                         {isCreatingDemo ? (
                           <><Loader2 className="h-4 w-4 sm:h-5 sm:w-5 mr-2 animate-spin" />Loading demo…</>
                         ) : (
-                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-amber-300" />Try Live Demo</>
+                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-violet-300" />Try Live Demo</>
                         )}
                       </Button>
                       <Button
                         size="lg"
                         variant="outline"
                         onClick={() => setCurrentView("gallery")}
-                        className="glass-card text-white/80 hover:text-white hover:bg-white/10 px-6 py-4 h-auto"
+                        className="glass-card text-white/90 hover:text-white hover:bg-fuchsia-500/20 px-6 py-4 h-auto !border-2 !border-fuchsia-400/70 hover:!border-fuchsia-300 shadow-lg shadow-fuchsia-500/20"
                       >
                         <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
                       </Button>
@@ -3076,26 +3100,117 @@ function VidoraApp() {
                       <p className="text-sm text-muted-foreground leading-relaxed max-w-sm">
                         Professional AI video studio. Create stunning videos from scripts, text prompts, voice, or images with AI-powered scene generation.
                       </p>
+                      <div className="flex items-center gap-3 mt-4">
+                        <a
+                          href="https://youtube.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors"
+                          aria-label="YouTube"
+                          title="Follow on YouTube"
+                        >
+                          <Youtube className="h-4 w-4" />
+                        </a>
+                        <a
+                          href="https://instagram.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-pink-600 hover:border-pink-200 transition-colors"
+                          aria-label="Instagram"
+                          title="Follow on Instagram"
+                        >
+                          <Instagram className="h-4 w-4" />
+                        </a>
+                        <a
+                          href="https://facebook.com"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-colors"
+                          aria-label="Facebook"
+                          title="Follow on Facebook"
+                        >
+                          <Facebook className="h-4 w-4" />
+                        </a>
+                        <a
+                          href="mailto:hello@lightworldtech.com"
+                          className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-violet-600 hover:border-violet-200 transition-colors"
+                          aria-label="Email"
+                          title="Email us"
+                        >
+                          <MailIcon className="h-4 w-4" />
+                        </a>
+                      </div>
                     </div>
                     <div>
-                      <h4 className="font-bold text-sm mb-3">Product</h4>
+                      <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                        <Layers className="h-3.5 w-3.5 text-violet-500" />Product
+                      </h4>
                       <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li><button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors">Create Video</button></li>
-                        <li><button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors">Templates</button></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Features</span></li>
+                        <li>
+                          <button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors text-left">
+                            Create Video
+                          </button>
+                        </li>
+                        <li>
+                          <button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors text-left">
+                            Templates
+                          </button>
+                        </li>
+                        <li>
+                          <button onClick={() => handleTryDemo()} className="hover:text-violet-500 transition-colors text-left">
+                            Features
+                          </button>
+                        </li>
                       </ul>
                     </div>
                     <div>
-                      <h4 className="font-bold text-sm mb-3">Support</h4>
+                      <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                        <Shield className="h-3.5 w-3.5 text-fuchsia-500" />Support
+                      </h4>
                       <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Documentation</span></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">API Reference</span></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Contact</span></li>
+                        <li>
+                          <a
+                            href="/docs"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-violet-500 transition-colors flex items-center gap-1"
+                          >
+                            <BookOpen className="h-3 w-3" />Documentation
+                          </a>
+                        </li>
+                        <li>
+                          <a
+                            href="/api/reference"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-violet-500 transition-colors flex items-center gap-1"
+                          >
+                            <Code className="h-3 w-3" />API Reference
+                          </a>
+                        </li>
+                        <li>
+                          <button
+                            onClick={() => setContactDialogOpen(true)}
+                            className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                          >
+                            <Phone className="h-3 w-3" />Contact
+                          </button>
+                        </li>
                       </ul>
                     </div>
                   </div>
                   <Separator className="my-6" />
-                  <p className="text-xs text-muted-foreground text-center">&copy; {new Date().getFullYear()} Vidora AI. Professional AI Video Studio.</p>
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground text-center sm:text-left">
+                      &copy; {new Date().getFullYear()} Vidora AI · A product of LightWorld Technologies.
+                    </p>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                      <Globe className="h-3 w-3" />
+                      <a href="https://vidora.lightworldtech.com" className="hover:text-violet-500 transition-colors">
+                        vidora.lightworldtech.com
+                      </a>
+                    </p>
+                  </div>
                 </div>
               </footer>
             </motion.div>
@@ -6399,6 +6514,86 @@ function VidoraApp() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Contact Dialog (opened from footer) ── */}
+      <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <Phone className="h-4 w-4 text-white" />
+              </div>
+              Get in Touch
+            </DialogTitle>
+            <DialogDescription>
+              We'd love to hear from you. Reach out with any questions, feedback, or partnership ideas.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <a
+              href="mailto:hello@lightworldtech.com"
+              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-colors group"
+            >
+              <div className="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 group-hover:bg-violet-200 transition-colors shrink-0">
+                <MailIcon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Email Us</p>
+                <p className="text-xs text-muted-foreground truncate">hello@lightworldtech.com</p>
+              </div>
+            </a>
+            <a
+              href="https://wa.me/233200000000"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
+            >
+              <div className="h-10 w-10 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-200 transition-colors shrink-0">
+                <MessageCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">WhatsApp</p>
+                <p className="text-xs text-muted-foreground truncate">Chat with our team</p>
+              </div>
+            </a>
+            <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+              <div className="h-10 w-10 rounded-lg bg-fuchsia-100 flex items-center justify-center text-fuchsia-600 shrink-0">
+                <Globe className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Website</p>
+                <p className="text-xs text-muted-foreground truncate">vidora.lightworldtech.com</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <Bot className="h-5 w-5 text-violet-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-muted-foreground">
+                Need a quick answer? Try our <strong className="text-violet-600">AI Assistant</strong> —
+                click the chat bubble in the bottom-right corner. It's available 24/7 and can help with
+                most questions instantly.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setContactDialogOpen(false)}>
+              Close
+            </Button>
+            <Button
+              className="btn-gradient"
+              onClick={() => {
+                setContactDialogOpen(false);
+                window.location.href = "mailto:hello@lightworldtech.com";
+              }}
+            >
+              <MailIcon className="h-4 w-4 mr-1.5" /> Send Email
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Global floating widgets: AI chat + scroll-to-top ── */}
+      <AIAssistant />
+      <ScrollToTop />
 
     </div>
   );
