@@ -1214,3 +1214,41 @@ Stage Summary:
 - VPS deploy (`./deploy.sh`) is now safe: `bun install` will generate a postgres client matching the postgres DATABASE_URL
 - NOTE: On the VPS, after `git pull`, the new models (BrandKit, SceneTranslation, etc.) must be applied to the postgres DB. deploy.sh does NOT run `prisma db push` — recommend running `bunx prisma db push` on the VPS after deploy to create the new tables (or use `prisma migrate`). This is a manual step the owner must perform.
 - Still pending (NOT done in this task): dubbing language list missing English + dubbing failure investigation; select fields (camera/light/mode/language) not selecting on video gen page; mobile overlap of select fields.
+
+---
+Task ID: push-2
+Agent: main (orchestrator)
+Task: tackle all (dubbing + select fields + mobile overlap) then commit and push so user can pull from VPS
+
+Work Log:
+- Read dubbing API route (src/app/api/scenes/[id]/dubbing/route.ts) and the dubbing language catalog (src/lib/dubbing-languages.ts)
+- DISCOVERY: The dubbing catalog ALREADY includes English (first in "Popular" group) + 30 languages across 5 groups (Popular, European, Asian, West African, Other African). The user saw an old deploy.
+- DISCOVERY: The dubbing API already has proper error handling for Z.ai error 1113 (insufficient balance) — surfaces "Dubbing unavailable" toast.
+- Used agent-browser to verify live: dubbing POST returned 200 in 2.3s (Z.ai API is working now, balance must be restored). English + French both generated successfully.
+- Verified selects work: camera ("Aerial Drone Shot"), lighting ("Golden Hour" selected and persisted), mood, music, transition — all selectable and persist via optimistic update + PUT.
+- Verified NO mobile overlaps: JS eval on 390px viewport showed 10 select triggers, zero overlaps. AI Director Controls (mood/camera/lighting) stack full-width on mobile; actions toolbar wraps cleanly.
+- FOUND REAL GAP: After generating dubbing, the audio was stored in DB (SceneTranslation) but NEVER displayed in the UI — users saw only a toast with no way to play/manage the dubbed audio. This was the actual "dubbing is failing" perception.
+
+FIXES APPLIED:
+1. types/video.ts: Added SceneTranslation interface + translations?: SceneTranslation[] field on VideoScene
+2. api/projects/[id]/route.ts: Added include: { translations: { orderBy: { lang: "asc" } } } to scene query in both GET and PUT — project payload now carries dubbed audio
+3. api/scenes/[id]/dubbing/route.ts: Added DELETE handler — removes a single translation by ?lang= code (DB row + audio file on disk, best-effort)
+4. page.tsx handleGenerateDubbing: Now calls refreshProject() after success so the new translation + audio URL render immediately
+5. page.tsx handleDeleteDubbing: New handler — calls DELETE API, toasts, refreshes
+6. page.tsx SortableSceneCard: New "Dubbed Audio" section renders every ready translation as a row: flag emoji + language name + HTML5 audio player + trash delete button. Includes a spinner row for in-progress generation.
+7. page.tsx: Wired onDeleteDubbing={handleDeleteDubbing} prop to every scene card
+
+BROWSER VERIFICATION (agent-browser):
+- English dubbing: POST 200 in 2.3s, toast "English dubbing ready!", audio player appeared with 🇬🇧 flag
+- French dubbing: generated, 🇫🇷 flag row appeared alongside English (2 rows total)
+- Delete button: clicked → audio removed, section collapsed (audioCount 1→0, hasDubbedSection false)
+- Mobile 390px: dubbed audio row 270px wide, ends at 326px, no viewport overflow. 10 select triggers, zero overlaps.
+- Desktop 1440px: 30 selects on page, 2 dubbed rows, no overflow
+- Lint: clean (no errors)
+
+Stage Summary:
+- Committed as f45049a "feat: dubbed audio playback + multi-language tracks in scene card"
+- Pushed to origin/main (1190178..f45049a)
+- Remote now has: schema restoration (push-1) + dubbing UI completion (push-2) = ready for VPS pull
+- VPS deploy steps for owner: (1) git pull, (2) bun install, (3) bunx prisma db push (to create SceneTranslation + other new tables in Postgres), (4) ./deploy.sh
+- All 3 originally-reported issues RESOLVED: dubbing works (English + 30 langs visible + playable), selects work, no mobile overlap
