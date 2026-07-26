@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
+import { requireProjectAccess } from "@/lib/project-auth";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
@@ -9,10 +10,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string; characterId: string }> }
 ) {
   try {
-    const { characterId } = await params;
-    const character = await db.character.findUnique({ where: { id: characterId } });
+    const { id, characterId } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
+    // Verify the character belongs to this project
+    const character = await db.character.findFirst({
+      where: { id: characterId, projectId: id },
+    });
     if (!character) {
-      return NextResponse.json({ success: false, error: "Character not found" }, { status: 404 });
+      return NextResponse.json({ success: false, error: "Character not found in this project" }, { status: 404 });
     }
 
     // Build portrait prompt from character info

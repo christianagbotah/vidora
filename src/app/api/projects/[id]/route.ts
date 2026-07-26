@@ -1,12 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 
+/**
+ * GET /api/projects/[id]
+ *
+ * Owner: can view their own project
+ * Admin: can view any project (read-only oversight)
+ * Others: 403
+ */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, false); // view access
+    if (!authResult.ok) return authResult.response;
+
     const project = await db.videoProject.findUnique({
       where: { id },
       include: {
@@ -32,12 +43,21 @@ export async function GET(
   }
 }
 
+/**
+ * PUT /api/projects/[id]
+ *
+ * Only the OWNER can edit. Admins cannot edit projects they don't own
+ * (prevents accidental modifications to user content).
+ */
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
     const body = await req.json();
     const { title, description, style, aspectRatio, status, targetDuration } = body;
 
@@ -64,12 +84,21 @@ export async function PUT(
   }
 }
 
+/**
+ * DELETE /api/projects/[id]
+ *
+ * Only the OWNER can delete. Admins cannot delete user projects
+ * (prevents accidental data loss).
+ */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
     await db.videoProject.delete({ where: { id } });
     return NextResponse.json({ success: true, message: "Project deleted" });
   } catch (error) {

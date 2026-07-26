@@ -1,15 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 
+/**
+ * PUT /api/projects/[id]/scenes/[sceneId]
+ * Updates a scene. Only the project owner can edit scenes.
+ */
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; sceneId: string }> }
 ) {
   try {
-    const { sceneId } = await params;
+    const { id, sceneId } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
     const body = await req.json();
     const { prompt, enhancedPrompt, duration, transition, status, imageUrl } =
       body;
+
+    // Verify the scene belongs to this project (prevents ID manipulation)
+    const existing = await db.videoScene.findFirst({
+      where: { id: sceneId, projectId: id },
+      select: { id: true },
+    });
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Scene not found in this project" },
+        { status: 404 }
+      );
+    }
 
     const scene = await db.videoScene.update({
       where: { id: sceneId },
@@ -33,12 +53,31 @@ export async function PUT(
   }
 }
 
+/**
+ * DELETE /api/projects/[id]/scenes/[sceneId]
+ * Deletes a scene. Only the project owner can delete scenes.
+ */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; sceneId: string }> }
 ) {
   try {
-    const { sceneId } = await params;
+    const { id, sceneId } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
+    // Verify the scene belongs to this project
+    const existing = await db.videoScene.findFirst({
+      where: { id: sceneId, projectId: id },
+      select: { id: true },
+    });
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Scene not found in this project" },
+        { status: 404 }
+      );
+    }
+
     await db.videoScene.delete({ where: { id: sceneId } });
     return NextResponse.json({ success: true, message: "Scene deleted" });
   } catch (error) {

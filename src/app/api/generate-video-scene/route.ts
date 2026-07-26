@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
+import { requireProjectAccess } from "@/lib/project-auth";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
@@ -29,6 +30,13 @@ export async function POST(req: NextRequest) {
         { success: false, error: "Prompt and sceneId are required" },
         { status: 400 }
       );
+    }
+
+    // ── Ownership check ──
+    // Verify the user owns (or admin can view) the project before generating
+    if (projectId) {
+      const authResult = await requireProjectAccess(projectId, true); // write access
+      if (!authResult.ok) return authResult.response;
     }
 
     // Get the project for aspect ratio and scene context

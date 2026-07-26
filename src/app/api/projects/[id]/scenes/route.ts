@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 
+/**
+ * GET /api/projects/[id]/scenes
+ * Returns scenes for a project. Owner or admin (view) can access.
+ */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, false);
+    if (!authResult.ok) return authResult.response;
+
     const scenes = await db.videoScene.findMany({
       where: { projectId: id },
       orderBy: { sceneNumber: "asc" },
@@ -21,12 +29,19 @@ export async function GET(
   }
 }
 
+/**
+ * POST /api/projects/[id]/scenes
+ * Creates a new scene. Only the project owner can add scenes.
+ */
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
     const body = await req.json();
     const { prompt, enhancedPrompt, duration, transition } = body;
 

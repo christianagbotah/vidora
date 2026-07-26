@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 
 export async function POST(
   req: NextRequest,
@@ -7,6 +8,9 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+    const authResult = await requireProjectAccess(id, true); // write access
+    if (!authResult.ok) return authResult.response;
+
     const { sceneIds } = await req.json();
 
     if (!Array.isArray(sceneIds) || sceneIds.length === 0) {
