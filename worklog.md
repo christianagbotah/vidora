@@ -1339,3 +1339,57 @@ Stage Summary:
 - All 5 requested features implemented + verified end-to-end
 - AI assistant uses Z.ai LLM (glm-4.5) — working, balance appears restored
 - VPS pull will get: dubbing UI + .env untrack + postgres guardrails + this UI batch (4 commits since user's last pull)
+
+---
+Task ID: push-6
+Agent: main (orchestrator)
+Task: Fix footer issues — WhatsApp 0243618186, email vidora@lightworldtech.com, @vidorapro socials, Documentation/API Reference 404, footer missing on some pages
+
+Work Log:
+- User reported: (1) link WhatsApp to 0243618186, (2) email is vidora@lightworldtech.com, (3) Documentation + API Reference showing 404, (4) all social media should be @vidorapro, (5) footer doesn't show on some pages
+- Investigated page.tsx structure: footer was rendered ONLY inside the home view's motion.div (lines 3089-3218). When user navigated to Create/Gallery/Dashboard/etc., AnimatePresence replaced the entire motion.div — taking the footer with it. This was the root cause of "footer missing on some pages."
+- Investigated /docs and /api/reference 404s: these were plain <a href="/docs" target="_blank"> links in the footer, but no such routes exist in src/app (the project rule forbids adding new routes). The dev.log showed: `GET /docs 404 in 171ms` and `GET /api/reference 404 in 48ms`.
+- Investigated social media: YouTube/Instagram/Facebook were all pointing to bare domains (https://youtube.com, https://instagram.com, https://facebook.com) — not @vidorapro handles.
+- Investigated contact: WhatsApp was wa.me/233200000000 (placeholder), email was hello@lightworldtech.com (wrong address).
+
+FIXES APPLIED (all in src/app/page.tsx):
+1. Added 2 new state vars: docsDialogOpen, apiRefDialogOpen
+2. Extracted the footer OUT of the home view's motion.div — relocated it after </main> as a sibling of <main> inside the outer min-h-screen flex-col wrapper. Now renders on ALL views unconditionally.
+3. Added pb-20 md:pb-0 to the footer className so mobile logged-in users don't have footer content hidden behind the fixed 64px-tall mobile bottom nav.
+4. Social media links updated:
+   - YouTube: https://youtube.com/@vidorapro
+   - Instagram: https://instagram.com/vidorapro
+   - Facebook: https://facebook.com/vidorapro
+   - Added a 5th WhatsApp icon button: https://wa.me/233243618186
+5. Email: all 3 occurrences (footer icon, contact dialog email card, Send Email CTA) changed from hello@lightworldtech.com → vidora@lightworldtech.com
+6. WhatsApp: in footer social row + Contact dialog card, changed from wa.me/233200000000 → wa.me/233243618186 (with display text "0243618186")
+7. Documentation: replaced <a href="/docs" target="_blank"> with <button onClick={() => setDocsDialogOpen(true)}>. Built a new Documentation Dialog (sm:max-w-2xl, max-h-85vh, ScrollArea) with 6 sections:
+   - Quick Start (7-step guide)
+   - AI Director Controls (camera/lighting/mood/music/transition options)
+   - Dubbing & Subtitles (30+ languages, audio rows, SRT)
+   - Sharing & Brand Kit (share pages, brand kit, embed, analytics)
+   - Tokens & Billing (1 token/image, 3 tokens/video, Paystack/Hubtel/Stripe)
+   - Need More Help? (mailto + WhatsApp + AI Assistant tip)
+   - Footer: Close button + "Start Creating" CTA
+8. API Reference: replaced <a href="/api/reference" target="_blank"> with <button onClick={() => setApiRefDialogOpen(true)}>. Built a new API Reference Dialog with 20 REST endpoints rendered as cards with color-coded method badges (GET=emerald, POST=violet, PUT=amber, DELETE=rose) + path + description. Includes auth note. Endpoints: /api/projects (GET/POST), /api/projects/:id (GET/PUT/DELETE), scenes CRUD, enhance-prompt, generate-scene, generate-video, transcribe, analyze-video, dubbing (GET/POST/DELETE), history, payments/packages, assistant/chat.
+
+BROWSER VERIFICATION (agent-browser):
+- Home footer: all 5 social links verified — YouTube/@vidorapro, Instagram/vidorapro, Facebook/vidorapro, mailto:vidora@lightworldtech.com, wa.me/233243618186
+- Gallery view: clicked "Browse Templates" → footer still visible (Product, Support, Documentation, API Reference, Contact all present)
+- Create view: clicked "Create Video" → footer visible
+- Documentation dialog: clicked → opened with title "Vidora Documentation", all 6 sections present (Quick Start, AI Director, Dubbing, Sharing, Billing, contact info with 0243618186 + vidora@lightworldtech.com)
+- API Reference dialog: clicked → opened with title "Vidora API Reference", 20 endpoints listed (/api/projects, /api/projects/:id, /api/scenes/:id/dubbing, /api/assistant/chat, etc.)
+- Mobile 390x844: footer renders correctly (guest user, no bottom nav present, no overlap)
+- dev.log: zero /docs or /api/reference 404s after the fix (proof the dialogs work — no page navigation occurs)
+- No console errors, no page errors
+- Lint: clean
+
+Stage Summary:
+- Committed ce733d1, pushed to origin/main (b420168..ce733d1)
+- All 5 user-reported issues RESOLVED:
+  1. WhatsApp → 0243618186 (footer + contact dialog)
+  2. Email → vidora@lightworldtech.com (3 occurrences)
+  3. Documentation + API Reference → no more 404 (in-app dialogs with full content)
+  4. Social media → all @vidorapro (YouTube, Instagram, Facebook)
+  5. Footer → now renders on ALL views (extracted from home view's motion.div)
+- VPS pull will get this commit on top of the previous batch (f45049a + a83f6e7 + 2fc54c7 + b420168 + ce733d1)
