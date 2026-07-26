@@ -504,3 +504,35 @@ Stage Summary:
 - Mobile UI completely redesigned: compact header + bottom nav bar = native app feel
 - PWA manifest added so users can "Add to Home Screen" on mobile
 - Commit 6ca6711 pushed to origin/main
+
+---
+Task ID: admin-gateway-conditional-mobile-drawer
+Agent: main
+Task: Fix admin config showing all gateway fields at once (should show only active gateway) + redesign mobile header with hamburger drawer
+
+Work Log:
+- User clarified: admin config page should show ONLY the selected/active gateway's fields, not all 3 gateways via tabs
+- User reported mobile view missing logo, sign-in button, and drawer/menu icon
+- Verified with Agent Browser + VLM that mobile header WAS rendering (logo + Sign In), but user wanted a proper hamburger drawer
+- Removed `Tabs` component from payment gateway config (was showing Paystack/Hubtel/Stripe tabs all at once)
+- Replaced with conditional rendering: only the active gateway's fields show, controlled by `adminConfigs.payment_gateway?.value`
+- Selecting a gateway button now instantly switches the visible form (no separate tab state)
+- Removed redundant `activeGatewayTab` state (form now follows the active gateway directly)
+- Redesigned mobile header: replaced avatar DropdownMenu with hamburger icon (Menu icon, always visible on mobile via md:hidden)
+- Added Sheet drawer component that slides in from the right side (native app feel)
+- Drawer content for logged-in users: user info card (avatar + name + email + token balance), navigation links (Home, Dashboard, Create Video, Templates, Buy Tokens, Profile, Admin Portal), Sign Out button at bottom
+- Drawer content for logged-out users: welcome message, gradient Sign In CTA, Try the Creator button, Quick Links (Start Creating, Browse Templates)
+- Logo + "Vidora" + PRO badge always visible on left side of header
+- Sign In button visible on all screen sizes when logged out (mobile: gradient, desktop: outline)
+- Removed unused DropdownMenu import (replaced by Sheet)
+- Verified with Agent Browser on iPhone 14 viewport: header shows logo + Sign In + hamburger icon
+- Verified drawer opens correctly: contains Vidora header, Welcome message, Sign In + Try Creator buttons, Quick Links
+- VLM confirmed: "exceptionally clean, modern, and native-app-like" layout
+- Verified desktop view: logo + Sign In visible, hamburger hidden (md:hidden working)
+- Lint passes clean, commit 593e535 pushed to origin/main
+
+Stage Summary:
+- Admin gateway config FIXED: only active gateway's fields show, selecting a gateway switches the form instantly
+- Mobile header REDESIGNED: hamburger drawer (Sheet) replaces dropdown, logo + Sign In always visible
+- Native-app feel: slide-in drawer with user info card, nav links, and contextual CTAs
+- Commit 593e535 pushed to GitHub for VPS deployment
