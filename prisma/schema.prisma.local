@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -38,13 +38,13 @@ model VideoProject {
   userId         String?
   user           User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
   title          String
-  description    String?    @db.Text
+  description    String?
   style          String     @default("cinematic")
   aspectRatio    String     @default("16:9")
   status         String     @default("draft")
   targetDuration  Int        @default(60)
   projectType    String     @default("custom")   // custom, birthday, commercial, event, social
-  finalVideoUrl  String?    @db.Text
+  finalVideoUrl  String?
   // ── Sharing ──
   shareSlug      String?    @unique  // public share URL slug
   isPublic       Boolean    @default(false)  // visible on public share page
@@ -72,30 +72,30 @@ model VideoScene {
   project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sceneNumber    Int
   title          String?
-  prompt         String    @db.Text
-  enhancedPrompt String?  @db.Text // extracted visual direction
-  visualNote     String?                       @db.Text // extracted visual direction
-  dialogue       String?                       @db.Text // extracted dialogue/narration
-  characterIds   String?                       @db.Text // JSON array of character IDs involved in scene
-  referenceImageUrl String?                   @db.Text // uploaded/generated reference image for scene
-  narrationUrl   String?                       @db.Text // generated TTS narration audio URL
+  prompt         String
+  enhancedPrompt String?
+  visualNote     String?
+  dialogue       String?
+  characterIds   String?
+  referenceImageUrl String?
+  narrationUrl   String?
   narrationVoice String?                       // which TTS voice was used
   mood           String?                       // emotional mood of the scene (dramatic, happy, dark, etc.)
   cameraMove     String?                       // camera movement directive (zoom_in, pan_left, tracking, etc.)
   lighting       String?                       // lighting style (golden hour, neon glow, studio lighting, etc.)
   musicMood      String?                       // background music mood (epic, calm, tense, joyful)
-  musicTrackUrl  String?                       @db.Text // selected background music file URL
+  musicTrackUrl  String?                       // selected background music file URL
   musicVolume    Int       @default(30)         // 0-100 background music volume level
   // ── Subtitles ──
-  subtitleSrt    String?                       @db.Text // SRT format subtitle text
+  subtitleSrt    String?                       // SRT format subtitle text
   subtitleStatus String?                       // "pending" | "generating" | "ready" | "failed"
   subtitleLang   String?                       // language code (en, fr, twi, etc.)
   burnSubtitles  Boolean   @default(false)     // burn subtitles into exported video
   // ── Dubbing / Translation ──
   narrationLang  String?                       // language of the narration (en, fr, twi, etc.)
-  imageUrl       String?                       @db.Text
-  imageBase64    String?                       @db.Text
-  videoUrl       String?                       @db.Text
+  imageUrl       String?
+  imageBase64    String?
+  videoUrl       String?
   taskId         String?
   duration       Int      @default(10)
   transition     String   @default("fade")
@@ -112,11 +112,11 @@ model Character {
   project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   name           String
   role           String?                       // protagonist, supporting, narrator, background
-  description    String?                       @db.Text // physical appearance, clothing, personality
-  stylePrompt    String?                       @db.Text // AI-optimized character description for consistency
+  description    String?
+  stylePrompt    String?
   voiceId        String?                       // assigned TTS voice ID for this character
-  imageUrl       String?                       @db.Text // reference image (uploaded or AI-generated)
-  imageBase64    String?                       @db.Text // for uploaded images stored as base64
+  imageUrl       String?
+  imageBase64    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now())
   @@index([projectId])
@@ -124,7 +124,7 @@ model Character {
 
 model GenerationHistory {
   id          String   @id @default(cuid())
-  prompt      String   @db.Text
+  prompt      String
   inputType   String   @default("text")
   style       String?
   createdAt   DateTime @default(now())
@@ -140,7 +140,7 @@ model Payment {
   currency        String    @default("GHS")  // "GHS" | "USD"
   tokensPurchased Int       // number of tokens bought
   status          String    @default("pending")  // "pending" | "completed" | "failed" | "refunded"
-  metadata        String?   @db.Text // JSON string for gateway-specific data
+  metadata        String?   // JSON string for gateway-specific data
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   @@index([userId])
@@ -169,8 +169,8 @@ model TokenTransaction {
 model SystemConfig {
   id            String    @id @default(cuid())
   key           String    @unique
-  value         String    @db.Text
-  description   String?   @db.Text
+  value         String
+  description   String?
   updatedAt     DateTime  @updatedAt
 }
 
@@ -207,12 +207,12 @@ model BrandKit {
   userId        String    @unique
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   brandName     String
-  logoUrl       String?   @db.Text // uploaded logo file URL (/uploads/brand-*.png)
+  logoUrl       String?   // uploaded logo file URL (/uploads/brand-*.png)
   logoPosition  String    @default("bottom-right")  // top-left, top-right, bottom-left, bottom-right, center
   logoOpacity   Int       @default(80)  // 0-100
   logoScale     Int       @default(15)  // percentage of video width
   primaryColor  String?   // hex color, e.g. #6d28d9
-  tagline       String?   @db.Text
+  tagline       String?
   website       String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -227,8 +227,8 @@ model SceneTranslation {
   scene         VideoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
   lang          String    // language code: "en", "fr", "twi", "ga", "ha", "es", "pt", "ar", "zh"
   langName      String    // display name: "English", "French", "Twi"
-  translatedText String?  @db.Text // translated narration/dialogue text
-  narrationUrl  String?   @db.Text // TTS audio URL in this language
+  translatedText String?  // translated narration/dialogue text
+  narrationUrl  String?   // TTS audio URL in this language
   voiceId       String?   // TTS voice used
   status        String    @default("pending")  // "pending" | "translating" | "generating" | "ready" | "failed"
   createdAt     DateTime  @default(now())
@@ -245,8 +245,8 @@ model SocialConnection {
   platform      String    // "youtube" | "tiktok" | "instagram" | "facebook" | "twitter"
   accountId     String?   // platform's user/channel ID
   accountName   String?   // display name on the platform
-  accessToken   String?   @db.Text // encrypted OAuth access token
-  refreshToken  String?   @db.Text // encrypted OAuth refresh token
+  accessToken   String?   // encrypted OAuth access token
+  refreshToken  String?   // encrypted OAuth refresh token
   tokenExpiresAt DateTime?
   isConnected   Boolean   @default(false)
   createdAt     DateTime  @default(now())
@@ -261,11 +261,11 @@ model SocialPublish {
   project       VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   platform      String    // "youtube" | "tiktok" | "instagram" | "facebook" | "twitter"
   externalId    String?   // post/video ID on the platform
-  externalUrl   String?   @db.Text // public URL on the platform
+  externalUrl   String?   // public URL on the platform
   title         String?
-  description   String?   @db.Text
+  description   String?
   status        String    @default("pending")  // "pending" | "uploading" | "published" | "failed"
-  errorMessage  String?   @db.Text
+  errorMessage  String?
   publishedAt   DateTime?
   createdAt     DateTime  @default(now())
   @@index([projectId])
@@ -277,18 +277,18 @@ model ProjectTemplate {
   id            String    @id @default(cuid())
   slug          String    @unique
   title         String
-  description   String?   @db.Text
+  description   String?
   category      String    @default("custom")  // "real-estate" | "restaurant" | "birthday" | "product" | "fitness" | "event" | "education" | "travel"
   style         String    @default("cinematic")
   aspectRatio   String    @default("16:9")
   targetDuration Int      @default(30)
-  coverImage    String?   @db.Text
+  coverImage    String?
   accentColor   String    @default("from-violet-500 to-fuchsia-500")
   sceneCount    Int       @default(3)
   // JSON array of scene templates: [{ title, prompt, mood, cameraMove, musicMood, duration, transition }]
-  sceneTemplates String   @default("[]")  @db.Text
+  sceneTemplates String   @default("[]")
   // JSON array of character templates
-  characterTemplates String @default("[]")  @db.Text
+  characterTemplates String @default("[]")
   isFeatured    Boolean   @default(false)
   isActive      Boolean   @default(true)
   usageCount    Int       @default(0)  // how many projects created from this template
@@ -307,8 +307,8 @@ model VideoView {
   project       VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   viewerId      String?   // anonymous viewer cookie ID
   ipAddress     String?
-  userAgent     String?   @db.Text
-  referer       String?   @db.Text
+  userAgent     String?
+  referer       String?
   country       String?
   watchDuration Int       @default(0)  // seconds watched
   isComplete    Boolean   @default(false)  // watched to end
@@ -323,8 +323,8 @@ model Workspace {
   name          String
   slug          String    @unique
   ownerId       String    // User ID of the workspace owner
-  description   String?   @db.Text
-  logoUrl       String?   @db.Text
+  description   String?
+  logoUrl       String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   members       WorkspaceMember[]
