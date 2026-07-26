@@ -27,6 +27,7 @@ export interface VideoScene {
   narrationVoice?: string | null;
   mood?: string | null;
   cameraMove?: string | null;
+  lighting?: string | null;
   musicMood?: string | null;
   musicTrackUrl?: string | null;
   musicVolume?: number;

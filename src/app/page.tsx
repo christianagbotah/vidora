@@ -392,7 +392,7 @@ function SortableSceneCard({
             )}
 
             {/* Actions */}
-            <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <div className="flex items-center gap-1.5 mt-3 flex-wrap">
               {!scene.videoUrl && scene.status !== "generating" && (
                 <Button
                   size="sm" variant="outline" className="h-7 text-xs px-2.5"
@@ -429,7 +429,7 @@ function SortableSceneCard({
                     disabled={isGeneratingNarration}
                   >
                     {isGeneratingNarration
-                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Generating...</>
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
                       : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
                     }
                   </Button>
@@ -447,7 +447,7 @@ function SortableSceneCard({
                 onValueChange={(v) => onSetMusic(scene.id, v === "none" ? null : v, scene.musicVolume || 30)}
               >
                 <SelectTrigger className="h-7 w-28 text-xs px-1.5">
-                  <Music2 className="h-3 w-3 mr-1 inline" />
+                  <Music2 className="h-3 w-3 mr-1 inline shrink-0" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -478,9 +478,9 @@ function SortableSceneCard({
                   {scene.burnSubtitles ? "Burn ✓" : "Burn"}
                 </Button>
               )}
-              {/* ── Dubbing Button ── */}
+              {/* ── Dubbing Selector ── */}
               <Select
-                value="dub"
+                value=""
                 onValueChange={(v) => {
                   const langs: Record<string, string> = {
                     fr: "French", twi: "Twi", ga: "Ga", ha: "Hausa", es: "Spanish", sw: "Swahili",
@@ -489,7 +489,7 @@ function SortableSceneCard({
                 }}
               >
                 <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                  <Languages className="h-3 w-3 mr-1 inline" />
+                  <Languages className="h-3 w-3 mr-1 inline shrink-0" />
                   <SelectValue placeholder="Dub" />
                 </SelectTrigger>
                 <SelectContent>
@@ -524,11 +524,11 @@ function SortableSceneCard({
 
             {/* AI Director Controls */}
             <div className="mt-3 pt-3 border-t border-slate-100">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2">
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Mood</Label>
                   <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Set mood" />
                     </SelectTrigger>
                     <SelectContent>
@@ -543,7 +543,7 @@ function SortableSceneCard({
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Camera</Label>
                   <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Camera move" />
                     </SelectTrigger>
                     <SelectContent>
@@ -558,7 +558,7 @@ function SortableSceneCard({
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Lighting</Label>
                   <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Lighting" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1137,53 +1137,45 @@ function VidoraApp() {
     }
   };
 
-  const handleSceneMoodChange = async (sceneId: string, mood: string) => {
+  /**
+   * Optimistically updates a scene field in the local store so the UI
+   * reflects the change immediately (before the API round-trip completes).
+   * Then persists to the API and re-fetches the authoritative version.
+   */
+  const updateSceneField = async (
+    sceneId: string,
+    field: string,
+    value: string
+  ) => {
     if (!currentProject) return;
+    // Optimistic local update
+    setCurrentProject({
+      ...currentProject,
+      scenes: currentProject.scenes.map((s) =>
+        s.id === sceneId ? { ...s, [field]: value } : s
+      ),
+    });
     try {
       await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood }),
+        body: JSON.stringify({ [field]: value }),
       });
       refreshProject();
     } catch { /* silent */ }
   };
 
-  const handleSceneCameraChange = async (sceneId: string, cameraMove: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cameraMove }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneMoodChange = (sceneId: string, mood: string) =>
+    updateSceneField(sceneId, "mood", mood);
 
-  const handleSceneLightingChange = async (sceneId: string, lighting: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lighting }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneCameraChange = (sceneId: string, cameraMove: string) =>
+    updateSceneField(sceneId, "cameraMove", cameraMove);
 
-  const handleSceneTransitionChange = async (sceneId: string, transition: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transition }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneLightingChange = (sceneId: string, lighting: string) =>
+    updateSceneField(sceneId, "lighting", lighting);
+
+  const handleSceneTransitionChange = (sceneId: string, transition: string) =>
+    updateSceneField(sceneId, "transition", transition);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     if (!currentProject) return;

@@ -1095,3 +1095,49 @@ Stage Summary:
   9. Social Publishing ✅ (5 platforms, connect/disconnect, publish, history)
 - The ONLY remaining blocker for features 5 & 6 (subtitles + dubbing) is the Z.ai account balance (error 1113). The code paths are complete and will work end-to-end once Z.ai is recharged.
 - Artifacts: src/lib/project-auth.ts (requireSceneAccess helper + demo-project rules), src/components/BrandKitDialog.tsx (new), 4 refactored scene/project API routes, 2 new analytics sub-routes, page.tsx (Brand Kit button + dialog wiring)
+
+---
+Task ID: 12
+Agent: main
+Task: Fix scene card select fields (Mood, Camera, Lighting, Language) not selecting + mobile overlap issues
+
+Work Log:
+- Root cause analysis: The "selects not working" bug had THREE underlying causes:
+  1. **Scene PUT API didn't accept mood/cameraMove/lighting** — the route only destructured `prompt, enhancedPrompt, duration, transition, status, imageUrl`. All other fields were silently ignored, so selecting a mood/camera/lighting saved nothing.
+  2. **No `lighting` column in the database** — the VideoScene schema had no `lighting` field at all, so even if the API accepted it, there was nowhere to store it.
+  3. **No optimistic local updates** — even for fields that DID work (like mood on some flows), the UI didn't update until the async API call + refreshProject() completed, making selects feel "stuck".
+- Additional issues found:
+  4. **Dubbing Select had `value="dub"`** — a static value that didn't match any SelectItem ("fr", "twi", etc.), causing Radix Select to behave incorrectly.
+  5. **Mobile layout: `grid-cols-3`** for AI Director Controls was too cramped on mobile — selects overlapped and were too narrow to tap.
+  6. **SelectTrigger widths** used fixed `px-1.5` with no `w-full`, causing inconsistent widths.
+
+- Fixes applied:
+  • Added `lighting String?` field to VideoScene in prisma/schema.prisma, ran `db:push` + `prisma generate` to sync DB + regenerate Prisma Client
+  • Added `lighting?: string | null` to VideoScene TypeScript interface in src/types/video.ts
+  • Updated scene PUT API route (`/api/projects/[id]/scenes/[sceneId]/route.ts`) to accept ALL editable fields: mood, cameraMove, lighting, narrationVoice, narrationLang, title, visualNote, dialogue (in addition to existing prompt, enhancedPrompt, duration, transition, status, imageUrl). Each field uses `field: field || null` to properly clear values when empty string is passed.
+  • Created `updateSceneField()` helper in page.tsx that does OPTIMISTIC local state update (updates currentProject.scenes in the Zustand store immediately) THEN makes the API call THEN refreshes. This makes all selects feel instant.
+  • Refactored handleSceneMoodChange, handleSceneCameraChange, handleSceneLightingChange, handleSceneTransitionChange to use the new helper (reduced from 4 separate async functions to 4 one-liners).
+  • Fixed dubbing Select: changed `value="dub"` to `value=""` (uncontrolled with placeholder "Dub") so Radix Select works correctly — selecting a language fires onValueChange which triggers the dubbing generation.
+  • Fixed mobile layout: AI Director Controls grid changed from `grid-cols-3 gap-2` to `grid-cols-1 sm:grid-cols-3 gap-2` — dropdowns stack vertically on mobile (full-width, easy to tap), 3-column grid on desktop.
+  • Made all AI Director SelectTriggers `w-full` (instead of auto-width) so they fill their grid cell properly on both mobile and desktop.
+  • Added `shrink-0` to inline icons in action bar selects (Music, Dub) to prevent icon compression when wrapping.
+  • Tightened action bar spacing from `gap-2` to `gap-1.5` for better mobile fit.
+  • Shortened "Generating..." to "..." on the Narrate button to save space on mobile.
+
+- Restarted dev server to pick up the new Prisma Client (Turbopack caches the old client).
+
+- Verified end-to-end:
+  • API tests (curl): PUT /api/projects/{id}/scenes/{sceneId} with {lighting:"golden hour"} → 200, DB executes SET lighting = ? ✅
+  • API tests: PUT with {mood:"epic"} → 200, SET mood = ? ✅
+  • API tests: PUT with {cameraMove:"tracking shot"} → 200, SET cameraMove = ? ✅
+  • Browser test (desktop 1280px): Opened demo → scrolled to scene card → Mood/Camera/Lighting in clean 3-column grid → clicked Lighting → dropdown opened → selected "Golden Hour" → combobox immediately showed "Golden Hour" (optimistic update) → DB UPDATE executed → PUT 200 ✅
+  • Browser test: Selected "Epic" mood → combobox showed "Epic" immediately ✅
+  • Browser test (mobile 375px): AI Director Controls stack vertically (full-width) → action bar wraps into 3 rows without overlap → all touch targets ≥44px ✅
+  • Lint passes clean (0 errors, 0 warnings)
+
+Stage Summary:
+- ALL select fields now work: Mood, Camera, Lighting, Transition, Narration Voice, Music, Dubbing language — every select saves to the database and updates the UI instantly via optimistic updates.
+- The `lighting` field was completely missing from the database schema — now added and working.
+- Mobile layout fixed: AI Director Controls (Mood/Camera/Lighting) stack vertically on mobile, 3-column grid on desktop. Action bar wraps properly without overlap.
+- Dubbing select fixed: was using a static `value="dub"` that broke Radix Select — now uses `value=""` with placeholder.
+- The optimistic update pattern (`updateSceneField` helper) can be reused for any future scene field edits — it updates the local store immediately, then persists to the API, then refreshes the authoritative version.

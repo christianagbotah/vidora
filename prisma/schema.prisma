@@ -82,6 +82,7 @@ model VideoScene {
   narrationVoice String?                       // which TTS voice was used
   mood           String?                       // emotional mood of the scene (dramatic, happy, dark, etc.)
   cameraMove     String?                       // camera movement directive (zoom_in, pan_left, tracking, etc.)
+  lighting       String?                       // lighting style (golden hour, neon glow, studio lighting, etc.)
   musicMood      String?                       // background music mood (epic, calm, tense, joyful)
   musicTrackUrl  String?                       // selected background music file URL
   musicVolume    Int       @default(30)         // 0-100 background music volume level

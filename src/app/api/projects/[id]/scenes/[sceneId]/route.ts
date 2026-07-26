@@ -16,8 +16,11 @@ export async function PUT(
     if (!authResult.ok) return authResult.response;
 
     const body = await req.json();
-    const { prompt, enhancedPrompt, duration, transition, status, imageUrl } =
-      body;
+    const {
+      prompt, enhancedPrompt, duration, transition, status, imageUrl,
+      mood, cameraMove, lighting, narrationVoice, narrationLang,
+      title, visualNote, dialogue,
+    } = body;
 
     // Verify the scene belongs to this project (prevents ID manipulation)
     const existing = await db.videoScene.findFirst({
@@ -40,6 +43,14 @@ export async function PUT(
         ...(transition !== undefined && { transition }),
         ...(status !== undefined && { status }),
         ...(imageUrl !== undefined && { imageUrl }),
+        ...(mood !== undefined && { mood: mood || null }),
+        ...(cameraMove !== undefined && { cameraMove: cameraMove || null }),
+        ...(lighting !== undefined && { lighting: lighting || null }),
+        ...(narrationVoice !== undefined && { narrationVoice: narrationVoice || null }),
+        ...(narrationLang !== undefined && { narrationLang: narrationLang || null }),
+        ...(title !== undefined && { title: title || null }),
+        ...(visualNote !== undefined && { visualNote: visualNote || null }),
+        ...(dialogue !== undefined && { dialogue: dialogue || null }),
       },
     });
 
