@@ -875,7 +875,7 @@ function HeroSlider({
               <Button
                 size="lg"
                 variant="outline"
-                onClick={onNavigateDemo}
+                onClick={() => onNavigateDemo()}
                 disabled={isCreatingDemo}
                 className="glass-card text-white hover:text-white hover:bg-violet-500/20 px-6 py-4 h-auto !border-2 !border-violet-400/70 hover:!border-violet-300 shadow-lg shadow-violet-500/20"
               >
@@ -3226,9 +3226,9 @@ function VidoraApp() {
      ════════════════════════════════════════════════════════════════ */
 
   return (
-    <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
+    <div className="min-h-screen flex flex-col bg-background">
       {/* ── Header ── */}
-      <header className={`sticky top-0 z-50 border-b backdrop-blur-xl transition-all duration-300 overflow-hidden ${
+      <header className={`fixed top-0 inset-x-0 z-50 border-b backdrop-blur-xl transition-all duration-300 ${
         headerScrolled
           ? "bg-background/95 shadow-md shadow-black/5 border-slate-200/80"
           : "bg-background/70 border-transparent"
@@ -3299,7 +3299,7 @@ function VidoraApp() {
       </header>
 
       {/* ── Main Content ── */}
-      <main className="flex-1 pb-20 md:pb-0">
+      <main className="flex-1 pt-14 pb-20 md:pb-0">
         <AnimatePresence mode="wait">
 
           {/* ═══════════════════════════════════════════════════════
