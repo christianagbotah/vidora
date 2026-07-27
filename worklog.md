@@ -1718,3 +1718,22 @@ Stage Summary:
 - View transitions: Lightweight blur overlay with spinner + shimmer (new)
 - Commit: 0b3a032
 
+---
+Task ID: 3
+Agent: Main
+Task: Match ViewTransitionOverlay to the full initial preloader design
+
+Work Log:
+- Replaced simplified blur+spinner overlay with identical preloader visuals
+- Same elements: orbiting dots, gradient Clapperboard logo, ring, Vidora wordmark, progress bar with shimmer, background orbs
+- Reuses all existing CSS classes (preloader-root, preloader-bg, preloader-orbit, etc.)
+- Progress: animates 0→75% via rAF during loading, jumps to 100% on ready, then fades
+- Tagline shows view-specific label (Opening Studio, Loading Gallery, etc.)
+- Removed unused view-trans CSS classes and Loader2 import
+- Increased page.tsx view-ready delay from 350ms to 800ms
+- Verified with agent-browser: hasOrbitingDots=true, hasProgressBar=true, hasWordmark=true, opacity=1
+
+Stage Summary:
+- View transitions now show the SAME preloader as the landing page
+- Commit: 2799312
+
