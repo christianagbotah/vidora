@@ -288,73 +288,33 @@ function SortableSceneCard({
           >
             <GripVertical className="h-4 w-4 text-slate-300" />
           </div>
-          {/* Content — two-column layout on sm+ */}
+          {/* Content — portrait thumbnail + script column on sm+ */}
           <div className="flex-1 min-w-0">
-            <div className="flex flex-col sm:flex-row sm:gap-4 p-4">
-              {/* ── LEFT COLUMN: Video Preview ── */}
-              <div className="sm:w-[220px] md:w-[260px] lg:w-[300px] shrink-0 order-2 sm:order-1">
+            <div className="flex flex-col sm:flex-row sm:gap-3 p-4">
+              {/* ── PORTRAIT THUMBNAIL COLUMN (narrow) ── */}
+              <div className="sm:w-20 md:w-24 shrink-0 order-1 sm:order-1">
                 <div className="relative">
-                  {/* Scene number + status badges */}
-                  <Badge className="absolute top-2 left-2 text-xs font-bold px-2 bg-black/60 text-white border-0 z-10">
+                  <Badge className="absolute top-1 left-1 text-[10px] font-bold px-1.5 bg-black/60 text-white border-0 z-10">
                     #{scene.sceneNumber}
                   </Badge>
-                  <Badge className={`absolute top-2 right-2 text-xs font-semibold px-2 z-10 ${statusColor}`}>
-                    {scene.status}
-                  </Badge>
-                  {/* Video player for completed scenes */}
-                  {scene.videoUrl ? (
-                    <video
-                      src={scene.videoUrl}
-                      controls
-                      className="w-full rounded-lg bg-black"
-                      preload="metadata"
-                    />
-                  ) : scene.imageUrl ? (
-                    /* Clickable thumbnail preview */
-                    <button
-                      onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
-                      className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors"
-                    >
-                      <img src={scene.imageUrl} alt="" className="w-full aspect-video object-cover" />
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/preview:bg-black/40 transition-colors">
-                        <Play className="h-8 w-8 text-white drop-shadow-lg" />
-                      </div>
-                    </button>
+                  {scene.imageUrl ? (
+                    <img src={scene.imageUrl} alt="" className="w-full aspect-[9/16] object-cover rounded-lg border border-slate-200" />
+                  ) : scene.videoUrl ? (
+                    <video src={scene.videoUrl} className="w-full aspect-[9/16] object-cover rounded-lg border border-slate-200 bg-black" preload="metadata" muted />
                   ) : (
-                    /* Placeholder */
-                    <div className="w-full aspect-video rounded-lg bg-slate-50 border border-dashed border-slate-200 flex items-center justify-center">
-                      <Film className="h-8 w-8 text-slate-300" />
+                    <div className="w-full aspect-[9/16] rounded-lg bg-slate-50 border border-dashed border-slate-200 flex items-center justify-center">
+                      <Film className="h-6 w-6 text-slate-300" />
                     </div>
                   )}
+                  <Badge className={`absolute bottom-1 right-1 text-[9px] font-semibold px-1.5 z-10 ${statusColor}`}>
+                    {scene.status}
+                  </Badge>
                 </div>
-                {scene.videoUrl && (
-                  <a
-                    href={scene.videoUrl}
-                    download
-                    className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
-                  >
-                    <Download className="h-3.5 w-3.5" />Download video
-                  </a>
-                )}
-
-                {/* Narration audio player */}
-                {scene.narrationUrl && (
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                    <audio controls src={scene.narrationUrl} className="h-7 w-full" preload="none" />
-                  </div>
-                )}
-                {/* Progress spinner */}
-                {scene.status === "generating" && (
-                  <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Generating video...</span>
-                  </div>
-                )}
               </div>
 
-              {/* ── RIGHT COLUMN: Scene Info + Actions + AI Director ── */}
-              <div className="flex-1 min-w-0 order-1 sm:order-2">
+              {/* ── SCRIPT COLUMN ── */}
+              <div className="flex-1 min-w-0 order-2 sm:order-2">
+                {/* Row 1: Script Details */}
                 {/* Title Row */}
                 <div className="flex items-center gap-1.5 flex-wrap mb-1">
                   {scene.title && (
@@ -400,246 +360,305 @@ function SortableSceneCard({
                   </p>
                 )}
 
-                {/* Actions */}
-                <div className="flex items-center gap-1.5 mt-3 flex-wrap">
-              {!scene.videoUrl && scene.status !== "generating" && (
-                <Button
-                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                  onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
-                >
-                  <Play className="h-3.5 w-3.5 mr-1" />Generate Video
-                </Button>
-              )}
-              {scene.status === "failed" && (
-                <Button
-                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                  onClick={() => onRetry(scene)}
-                >
-                  <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
-                </Button>
-              )}
-              {scene.dialogue && !scene.narrationUrl && (
-                <div className="flex items-center gap-1">
-                  <Select value={narrationVoice} onValueChange={setNarrationVoice}>
-                    <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TTS_VOICES.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>
-                          <span className="text-xs">{v.label}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                    onClick={() => onNarrate(scene.id, narrationVoice)}
-                    disabled={isGeneratingNarration}
-                  >
-                    {isGeneratingNarration
-                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
-                      : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
-                    }
-                  </Button>
-                </div>
-              )}
-              <Button
-                size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                onClick={() => onEnhanceScene(scene)}
-              >
-                <Wand2 className="h-3.5 w-3.5 mr-1" />AI Enhance
-              </Button>
-              {/* ── Music Picker ── */}
-              <Select
-                value={scene.musicTrackUrl || "none"}
-                onValueChange={(v) => onSetMusic(scene.id, v === "none" ? null : v, scene.musicVolume || 30)}
-              >
-                <SelectTrigger className="h-7 w-28 text-xs px-1.5">
-                  <Music2 className="h-3 w-3 mr-1 inline shrink-0" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none"><span className="text-xs">No music</span></SelectItem>
-                  {musicTracks.map((t) => (
-                    <SelectItem key={t.id} value={t.url}>
-                      <span className="text-xs">{t.title}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* ── Subtitle Button ── */}
-              <Button
-                size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                onClick={() => onGenerateSubtitles(scene.id)}
-                title="Generate AI subtitles"
-              >
-                <Subtitles className="h-3.5 w-3.5 mr-1" />
-                {scene.subtitleStatus === "ready" ? "Subs ✓" : scene.subtitleStatus === "generating" ? "..." : "Subs"}
-              </Button>
-              {scene.subtitleStatus === "ready" && (
-                <Button
-                  size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                  onClick={() => onToggleBurnSubtitles(scene.id, !scene.burnSubtitles)}
-                  title={scene.burnSubtitles ? "Subtitles will be burned into video" : "Click to burn subtitles into video"}
-                >
-                  <Subtitles className={`h-3.5 w-3.5 mr-1 ${scene.burnSubtitles ? "text-violet-600" : ""}`} />
-                  {scene.burnSubtitles ? "Burn ✓" : "Burn"}
-                </Button>
-              )}
-              {/* ── Dubbing Selector (30+ languages, grouped) ── */}
-              <Select
-                value=""
-                onValueChange={(v) => {
-                  // Find the language in the shared catalog
-                  const lang = ALL_DUBBING_LANGUAGES.find((l) => l.code === v);
-                  if (lang) onGenerateDubbing(scene.id, lang.code, lang.name);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[88px] text-xs px-1.5 gap-1">
-                  <Languages className="h-3 w-3 shrink-0" />
-                  <SelectValue placeholder="Dub" />
-                </SelectTrigger>
-                <SelectContent className="min-w-[240px] max-h-[320px]">
-                  <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {DUBBING_LANGUAGE_COUNT} languages
-                  </div>
-                  {DUBBING_LANGUAGE_GROUPS.map((group) => (
-                    <SelectGroup key={group.label}>
-                      <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pt-2">
-                        {group.label}
-                      </SelectLabel>
-                      {group.languages.map((lang) => (
-                        <SelectItem key={lang.code} value={lang.code} className="text-xs">
-                          <span className="mr-1.5">{lang.flag}</span>
-                          {lang.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
-                <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRANSITIONS.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      <span className="text-xs">{t.label}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                size="sm" variant="ghost"
-                className="h-7 text-xs px-2 text-red-400 hover:text-red-600 hover:bg-red-50 ml-auto"
-                onClick={() => onDelete(scene.id, "Scene " + scene.sceneNumber)}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-
-            {/* AI Director Controls */}
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2">
-                <div>
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Mood</Label>
-                  <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
-                      <SelectValue placeholder="Set mood" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MOODS.map((m) => (
-                        <SelectItem key={m} value={m}>
-                          <span className="text-xs capitalize">{m}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Camera</Label>
-                  <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
-                      <SelectValue placeholder="Camera move" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CAMERA_MOVES.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          <span className="text-xs capitalize">{c}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground uppercase tracking-wider">Lighting</Label>
-                  <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
-                      <SelectValue placeholder="Lighting" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LIGHTING_STYLES.map((l) => (
-                        <SelectItem key={l} value={l}>
-                          <span className="text-xs capitalize">{l}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-
-            {/* ── Dubbed Audio Tracks (translations) ── */}
-            {scene.translations && scene.translations.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-slate-100">
-                <div className="flex items-center gap-1.5 mb-2">
-                  <Languages className="h-3.5 w-3.5 text-violet-500" />
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Dubbed Audio ({scene.translations.length})
-                  </span>
-                </div>
-                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                  {scene.translations
-                    .filter((t) => t.status === "ready" && t.narrationUrl)
-                    .map((t) => {
-                      const langMeta = ALL_DUBBING_LANGUAGES.find((l) => l.code === t.lang);
-                      return (
-                        <div
-                          key={t.id}
-                          className="flex items-center gap-2 rounded-lg bg-violet-50/50 border border-violet-100 p-1.5"
+                {/* Row 2: Video Player (left) + Settings (right) */}
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <div className="flex flex-col sm:flex-row sm:gap-4">
+                    {/* Row 2a: Video Player */}
+                    <div className="sm:w-[220px] md:w-[260px] lg:w-[300px] shrink-0">
+                      {scene.videoUrl ? (
+                        <video
+                          src={scene.videoUrl}
+                          controls
+                          className="w-full rounded-lg bg-black"
+                          preload="metadata"
+                        />
+                      ) : scene.imageUrl ? (
+                        /* Clickable thumbnail preview */
+                        <button
+                          onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
+                          className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors"
                         >
-                          <span className="text-base shrink-0">{langMeta?.flag || "🌐"}</span>
-                          <span className="text-xs font-medium shrink-0 min-w-[70px]">{t.langName}</span>
-                          <audio
-                            controls
-                            src={t.narrationUrl!}
-                            className="h-7 flex-1 min-w-0"
-                            preload="none"
-                          />
-                          <button
-                            onClick={() => onDeleteDubbing(scene.id, t.lang, t.langName)}
-                            className="shrink-0 p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title={`Delete ${t.langName} dubbing`}
-                            aria-label={`Delete ${t.langName} dubbing`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <img src={scene.imageUrl} alt="" className="w-full aspect-video object-cover" />
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/preview:bg-black/40 transition-colors">
+                            <Play className="h-8 w-8 text-white drop-shadow-lg" />
+                          </div>
+                        </button>
+                      ) : (
+                        /* Placeholder */
+                        <div className="w-full aspect-video rounded-lg bg-slate-50 border border-dashed border-slate-200 flex items-center justify-center">
+                          <Film className="h-8 w-8 text-slate-300" />
                         </div>
-                      );
-                    })}
-                  {scene.translations.some((t) => t.status === "generating") && (
-                    <div className="flex items-center gap-2 text-xs text-violet-500 px-1">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>Generating dubbing…</span>
+                      )}
+                      {scene.videoUrl && (
+                        <a
+                          href={scene.videoUrl}
+                          download
+                          className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
+                        >
+                          <Download className="h-3.5 w-3.5" />Download video
+                        </a>
+                      )}
+
+                      {/* Narration audio player */}
+                      {scene.narrationUrl && (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          <audio controls src={scene.narrationUrl} className="h-7 w-full" preload="none" />
+                        </div>
+                      )}
+                      {/* Progress spinner */}
+                      {scene.status === "generating" && (
+                        <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <span>Generating video...</span>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
-              </div>{/* end right column */}
-            </div>{/* end flex-col sm:flex-row inner wrapper */}
+
+                    {/* Row 2b: Settings */}
+                    <div className="flex-1 min-w-0">
+                      {/* Actions */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {!scene.videoUrl && scene.status !== "generating" && (
+                          <Button
+                            size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                            onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
+                          >
+                            <Play className="h-3.5 w-3.5 mr-1" />Generate Video
+                          </Button>
+                        )}
+                        {scene.status === "failed" && (
+                          <Button
+                            size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                            onClick={() => onRetry(scene)}
+                          >
+                            <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
+                          </Button>
+                        )}
+                        {scene.dialogue && !scene.narrationUrl && (
+                          <div className="flex items-center gap-1">
+                            <Select value={narrationVoice} onValueChange={setNarrationVoice}>
+                              <SelectTrigger className="h-7 w-24 text-xs px-1.5">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {TTS_VOICES.map((v) => (
+                                  <SelectItem key={v.id} value={v.id}>
+                                    <span className="text-xs">{v.label}</span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                              onClick={() => onNarrate(scene.id, narrationVoice)}
+                              disabled={isGeneratingNarration}
+                            >
+                              {isGeneratingNarration
+                                ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
+                                : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
+                              }
+                            </Button>
+                          </div>
+                        )}
+                        <Button
+                          size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                          onClick={() => onEnhanceScene(scene)}
+                        >
+                          <Wand2 className="h-3.5 w-3.5 mr-1" />AI Enhance
+                        </Button>
+                        {/* ── Music Picker ── */}
+                        <Select
+                          value={scene.musicTrackUrl || "none"}
+                          onValueChange={(v) => onSetMusic(scene.id, v === "none" ? null : v, scene.musicVolume || 30)}
+                        >
+                          <SelectTrigger className="h-7 w-28 text-xs px-1.5">
+                            <Music2 className="h-3 w-3 mr-1 inline shrink-0" />
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none"><span className="text-xs">No music</span></SelectItem>
+                            {musicTracks.map((t) => (
+                              <SelectItem key={t.id} value={t.url}>
+                                <span className="text-xs">{t.title}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {/* ── Subtitle Button ── */}
+                        <Button
+                          size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                          onClick={() => onGenerateSubtitles(scene.id)}
+                          title="Generate AI subtitles"
+                        >
+                          <Subtitles className="h-3.5 w-3.5 mr-1" />
+                          {scene.subtitleStatus === "ready" ? "Subs ✓" : scene.subtitleStatus === "generating" ? "..." : "Subs"}
+                        </Button>
+                        {scene.subtitleStatus === "ready" && (
+                          <Button
+                            size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                            onClick={() => onToggleBurnSubtitles(scene.id, !scene.burnSubtitles)}
+                            title={scene.burnSubtitles ? "Subtitles will be burned into video" : "Click to burn subtitles into video"}
+                          >
+                            <Subtitles className={`h-3.5 w-3.5 mr-1 ${scene.burnSubtitles ? "text-violet-600" : ""}`} />
+                            {scene.burnSubtitles ? "Burn ✓" : "Burn"}
+                          </Button>
+                        )}
+                        {/* ── Dubbing Selector (30+ languages, grouped) ── */}
+                        <Select
+                          value=""
+                          onValueChange={(v) => {
+                            const lang = ALL_DUBBING_LANGUAGES.find((l) => l.code === v);
+                            if (lang) onGenerateDubbing(scene.id, lang.code, lang.name);
+                          }}
+                        >
+                          <SelectTrigger className="h-7 w-[88px] text-xs px-1.5 gap-1">
+                            <Languages className="h-3 w-3 shrink-0" />
+                            <SelectValue placeholder="Dub" />
+                          </SelectTrigger>
+                          <SelectContent className="min-w-[240px] max-h-[320px]">
+                            <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                              {DUBBING_LANGUAGE_COUNT} languages
+                            </div>
+                            {DUBBING_LANGUAGE_GROUPS.map((group) => (
+                              <SelectGroup key={group.label}>
+                                <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pt-2">
+                                  {group.label}
+                                </SelectLabel>
+                                {group.languages.map((lang) => (
+                                  <SelectItem key={lang.code} value={lang.code} className="text-xs">
+                                    <span className="mr-1.5">{lang.flag}</span>
+                                    {lang.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
+                          <SelectTrigger className="h-7 w-24 text-xs px-1.5">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TRANSITIONS.map((t) => (
+                              <SelectItem key={t.value} value={t.value}>
+                                <span className="text-xs">{t.label}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          size="sm" variant="ghost"
+                          className="h-7 text-xs px-2 text-red-400 hover:text-red-600 hover:bg-red-50 ml-auto"
+                          onClick={() => onDelete(scene.id, "Scene " + scene.sceneNumber)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+
+                      {/* AI Director Controls */}
+                      <div className="mt-3 pt-3 border-t border-slate-100">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2">
+                          <div>
+                            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Mood</Label>
+                            <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
+                              <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
+                                <SelectValue placeholder="Set mood" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {MOODS.map((m) => (
+                                  <SelectItem key={m} value={m}>
+                                    <span className="text-xs capitalize">{m}</span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Camera</Label>
+                            <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
+                              <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
+                                <SelectValue placeholder="Camera move" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {CAMERA_MOVES.map((c) => (
+                                  <SelectItem key={c} value={c}>
+                                    <span className="text-xs capitalize">{c}</span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Lighting</Label>
+                            <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
+                              <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
+                                <SelectValue placeholder="Lighting" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {LIGHTING_STYLES.map((l) => (
+                                  <SelectItem key={l} value={l}>
+                                    <span className="text-xs capitalize">{l}</span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ── Dubbed Audio Tracks (translations) ── */}
+                      {scene.translations && scene.translations.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <Languages className="h-3.5 w-3.5 text-violet-500" />
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                              Dubbed Audio ({scene.translations.length})
+                            </span>
+                          </div>
+                          <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                            {scene.translations
+                              .filter((t) => t.status === "ready" && t.narrationUrl)
+                              .map((t) => {
+                                const langMeta = ALL_DUBBING_LANGUAGES.find((l) => l.code === t.lang);
+                                return (
+                                  <div
+                                    key={t.id}
+                                    className="flex items-center gap-2 rounded-lg bg-violet-50/50 border border-violet-100 p-1.5"
+                                  >
+                                    <span className="text-base shrink-0">{langMeta?.flag || "🌐"}</span>
+                                    <span className="text-xs font-medium shrink-0 min-w-[70px]">{t.langName}</span>
+                                    <audio
+                                      controls
+                                      src={t.narrationUrl!}
+                                      className="h-7 flex-1 min-w-0"
+                                      preload="none"
+                                    />
+                                    <button
+                                      onClick={() => onDeleteDubbing(scene.id, t.lang, t.langName)}
+                                      className="shrink-0 p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                      title={`Delete ${t.langName} dubbing`}
+                                      aria-label={`Delete ${t.langName} dubbing`}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            {scene.translations.some((t) => t.status === "generating") && (
+                              <div className="flex items-center gap-2 text-xs text-violet-500 px-1">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                <span>Generating dubbing…</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>{/* end settings column */}
+                  </div>{/* end row 2 flex */}
+                </div>{/* end row 2 border-t wrapper */}
+              </div>{/* end script column */}
+            </div>{/* end flex portrait + script */}
           </div>{/* end content flex-1 outer */}
         </div>
       </Card>
