@@ -1675,3 +1675,25 @@ Work Log:
 
 Stage Summary:
 - Scene timeline cards now show video preview and settings side-by-side on all tablet+ views, matching the user's request. The layout uses responsive widths that scale with viewport size.
+---
+Task ID: 1
+Agent: Main
+Task: Restructure SortableSceneCard layout - portrait thumbnail column + script column with Row 2 split into video player and settings
+
+Work Log:
+- Read current SortableSceneCard component (lines 232-648) to understand existing layout
+- Identified current layout: LEFT COLUMN (Video Preview 220-300px) + RIGHT COLUMN (Script + Actions + AI Director)
+- Designed new layout: PORTRAIT THUMBNAIL (narrow, sm:w-20, aspect-[9/16]) + SCRIPT COLUMN with Row 1 (details) + Row 2 (video player | settings)
+- Replaced the entire content area (lines 291-643) with new structure
+- Portrait thumbnail shows scene number badge (top-left), status badge (bottom-right), and image/video/placeholder
+- Script column Row 1: title, badges, prompt, dialogue
+- Script column Row 2: flex-col sm:flex-row with video player (sm:w-[220px]) on left and settings (flex-1) on right
+- Verified compilation: clean build, lint passes
+- Verified with agent-browser: 4 portrait thumbnails found, correct column widths confirmed
+- Committed and pushed to GitHub
+
+Stage Summary:
+- SortableSceneCard now has 3 visual zones: portrait thumb | script details | video+settings row
+- Responsive: on mobile (below sm), everything stacks vertically; on sm+, portrait is narrow left column, video+settings are side-by-side
+- Commit: db06cc9
+
