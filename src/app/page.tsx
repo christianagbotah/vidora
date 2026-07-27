@@ -685,7 +685,7 @@ const HERO_SLIDES = [
     headline: "Create Production-Ready",
     headlineAccent: "AI Videos",
     description: "Write scripts, design characters, generate cinematic scenes with AI Director controls. From birthday stories to commercials — all powered by AI.",
-    gradient: "from-black/75 via-violet-950/60 to-black/80",
+    gradient: "from-black/80 via-violet-950/70 to-black/85",
     orbColor: "violet",
   },
   {
@@ -695,7 +695,7 @@ const HERO_SLIDES = [
     headline: "From Script to Screen",
     headlineAccent: "in Minutes",
     description: "Upload your script, choose a style, and let AI transform your words into stunning cinematic scenes with professional quality.",
-    gradient: "from-black/75 via-fuchsia-950/50 to-black/80",
+    gradient: "from-black/80 via-fuchsia-950/60 to-black/85",
     orbColor: "amber",
   },
   {
@@ -705,7 +705,7 @@ const HERO_SLIDES = [
     headline: "Cinematic Scenes",
     headlineAccent: "on Demand",
     description: "AI Director controls for mood, camera moves, lighting, and transitions. Every scene looks like it was shot by a professional crew.",
-    gradient: "from-black/75 via-emerald-950/50 to-black/80",
+    gradient: "from-black/80 via-emerald-950/60 to-black/85",
     orbColor: "rose",
   },
   {
@@ -715,7 +715,7 @@ const HERO_SLIDES = [
     headline: "Character Systems",
     headlineAccent: "& Storyboarding",
     description: "Build character profiles with voice casting, manage multi-scene storyboards, and export broadcast-ready videos in any format.",
-    gradient: "from-black/75 via-cyan-950/50 to-black/80",
+    gradient: "from-black/80 via-cyan-950/60 to-black/85"
     orbColor: "violet",
   },
 ] as const;
