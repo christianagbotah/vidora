@@ -1846,3 +1846,25 @@ Stage Summary:
 - 6 features added to page.tsx via surgical edits
 - All changes pass lint cleanly
 - Dev server compiles successfully
+---
+Task ID: 1
+Agent: Main Agent
+Task: Implement live GHS/USD auto-conversion + z.ai API cost display in Admin Dashboard
+
+Work Log:
+- Explored current admin dashboard, pricing engine (src/lib/pricing.ts), token packages system, and profit analytics
+- Created `/api/admin/exchange-rate/route.ts` — fetches live GHS/USD rate from open.er-api.com free API, cached in memory (4hr TTL) + persisted in SystemConfig DB
+- Created `/api/admin/api-costs/route.ts` — returns full z.ai API cost breakdown per operation, historical actual costs from DB, project cost estimates for common video lengths
+- Updated `PackageEditDialog.tsx` — added live exchange rate banner, auto-converts GHS↔USD when admin edits either field, shows conversion indicator
+- Updated `profit-analytics/route.ts` — replaced hardcoded GHS_TO_USD=0.08 with live rate from SystemConfig
+- Updated `page.tsx` — added exchange rate state + API costs state, fetches on admin load, added Live Exchange Rate banner and z.ai API Cost Per Operation card to admin dashboard UI
+- Added `ArrowRightLeft` icon import to page.tsx
+- All changes pass ESLint cleanly
+
+Stage Summary:
+- Files created: 2 new API routes (exchange-rate, api-costs)
+- Files modified: 3 (PackageEditDialog, profit-analytics, page.tsx)
+- Exchange rate auto-refreshes every 4 hours, admin can manually override
+- Package prices auto-convert between GHS and USD using live rate
+- Admin dashboard now shows per-operation z.ai costs, margins, and project cost estimates
+- Profit analytics now uses live exchange rate instead of hardcoded 0.08

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Save, Coins, TrendingDown, AlertCircle, Sparkle } from "lucide-react";
+import { Loader2, Save, Coins, TrendingDown, AlertCircle, Sparkle, RefreshCw, ArrowRightLeft } from "lucide-react";
 
 interface AdminTokenPackage {
   id: string;
@@ -42,16 +42,12 @@ interface PackageEditDialogProps {
   saving: boolean;
 }
 
-/**
- * Dialog for creating or editing a token package.
- *
- * Features:
- *  - Live "effective tokens" preview (base + bonus%) as the admin types
- *  - Live "per-token price" calculation so the admin sees the real economics
- *  - Features list editor (one feature per line)
- *  - Popular + Active toggles
- *  - Slug is editable on CREATE only (locked on edit to preserve checkout refs)
- */
+interface ExchangeRateData {
+  ghsPerUsd: number;
+  usdPerGhs: number;
+  source: string;
+}
+
 export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: PackageEditDialogProps) {
   const isEdit = !!pkg?.id;
 
@@ -68,13 +64,39 @@ export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: P
     featuresText: "",
   });
 
-  // Sync form when dialog opens or pkg changes.
-  // Using a key-based remount pattern would also work, but this is simpler
-  // and the effect only runs when `open` or `pkg` actually change.
+  // Exchange rate state
+  const [exchangeRate, setExchangeRate] = useState<ExchangeRateData | null>(null);
+  const [rateLoading, setRateLoading] = useState(false);
+  const [lastEditedField, setLastEditedField] = useState<"ghs" | "usd" | null>(null);
+
+  // Fetch live exchange rate when dialog opens
+  const fetchExchangeRate = useCallback(async () => {
+    setRateLoading(true);
+    try {
+      const res = await fetch("/api/admin/exchange-rate");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.data) {
+          setExchangeRate(data.data);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch exchange rate:", err);
+    } finally {
+      setRateLoading(false);
+    }
+  }, []);
+
+  // Auto-fetch rate when dialog opens
+  useEffect(() => {
+    if (open) {
+      fetchExchangeRate();
+    }
+  }, [open, fetchExchangeRate]);
+
+  // Sync form when dialog opens or pkg changes
   useEffect(() => {
     if (!open) return;
-    // Defer to avoid cascading render warning — the state is derived from props
-    // that only change when the dialog opens, so this is safe.
     const t = setTimeout(() => {
       setForm({
         slug: pkg?.slug || "",
@@ -88,9 +110,32 @@ export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: P
         sortOrder: pkg?.sortOrder ?? 0,
         featuresText: (pkg?.features || []).join("\n"),
       });
+      setLastEditedField(null); // Reset on open
     }, 0);
     return () => clearTimeout(t);
   }, [open, pkg]);
+
+  // Auto-convert: when GHS changes, update USD
+  const handleGhsChange = (ghsValue: number) => {
+    setLastEditedField("ghs");
+    setForm((f) => {
+      const usdValue = exchangeRate && ghsValue > 0
+        ? Math.round((ghsValue * exchangeRate.usdPerGhs) * 100) / 100
+        : f.priceUSD;
+      return { ...f, priceGHS: ghsValue, priceUSD: usdValue };
+    });
+  };
+
+  // Auto-convert: when USD changes, update GHS
+  const handleUsdChange = (usdValue: number) => {
+    setLastEditedField("usd");
+    setForm((f) => {
+      const ghsValue = exchangeRate && usdValue > 0
+        ? Math.round((usdValue * exchangeRate.ghsPerUsd) * 100) / 100
+        : f.priceGHS;
+      return { ...f, priceUSD: usdValue, priceGHS: ghsValue };
+    });
+  };
 
   // Derived: live economics preview
   const effectiveTokens =
@@ -125,8 +170,8 @@ export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: P
 
   const isValid =
     form.name.trim().length > 0 &&
-    (!isEdit || true) && // slug locked on edit, so always valid
-    (isEdit || form.slug.trim().length > 0) && // slug required on create
+    (!isEdit || true) &&
+    (isEdit || form.slug.trim().length > 0) &&
     Number(form.tokens) > 0 &&
     Number(form.priceGHS) >= 0 &&
     Number(form.priceUSD) >= 0;
@@ -200,28 +245,82 @@ export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: P
                 className="h-9"
               />
             </div>
+
+            {/* GHS Price with auto-convert indicator */}
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Price (GHS) *</Label>
+              <Label className="text-sm font-medium flex items-center gap-1">
+                Price (GHS) *
+                {lastEditedField === "ghs" && (
+                  <ArrowRightLeft className="h-3 w-3 text-emerald-500" />
+                )}
+              </Label>
               <Input
                 type="number"
                 min={0}
                 step="0.01"
                 value={form.priceGHS}
-                onChange={(e) => setForm((f) => ({ ...f, priceGHS: Number(e.target.value) }))}
+                onChange={(e) => handleGhsChange(Number(e.target.value))}
                 className="h-9"
               />
+              <p className="text-xs text-muted-foreground">
+                Auto-converts to USD at live rate
+              </p>
             </div>
+
+            {/* USD Price with auto-convert indicator */}
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Price (USD) *</Label>
+              <Label className="text-sm font-medium flex items-center gap-1">
+                Price (USD) *
+                {lastEditedField === "usd" && (
+                  <ArrowRightLeft className="h-3 w-3 text-emerald-500" />
+                )}
+              </Label>
               <Input
                 type="number"
                 min={0}
                 step="0.01"
                 value={form.priceUSD}
-                onChange={(e) => setForm((f) => ({ ...f, priceUSD: Number(e.target.value) }))}
+                onChange={(e) => handleUsdChange(Number(e.target.value))}
                 className="h-9"
               />
+              <p className="text-xs text-muted-foreground">
+                Auto-converts to GHS at live rate
+              </p>
             </div>
+          </div>
+
+          {/* Live Exchange Rate Banner */}
+          <div className="flex items-center justify-between rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="text-xs font-medium text-emerald-700">
+                Live Exchange Rate
+              </span>
+              {exchangeRate && (
+                <span className="text-xs text-emerald-600">
+                  (1 USD = {exchangeRate.ghsPerUsd} GHS · 1 GHS = ${exchangeRate.usdPerGhs})
+                </span>
+              )}
+              {exchangeRate?.source && (
+                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                  exchangeRate.source === "live" ? "bg-emerald-100 text-emerald-700 border-emerald-300" :
+                  exchangeRate.source === "cache" ? "bg-blue-50 text-blue-600 border-blue-200" :
+                  "bg-amber-50 text-amber-600 border-amber-200"
+                }`}>
+                  {exchangeRate.source === "live" ? "Live" : exchangeRate.source === "cache" ? "Cached" : "Fallback"}
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-100"
+              onClick={fetchExchangeRate}
+              disabled={rateLoading}
+            >
+              {rateLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Refresh
+            </Button>
           </div>
 
           {/* Live economics preview */}

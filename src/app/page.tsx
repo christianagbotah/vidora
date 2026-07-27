@@ -19,7 +19,7 @@ import {
   Crown, Star, Heart, Briefcase, PartyPopper, Camera,
   GripVertical, Quote, ArrowDownToLine, Music,
   CheckCircle, AlertTriangle, Shield, Search, Settings,
-  Lightbulb, RotateCcw, Shrink,
+  Lightbulb, RotateCcw, Shrink, ArrowRightLeft,
   LogIn, LogOut, User, CreditCard, Wallet, Coins, ShieldCheck,
   Building2, DollarSign, BarChart3, TrendingUp, KeyRound,
   Package, ShoppingBag, Bell, Mail, History, ArrowRight, UserCircle, Calendar, TrendingDown,
@@ -1182,6 +1182,12 @@ function VidoraApp() {
   const [packageDialogOpen, setPackageDialogOpen] = useState(false);
   const [savingPackage, setSavingPackage] = useState(false);
   const [resettingPackages, setResettingPackages] = useState(false);
+  // ── Admin: Exchange Rate ──
+  const [exchangeRate, setExchangeRate] = useState<{ ghsPerUsd: number; usdPerGhs: number; source: string; lastChecked: string | null } | null>(null);
+  const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
+  // ── Admin: z.ai API Cost Breakdown ──
+  const [apiCosts, setApiCosts] = useState<{ pricingTable: Array<{ operation: string; label: string; tokensCharged: number; estimatedCostUsd: number }>; historical: Record<string, unknown>; projectEstimates: Array<{ label: string; scenes: number; tokens: number; zaiCostUsd: number; revenueUsd: number; profitUsd: number; marginPct: number }> } | null>(null);
+  const [apiCostsLoading, setApiCostsLoading] = useState(false);
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
@@ -2781,12 +2787,14 @@ function VidoraApp() {
   const handleAdminLoadData = useCallback(async () => {
     setAdminLoading(true);
     try {
-      const [usersRes, paymentsRes, analyticsRes, configRes, packagesRes] = await Promise.all([
+      const [usersRes, paymentsRes, analyticsRes, configRes, packagesRes, exchangeRes, apiCostsRes] = await Promise.all([
         fetch("/api/admin/users"),
         fetch("/api/admin/payments"),
         fetch("/api/admin/analytics"),
         fetch("/api/admin/config"),
         fetch("/api/admin/packages"),
+        fetch("/api/admin/exchange-rate").catch(() => null),
+        fetch("/api/admin/api-costs").catch(() => null),
       ]);
       const [usersData, paymentsData, analyticsData, configData, packagesData] = await Promise.all([
         usersRes.json(), paymentsRes.json(), analyticsRes.json(), configRes.json(), packagesRes.json(),
@@ -2804,6 +2812,20 @@ function VidoraApp() {
         setConfigForm(formUpdate);
       }
       if (packagesData.success) setAdminPackages(packagesData.packages);
+      // Exchange rate
+      if (exchangeRes?.ok) {
+        try {
+          const rateData = await exchangeRes.json();
+          if (rateData.success) setExchangeRate(rateData.data);
+        } catch { /* ignore */ }
+      }
+      // z.ai API costs
+      if (apiCostsRes?.ok) {
+        try {
+          const costsData = await apiCostsRes.json();
+          if (costsData.success) setApiCosts(costsData.data);
+        } catch { /* ignore */ }
+      }
     } catch { /* ignore */ }
     finally { setAdminLoading(false); }
   }, []);
@@ -5471,6 +5493,191 @@ function VidoraApp() {
                       </Card>
                     ))}
                   </div>
+
+                  {/* ── Live Exchange Rate Banner ──
+                      Shows the current GHS↔USD rate, fetched from a free API.
+                      Used for auto-converting package prices. */}
+                  <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 border border-emerald-200 px-4 py-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+                        <ArrowRightLeft className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                          Live Exchange Rate
+                          {exchangeRate?.source && (
+                            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                              exchangeRate.source === "live" ? "bg-emerald-100 text-emerald-700 border-emerald-300" :
+                              exchangeRate.source === "cache" ? "bg-blue-50 text-blue-600 border-blue-200" :
+                              "bg-amber-50 text-amber-600 border-amber-200"
+                            }`}>
+                              {exchangeRate.source === "live" ? "● Live" : exchangeRate.source === "cache" ? "Cached" : "Fallback"}
+                            </Badge>
+                          )}
+                        </p>
+                        {exchangeRate ? (
+                          <p className="text-xs text-slate-600 mt-0.5">
+                            1 USD = <strong className="text-emerald-700">{exchangeRate.ghsPerUsd} GHS</strong>
+                            <span className="mx-1.5 text-slate-300">·</span>
+                            1 GHS = <strong className="text-emerald-700">${exchangeRate.usdPerGhs}</strong>
+                            {exchangeRate.lastChecked && (
+                              <span className="ml-1.5 text-slate-400">
+                                (updated {new Date(exchangeRate.lastChecked).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+                              </span>
+                            )}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground mt-0.5">Loading exchange rate...</p>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-3 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-100"
+                      onClick={async () => {
+                        setExchangeRateLoading(true);
+                        try {
+                          const res = await fetch("/api/admin/exchange-rate");
+                          if (res.ok) {
+                            const data = await res.json();
+                            if (data.success) setExchangeRate(data.data);
+                          }
+                        } catch { /* ignore */ }
+                        finally { setExchangeRateLoading(false); }
+                      }}
+                      disabled={exchangeRateLoading}
+                    >
+                      {exchangeRateLoading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1" />}
+                      Refresh
+                    </Button>
+                  </div>
+
+                  {/* ── z.ai API Cost Breakdown ──
+                      Shows per-operation costs from the Z.ai API so the admin
+                      knows exactly how much each AI feature costs in real dollars. */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-rose-500 to-orange-500 flex items-center justify-center text-white">
+                          <Zap className="h-3.5 w-3.5" />
+                        </div>
+                        z.ai API Cost Per Operation
+                        <Badge variant="outline" className="text-xs ml-1 bg-rose-50 text-rose-600 border-rose-200">
+                          Your COGS
+                        </Badge>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Real cost to YOU per AI operation via the Z.ai API. The difference between user token charges and these costs is your gross margin.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {apiCosts?.pricingTable ? (
+                        <>
+                          <div className="max-h-72 overflow-y-auto custom-scrollbar -mx-2 px-2">
+                            <table className="w-full text-sm">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="border-b text-left text-xs text-muted-foreground">
+                                  <th className="pb-2 pr-2">Operation</th>
+                                  <th className="pb-2 pr-2 text-right">Tokens Charged</th>
+                                  <th className="pb-2 pr-2 text-right">Z.ai Cost (USD)</th>
+                                  <th className="pb-2 pr-2 text-right">Your Revenue (USD)</th>
+                                  <th className="pb-2 text-right">Margin</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {apiCosts.pricingTable.map((op) => {
+                                  const revenueUsd = op.tokensCharged * 0.05;
+                                  const profitUsd = revenueUsd - op.estimatedCostUsd;
+                                  const marginPct = revenueUsd > 0 ? (profitUsd / revenueUsd) * 100 : (op.estimatedCostUsd > 0 ? -100 : 0);
+                                  const isFree = op.tokensCharged === 0;
+                                  return (
+                                    <tr key={op.operation} className="border-b last:border-0 hover:bg-slate-50">
+                                      <td className="py-2 pr-2">
+                                        <div className="font-medium text-slate-800">{op.label}</div>
+                                        <div className="text-xs text-muted-foreground font-mono">{op.operation}</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-right font-semibold">
+                                        {isFree ? (
+                                          <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-600 border-emerald-200">FREE</Badge>
+                                        ) : (
+                                          op.tokensCharged
+                                        )}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right text-rose-600 font-mono">
+                                        ${op.estimatedCostUsd.toFixed(4)}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right text-emerald-600 font-mono">
+                                        ${isFree ? "0.0000" : revenueUsd.toFixed(4)}
+                                      </td>
+                                      <td className="py-2 text-right">
+                                        <span className={`font-semibold text-xs ${marginPct >= 50 ? "text-emerald-600" : marginPct >= 0 ? "text-amber-600" : "text-red-600"}`}>
+                                          {isFree ? (
+                                            <span className="text-amber-600">CAC</span>
+                                          ) : (
+                                            `${marginPct >= 0 ? "+" : ""}${marginPct.toFixed(0)}%`
+                                          )}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Project Cost Estimates */}
+                          {apiCosts.projectEstimates && apiCosts.projectEstimates.length > 0 && (
+                            <div className="mt-4 pt-3 border-t">
+                              <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                                <Film className="h-3.5 w-3.5 text-violet-500" />
+                                Project Cost Estimates (Video + Image + Narration + Continuity)
+                              </p>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                {apiCosts.projectEstimates.map((est) => (
+                                  <div key={est.label} className="rounded-lg bg-slate-50 border p-3 text-center">
+                                    <p className="text-xs font-medium text-muted-foreground">{est.label}</p>
+                                    <p className="text-lg font-bold text-violet-600">{est.tokens}</p>
+                                    <p className="text-[10px] text-muted-foreground">tokens</p>
+                                    <div className="mt-1 pt-1 border-t border-slate-200 text-[10px] space-y-0.5">
+                                      <p className="text-rose-500">Cost: ${est.zaiCostUsd.toFixed(2)}</p>
+                                      <p className="text-emerald-600">Revenue: ${est.revenueUsd.toFixed(2)}</p>
+                                      <p className={`font-bold ${est.marginPct >= 0 ? "text-emerald-700" : "text-red-600"}`}>
+                                        Margin: {est.marginPct}%
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Historical summary */}
+                          {apiCosts.historical && (apiCosts.historical as Record<string, unknown>).totalOperations && (
+                            <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <BarChart2 className="h-3 w-3 text-violet-500" />
+                                Total operations: <strong className="text-slate-700">{(apiCosts.historical as Record<string, unknown>).totalOperations}</strong>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <DollarSign className="h-3 w-3 text-rose-500" />
+                                Total Z.ai cost: <strong className="text-rose-600">${(apiCosts.historical as Record<string, unknown>).totalCostUsd}</strong>
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Coins className="h-3 w-3 text-amber-500" />
+                                Total tokens spent: <strong className="text-slate-700">{(apiCosts.historical as Record<string, unknown>).totalTokensSpent}</strong>
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-center py-6 text-muted-foreground">
+                          <Zap className="h-6 w-6 mx-auto mb-2 opacity-30" />
+                          <p className="text-sm">Loading API cost data...</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
 
                   {/* ── Token Package Management ──
                       Admin can adjust prices, token quantities, bonuses,

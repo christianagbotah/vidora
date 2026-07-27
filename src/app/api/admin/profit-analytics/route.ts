@@ -87,9 +87,19 @@ export async function GET(req: NextRequest) {
     });
     const totalTokensRefunded = refunds.reduce((sum, r) => sum + r.amount, 0);
 
-    // ── Calculate profit ──
-    // Convert GHS revenue to USD (approx 1 GHS = 0.08 USD, adjust as needed)
-    const GHS_TO_USD = 0.08;
+    // ── Get live GHS → USD exchange rate ──
+    // Try to get the live rate from SystemConfig (populated by /api/admin/exchange-rate)
+    let GHS_TO_USD = 0.08; // fallback
+    try {
+      const rateConfig = await db.systemConfig.findUnique({ where: { key: "exchange_rate_ghs_usd" } });
+      if (rateConfig?.value) {
+        const ghsPerUsd = parseFloat(rateConfig.value);
+        if (ghsPerUsd > 0) GHS_TO_USD = 1 / ghsPerUsd; // convert 1 USD = X GHS → 1 GHS = Y USD
+      }
+    } catch {
+      // Use fallback
+    }
+
     const totalRevenueUsd = revenueUSD + revenueGHS * GHS_TO_USD;
     const grossProfitUsd = totalRevenueUsd - totalCogsUsd;
     const marginPct = totalRevenueUsd > 0 ? (grossProfitUsd / totalRevenueUsd) * 100 : 0;
@@ -129,6 +139,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       period,
+      exchangeRate: {
+        ghsToUsd: Math.round(GHS_TO_USD * 10000) / 10000,
+        source: "live", // indicates it's from the persisted live rate
+      },
       summary: {
         revenue: {
           ghs: Math.round(revenueGHS * 100) / 100,
