@@ -679,7 +679,7 @@ function SortableSceneCard({
 
 const HERO_SLIDES = [
   {
-    image: "/images/hero-slide-1.png",
+    image: "/images/hero-bg.png",
     badge: "AI-Powered Studio",
     badgeIcon: <Zap className="h-3 w-3 mr-1.5 text-amber-400" />,
     headline: "Create Production-Ready",
