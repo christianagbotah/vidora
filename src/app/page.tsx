@@ -966,7 +966,7 @@ function HeroSlider({
           className="h-full bg-gradient-to-r from-violet-400 via-fuchsia-400 to-amber-400"
           style={{
             width: `${progress}%`,
-            transition: isPaused ? "none" : "width 0.1s linear",
+            transition: "width 0.1s linear",
           }}
         />
       </div>
