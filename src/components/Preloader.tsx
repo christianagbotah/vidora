@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { Clapperboard, Loader2 } from "lucide-react";
+import { Clapperboard } from "lucide-react";
 
 /**
  * Vidora Preloader
@@ -197,30 +197,32 @@ export function Preloader() {
 /* ════════════════════════════════════════════════════════════════
    View Transition Overlay
    ════════════════════════════════════════════════════════════════
-   A lightweight overlay shown during client-side view switches
-   (e.g. home → studio, studio → gallery). It listens for:
+   Uses the SAME full preloader design (orbiting dots, Clapperboard
+   logo, gradient wordmark, progress bar) for every view transition.
+   It listens for:
      • vidora:view-loading  — fade in immediately
-     • vidora:view-ready   — fade out after a brief hold
+     • vidora:view-ready   — fill bar, then fade out
    Dispatched by page.tsx whenever currentView changes.
    ════════════════════════════════════════════════════════════════ */
 
-const VIEW_TRANSITION_MIN = 280;  // ms — minimum visible time
-const VIEW_TRANSITION_MAX = 3000; // ms — hard cap
+const VIEW_TRANS_MIN = 800;  // ms — minimum visible time
+const VIEW_TRANS_MAX = 4000; // ms — hard cap
 
 export function ViewTransitionOverlay() {
   const [visible, setVisible] = useState(false);
   const [fading, setFading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [label, setLabel] = useState("Loading");
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const rafRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const start = performance.now();
-
     const clearTimers = () => {
       timers.current.forEach(clearTimeout);
       timers.current = [];
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
 
     const onLoading = ((e: Event) => {
@@ -228,15 +230,26 @@ export function ViewTransitionOverlay() {
       if (ce.detail?.label) setLabel(ce.detail.label);
       else setLabel("Loading");
       clearTimers();
+      setProgress(0);
       setFading(false);
       setVisible(true);
+
+      // Start progress animation
+      const start = performance.now();
+      const tick = (now: number) => {
+        const elapsed = now - start;
+        const t = Math.min(1, elapsed / 1000);
+        const eased = 1 - Math.pow(1 - t, 3);
+        setProgress(Math.round(eased * 75));
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
     }) as EventListener;
 
     const onReady = () => {
-      const elapsed = performance.now() - start;
-      const delay = Math.max(0, VIEW_TRANSITION_MIN - elapsed);
-
-      // Safety cap: auto-dismiss after MAX regardless
+      clearTimers();
+      // Jump to 100, then fade
+      setProgress(100);
       timers.current.push(
         setTimeout(() => {
           setFading(true);
@@ -244,9 +257,22 @@ export function ViewTransitionOverlay() {
             setTimeout(() => {
               setVisible(false);
               setFading(false);
-            }, 320)
+            }, 600)
           );
-        }, Math.min(delay + 80, VIEW_TRANSITION_MAX))
+        }, 260)
+      );
+
+      // Safety cap
+      timers.current.push(
+        setTimeout(() => {
+          if (visible) {
+            setFading(true);
+            setTimeout(() => {
+              setVisible(false);
+              setFading(false);
+            }, 600);
+          }
+        }, VIEW_TRANS_MAX)
       );
     };
 
@@ -265,22 +291,60 @@ export function ViewTransitionOverlay() {
   return (
     <div
       aria-hidden="true"
-      className={`fixed inset-0 z-[9998] flex flex-col items-center justify-center pointer-events-none
-        transition-opacity duration-300 ease-in-out ${fading ? "opacity-0" : "opacity-100"}`}
-      style={{ background: "rgba(7, 3, 15, 0.72)", backdropFilter: "blur(8px)" }}
+      role="status"
+      className={`preloader-root fixed inset-0 z-[9998] flex items-center justify-center ${fading ? "preloader-fading" : ""}`}
     >
-      <div className="flex flex-col items-center gap-4">
-        {/* Spinning Clapperboard */}
-        <div className="view-trans-spinner">
-          <div className="view-trans-spinner-inner">
-            <Clapperboard className="h-10 w-10 text-white/90" strokeWidth={1.5} />
+      {/* Background layers */}
+      <div className="preloader-bg absolute inset-0" />
+      <div className="preloader-orbs absolute inset-0 overflow-hidden">
+        <span
+          className="orb orb-violet"
+          style={{ width: 340, height: 340, top: "12%", left: "8%" }}
+        />
+        <span
+          className="orb orb-rose"
+          style={{ width: 300, height: 300, bottom: "8%", right: "6%" }}
+        />
+        <span
+          className="orb orb-amber"
+          style={{ width: 220, height: 220, top: "55%", left: "60%" }}
+        />
+      </div>
+
+      {/* Content */}
+      <div className="relative flex flex-col items-center gap-7 px-6">
+        {/* Logo + orbiting dots */}
+        <div className="preloader-logo-wrap">
+          <div className="preloader-orbit">
+            <span className="preloader-dot preloader-dot-1" />
+            <span className="preloader-dot preloader-dot-2" />
+            <span className="preloader-dot preloader-dot-3" />
           </div>
+          <div className="preloader-logo">
+            <Clapperboard className="h-11 w-11 text-white" strokeWidth={1.75} />
+          </div>
+          <div className="preloader-ring" />
         </div>
-        {/* Label */}
-        <span className="view-trans-label">{label}</span>
-        {/* Shimmer bar */}
-        <div className="w-48 h-1 rounded-full bg-white/10 overflow-hidden">
-          <div className="view-trans-bar" />
+
+        {/* Wordmark */}
+        <div className="text-center">
+          <div className="preloader-wordmark">Vidora</div>
+          <div className="preloader-tagline">{label}</div>
+        </div>
+
+        {/* Progress */}
+        <div className="preloader-progress-wrap">
+          <div className="preloader-progress-track">
+            <div
+              className="preloader-progress-fill"
+              style={{ width: `${progress}%` }}
+            />
+            <div className="preloader-progress-shimmer" />
+          </div>
+          <div className="preloader-progress-meta">
+            <span className="preloader-progress-label">Loading</span>
+            <span className="preloader-progress-pct">{progress}%</span>
+          </div>
         </div>
       </div>
     </div>

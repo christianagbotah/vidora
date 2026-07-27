@@ -556,56 +556,12 @@
   .preloader-logo,
   .preloader-progress-fill,
   .preloader-progress-shimmer,
-  .preloader-wordmark,
-  .view-trans-spinner-inner,
-  .view-trans-bar {
+  .preloader-wordmark {
     animation: none !important;
   }
   .preloader-logo {
     background: linear-gradient(135deg, #7c3aed, #ec4899);
   }
-}
-
-/* ── View Transition Overlay ── */
-.view-trans-spinner {
-  width: 72px;
-  height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.view-trans-spinner-inner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #7c3aed, #a855f7, #ec4899);
-  background-size: 200% 200%;
-  animation: preloader-gradient 3s ease infinite, preloader-pulse 2.2s ease-in-out infinite;
-  box-shadow:
-    0 0 30px rgba(168, 85, 247, 0.5),
-    0 0 60px rgba(236, 72, 153, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
-}
-.view-trans-label {
-  font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.55);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.view-trans-bar {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.35) 50%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: preloader-shimmer 1.5s linear infinite;
 }
 
 /* ── Header label visibility ── */

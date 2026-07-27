@@ -980,7 +980,6 @@ function VidoraApp() {
   // ── Show ViewTransitionOverlay on view changes ──
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Skip on first render (the main Preloader handles initial load)
     const viewLabels: Record<string, string> = {
       home: "Loading Home",
       create: "Preparing Creator",
@@ -995,10 +994,10 @@ function VidoraApp() {
     window.dispatchEvent(
       new CustomEvent("vidora:view-loading", { detail: { label } })
     );
-    // Let the view render, then signal ready
+    // Let the view render, then signal ready after a brief hold
     const timer = setTimeout(() => {
       window.dispatchEvent(new Event("vidora:view-ready"));
-    }, 350);
+    }, 800);
     return () => clearTimeout(timer);
   }, [currentView]);
 
