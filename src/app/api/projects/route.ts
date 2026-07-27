@@ -11,7 +11,10 @@ import { requireAuth } from "@/lib/project-auth";
 export async function GET() {
   try {
     const authResult = await requireAuth();
-    if (!authResult.ok) return authResult.response;
+    if (!authResult.ok) {
+      // Guests get an empty list instead of 401 — they simply have no projects
+      return NextResponse.json({ success: true, projects: [] });
+    }
 
     const { userId, role } = authResult.session;
 
