@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zai, ZAIError } from "@/lib/zai";
+import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -212,18 +213,16 @@ export async function POST(
         chunks: chunks.length,
       });
     } catch (aiError) {
-      // Surface a clear, actionable error. ZAIError already carries a
-      // human-readable message (e.g. "ZAI account has insufficient balance…").
-      const msg = aiError instanceof ZAIError
-        ? aiError.message
-        : aiError instanceof Error
-          ? aiError.message
-          : "AI dubbing failed";
+      // Mark the translation as failed in DB, then surface a differentiated error:
+      // admins see raw diagnostic, regular users see friendly "service unavailable".
       await db.sceneTranslation.update({
         where: { id: translation.id },
         data: { status: "failed" },
       }).catch(() => {});
-      return NextResponse.json({ success: false, error: msg }, { status: 503 });
+      return zaiErrorResponse(aiError, {
+        session: authResult.ok ? authResult.session : null,
+        logLabel: "dubbing",
+      });
     }
   } catch (error) {
     console.error("[dubbing POST]", error);

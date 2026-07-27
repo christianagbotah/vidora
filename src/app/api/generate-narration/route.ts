@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
 import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
+import { unlink } from "fs/promises";
 import path from "path";
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
 
@@ -149,16 +153,16 @@ export async function POST(req: NextRequest) {
       concatenated,
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to generate narration:", error);
     // Clean up any orphaned chunk files on failure
     for (const p of tempChunkPaths) {
       await unlink(p).catch(() => {});
     }
-    return NextResponse.json(
-      { success: false, error: "Failed to generate narration: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "generate-narration",
+    });
   }
 }
 

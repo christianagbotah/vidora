@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError } from "@/lib/zai";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 /**
  * POST /api/assistant/chat
@@ -116,15 +117,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, reply: reply.trim() });
   } catch (error) {
-    const msg = error instanceof ZAIError
-      ? error.message
-      : error instanceof Error
-        ? error.message
-        : "Assistant is temporarily unavailable.";
-    console.error("[assistant/chat POST]", error);
-    return NextResponse.json(
-      { success: false, error: msg },
-      { status: 503 }
-    );
+    // Public endpoint — no session, so adminDetail is never attached.
+    // Users see a friendly "service unavailable" message; raw error goes to logs.
+    return zaiErrorResponse(error, {
+      fallbackStatus: 503,
+      fallbackMessage: "The assistant is temporarily unavailable. Please try again later.",
+      logLabel: "assistant/chat POST",
+    });
   }
 }

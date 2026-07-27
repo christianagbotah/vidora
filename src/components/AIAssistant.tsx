@@ -66,15 +66,16 @@ export default function AIAssistant() {
       if (data.success && data.reply) {
         setMessages([...newMessages, { role: "assistant", content: data.reply }]);
       } else {
-        const errMsg = String(data.error || "Something went wrong.");
-        const isBalance = /insufficient balance|quota|1113/i.test(errMsg);
+        // The API now returns a user-friendly `error` field by default, plus
+        // an optional `adminDetail` for admins. We show whichever is appropriate.
+        // Since this is a public widget (no session context on the client),
+        // we just display `data.error` directly — it's already friendly copy.
+        const errMsg = String(data.error || "I'm having trouble responding right now. Please try again in a moment.");
         setMessages([
           ...newMessages,
           {
             role: "assistant",
-            content: isBalance
-              ? "I'm temporarily offline while our AI service recharges. Please try again shortly, or check the Documentation below. 🙏"
-              : `Sorry, I couldn't respond right now: ${errMsg}`,
+            content: errMsg,
           },
         ]);
       }

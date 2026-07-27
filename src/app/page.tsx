@@ -776,6 +776,22 @@ function VidoraApp() {
   const [userTokens, setUserTokens] = useState(0);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
 
+  // ── Z.ai error differentiation helper ──
+  // Picks the right error string to show in toasts based on user role:
+  //  - Admins see `adminDetail` (raw diagnostic — e.g. "[ZAI auth (non-retryable) [HTTP 429]] Insufficient balance…")
+  //    so they can diagnose / recharge the Z.ai account.
+  //  - Regular users see `error` (friendly copy — e.g. "This AI feature is temporarily unavailable…")
+  //    so they're not exposed to internal billing/config details.
+  // Falls back to `fallback` when neither field is present.
+  const getApiError = useCallback(
+    (data: { error?: string; adminDetail?: string } | null | undefined, fallback = "Something went wrong. Please try again."): string => {
+      if (!data) return fallback;
+      if (userProfile?.role === "admin" && data.adminDetail) return data.adminDetail;
+      return data.error || fallback;
+    },
+    [userProfile],
+  );
+
   /* ── Admin State ── */
   const [adminUsers, setAdminUsers] = useState<unknown[]>([]);
   const [adminPayments, setAdminPayments] = useState<unknown[]>([]);
@@ -921,7 +937,7 @@ function VidoraApp() {
         toast({ title: "Generation started", description: data.message });
         setTimeout(refreshProject, 5000);
       } else {
-        toast({ title: "Generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", description: "Failed to start generation", variant: "destructive" });
@@ -979,7 +995,7 @@ function VidoraApp() {
           await refreshProject();
         }
       } else {
-        toast({ title: "Failed", description: data.error, variant: "destructive" });
+        toast({ title: "Failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1130,7 +1146,7 @@ function VidoraApp() {
         toast({ title: "AI portrait generated" });
         refreshProject();
       } else {
-        toast({ title: "Generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Portrait generation failed", variant: "destructive" });
@@ -1171,7 +1187,7 @@ function VidoraApp() {
         toast({ title: "Narration generated" });
         refreshProject();
       } else {
-        toast({ title: "Narration failed", description: data.error, variant: "destructive" });
+        toast({ title: "Narration failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Narration error", variant: "destructive" });
@@ -1212,7 +1228,7 @@ function VidoraApp() {
         refreshProject();
         toast({ title: "Scene enhanced by AI Director" });
       } else {
-        toast({ title: "Enhancement failed", description: data.error, variant: "destructive" });
+        toast({ title: "Enhancement failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error enhancing scene", variant: "destructive" });
@@ -1299,7 +1315,7 @@ function VidoraApp() {
         setContinuityResult({ score: data.score, issues: data.issues || [], summary: data.summary });
         setContinuityDialogOpen(true);
       } else {
-        toast({ title: "Continuity check failed", description: data.error, variant: "destructive" });
+        toast({ title: "Continuity check failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1345,7 +1361,7 @@ function VidoraApp() {
         toast({ title: "Export complete!", description: data.message });
         refreshProject();
       } else {
-        toast({ title: "Export failed", description: data.error, variant: "destructive" });
+        toast({ title: "Export failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Export error", variant: "destructive" });
@@ -1373,7 +1389,7 @@ function VidoraApp() {
           description: `Found ${data.scenes.length} scene${data.scenes.length > 1 ? "s" : ""}${data.characters?.length ? ` and ${data.characters.length} character${data.characters.length > 1 ? "s" : ""}` : ""}`,
         });
       } else {
-        toast({ title: "Analysis failed", description: data.error, variant: "destructive" });
+        toast({ title: "Analysis failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error analyzing script", variant: "destructive" });
@@ -1396,7 +1412,7 @@ function VidoraApp() {
         setEnhancedText(data.enhancedPrompt);
         toast({ title: "Prompt enhanced", description: "Review the enhanced version below." });
       } else {
-        toast({ title: "Enhancement failed", description: data.error || "Could not enhance your prompt. Please try again.", variant: "destructive" });
+        toast({ title: "Enhancement failed", description: getApiError(data, "Could not enhance your prompt. Please try again."), variant: "destructive" });
       }
     } catch {
       toast({ title: "Enhancement failed", description: "Could not connect to the server. Please try again.", variant: "destructive" });
@@ -1659,7 +1675,7 @@ function VidoraApp() {
         toast({ title: "Subtitles generated!", description: "SRT captions are ready for this scene." });
         if (currentProject) refreshProject();
       } else {
-        toast({ title: "Subtitle generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Subtitle generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1695,14 +1711,12 @@ function VidoraApp() {
         // Reload project so the new translation + audio URL appear in the scene card
         if (currentProject) refreshProject();
       } else {
-        // Detect Z.ai balance / quota errors and give a friendlier message
-        const errMsg = String(data.error || "");
-        const isBalanceIssue = /insufficient balance|quota|1113|1112/i.test(errMsg);
+        // The API now returns a friendly user-facing message by default.
+        // Admins get the raw diagnostic via `adminDetail`; users see "service
+        // temporarily unavailable" instead of internal billing details.
         toast({
-          title: isBalanceIssue ? "Dubbing unavailable" : "Dubbing failed",
-          description: isBalanceIssue
-            ? "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing."
-            : errMsg || "Please try again.",
+          title: "Dubbing failed",
+          description: getApiError(data, "Please try again in a moment."),
           variant: "destructive",
         });
       }
@@ -1721,7 +1735,7 @@ function VidoraApp() {
         toast({ title: `${langName} dubbing removed`, description: "The translation was deleted." });
         if (currentProject) refreshProject();
       } else {
-        toast({ title: "Could not delete", description: data.error || "Please try again.", variant: "destructive" });
+        toast({ title: "Could not delete", description: getApiError(data, "Please try again."), variant: "destructive" });
       }
     } catch {
       toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
@@ -1856,7 +1870,7 @@ function VidoraApp() {
         setPreviewQuota(data.previewQuota ? { storyboard: data.previewQuota, image: previewQuota?.image ?? { used: 0, limit: 3 } } : previewQuota);
         toast({ title: "Storyboard ready!", description: "See your scene-by-scene plan below." });
       } else {
-        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+        toast({ title: "Preview failed", description: getApiError(data), variant: "destructive" });
       }
       // Always refresh quota (backend may have refunded on server-side failure)
       fetchPreviewUsage();
@@ -1901,7 +1915,7 @@ function VidoraApp() {
         setPreviewQuota(data.previewQuota ? { image: data.previewQuota, storyboard: previewQuota?.storyboard ?? { used: 0, limit: 10 } } : previewQuota);
         toast({ title: "Style preview ready!", description: "Watermarked preview — buy tokens for the full HD video." });
       } else {
-        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+        toast({ title: "Preview failed", description: getApiError(data), variant: "destructive" });
       }
       // Always refresh quota (backend may have refunded on server-side failure)
       fetchPreviewUsage();
@@ -1932,7 +1946,7 @@ function VidoraApp() {
               setTextPrompt(d.transcription);
               toast({ title: "Transcription complete!" });
             } else {
-              toast({ title: "Transcription failed", description: d.error || "Could not process your audio. Please try again.", variant: "destructive" });
+              toast({ title: "Transcription failed", description: getApiError(d, "Could not process your audio. Please try again."), variant: "destructive" });
             }
           })
           .catch(() => {

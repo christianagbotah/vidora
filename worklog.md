@@ -1393,3 +1393,190 @@ Stage Summary:
   4. Social media → all @vidorapro (YouTube, Instagram, Facebook)
   5. Footer → now renders on ALL views (extracted from home view's motion.div)
 - VPS pull will get this commit on top of the previous batch (f45049a + a83f6e7 + 2fc54c7 + b420168 + ce733d1)
+
+---
+Task ID: explore-1
+Agent: Explore agent
+Task: Map all Z.ai-powered API routes + frontend error handling
+
+Work Log:
+- Read worklog.md for prior context (Vidora Next.js + Prisma video studio, ~12 previous tasks)
+- Read src/lib/zai.ts (738 lines) — central Z.ai client wrapper; mapped ZAIError class shape, error classification, retry logic, all specialized helpers (chat, vision, generateImage, generateVideo, pollVideoTask, tts, asr)
+- Read src/lib/project-auth.ts — requireAuth / requireProjectAccess / requireSceneAccess with admin-aware ownership checks
+- Read src/lib/admin.ts — requireAdmin() helper (only used in /api/admin/* routes)
+- Read src/lib/auth.ts — NextAuth callbacks expose `role` on session.user via JWT
+- Enumerated all 18 files that import from @/lib/zai (1 lib + 17 API routes)
+- Read each Z.ai-powered route end-to-end and recorded: HTTP status returned on ZAIError, JSON shape, and whether auth-kind errors are mapped to 503
+- Read src/components/AIAssistant.tsx (full) — chat error handling + balance-issue friendly message
+- Grep'd src/app/page.tsx for `toast(`, `variant: "destructive"`, and catch blocks — captured every user-visible error surface that touches a Z.ai route
+- Confirmed /api/analyze-video has NO frontend caller (only referenced in the in-app API docs at line 6720)
+- Searched admin role patterns: `role === "admin"` (project-auth, projects route), `userProfile?.role === "admin"` (page.tsx x3), `session.user.role` (auth.ts callback). No client-side isAdmin() helper exists.
+- Searched for existing friendly error patterns — only TWO places currently produce friendly "service unavailable" copy: AIAssistant.tsx (line 70-78, balance detection) and handleGenerateDubbing in page.tsx (line 1700-1707, balance detection). All other routes pass raw ZAIError.message straight through.
+- Confirmed there is NO `ZAI_ERROR_CODES` constant map — codes "1113", "1112", "1211", "429" are hardcoded as string literals in TWO places inside zai.ts: `classifyError()` (lines 126, 135, 142, 148) and `assertNoBodyError()` (lines 354, 357, 360). Refactoring these to a shared constant is a low-risk extension point.
+
+Stage Summary:
+- 17 Z.ai-powered API routes identified (chat / vision / image / video / TTS / ASR), all summarized in the table below
+- All routes use the SAME error pattern: catch ZAIError → return `{ success: false, error: "<human prefix>: " + message }` with status 503 if kind==="auth" else 500. Health endpoint is the exception (always 200 with body status).
+- Error propagation flow: z-ai-web-dev-sdk throws → classifyError() in zai.ts builds ZAIError{message,kind,retryable,status,cause} → route catch block surfaces error.message in JSON → frontend reads data.error and shows in toast
+- ZAIError class: `class ZAIError extends Error { readonly kind: ZAIErrorKind; readonly retryable: boolean; readonly status?: number; readonly cause?: unknown }` — kind is one of: "auth" | "rate_limit" | "timeout" | "network" | "server" | "validation" | "unknown"
+- 1113 / Insufficient balance detection: TWO code paths in zai.ts — classifyError() line 126 (regex on raw SDK error string + apiCode check) and assertNoBodyError() line 354 (parses HTTP 200 response bodies that contain `{error:{code,message}}`). Both classify as kind="auth" (non-retryable).
+- Frontend error surfaces mapped: ~25 toast calls in page.tsx tied to Z.ai routes, ALL using `variant: "destructive"` with raw `data.error` passed through as the description. Only dubbing + AIAssistant have friendly balance-aware copy.
+- Admin detection: 4 patterns found (see table). NO client-side `isAdmin` helper exists. The frontend exclusively checks `userProfile?.role === "admin"` from the /api/auth/user response. Server-side uses `session.user.role` via requireAdmin() in /api/admin/* and requireProjectAccess() everywhere else.
+- Project-auth.ts extension point: `AuthSession` interface already exposes `role: string`, so adding an `isAdmin()` helper is trivial — either a free function `isAdmin(session: AuthSession): boolean` or a method on AuthResult. The requireAdmin() helper in src/lib/admin.ts is the closest existing pattern but is coupled to NextRequest and returns a NextResponse (less reusable for non-HTTP contexts).
+- RECOMMENDED NEXT STEPS for the planned security/UX change:
+  1. Add `ZAI_ERROR_CODES` constant map in src/lib/zai.ts (e.g. `{ INSUFFICIENT_BALANCE: "1113", QUOTA_EXCEEDED: "1112", UNKNOWN_MODEL: "1211", RATE_LIMIT: "429" }`) and replace the 6 hardcoded literals.
+  2. Add `isAdmin(session?: AuthSession | Session): boolean` helper in src/lib/project-auth.ts to deduplicate the 4 admin-check sites.
+  3. Add a `friendlyErrorMessage(zaiErr: ZAIError): string` helper in src/lib/zai.ts (or a new src/lib/zai-errors.ts) that maps kind/code → user-facing copy, so all 17 routes can switch from raw `error.message` to friendly copy with one-line changes. Pattern already proven in AIAssistant.tsx lines 70-78 and page.tsx lines 1700-1707 — generalize it.
+  4. The 503 status mapping is currently opt-in per route via `error instanceof ZAIError && error.kind === "auth" ? 503 : 500`. Consider extracting a `zaiErrorResponse(err, fallbackStatus=500)` helper to standardize.
+  5. /api/analyze-video has no frontend caller — verify whether it's still needed or can be removed before refactoring.
+
+### Table 1 — All Z.ai-powered API routes (17 routes)
+
+| # | Route file path | Z.ai feature used | HTTP status on ZAIError | JSON error shape |
+|---|---|---|---|---|
+| 1 | `src/app/api/assistant/chat/route.ts` | `zai.chat` (LLM, public) | 503 (all errors) | `{ success:false, error: <raw message> }` |
+| 2 | `src/app/api/enhance-prompt/route.ts` | `zai.chat` | 503 if kind==="auth" else 500 | `{ success:false, error: "Could not enhance your prompt: " + msg }` |
+| 3 | `src/app/api/enhance-scene/route.ts` | `zai.chat` (AI Director) | 503 if auth else 500 | `{ success:false, error: "Enhancement failed: " + msg }` |
+| 4 | `src/app/api/generate-scene/route.ts` | `zai.generateImage` | 503 if auth else 500 | `{ success:false, error: "Failed to generate scene: " + msg }` |
+| 5 | `src/app/api/generate-video/route.ts` | `zai.generateImage` + `zai.generateVideo` + `zai.pollVideoTask` (batch, background) | 500 (uses generic Error.message, NOT ZAIError-aware) | `{ success:false, error: "Failed to start generation: " + msg }` |
+| 6 | `src/app/api/generate-video-scene/route.ts` | `zai.generateImage` + `zai.generateVideo` + `zai.pollVideoTask` (single scene) | 503 if auth else 500 | `{ success:false, error: "Failed to generate video: " + msg }` |
+| 7 | `src/app/api/generate-narration/route.ts` | `zai.tts` | 503 if auth else 500 | `{ success:false, error: "Failed to generate narration: " + msg }` |
+| 8 | `src/app/api/analyze-video/route.ts` | `zai.vision` (VLM, glm-4v) — NO frontend caller | 503 if auth else 500 | `{ success:false, error: "Failed to analyze video: " + msg }` |
+| 9 | `src/app/api/transcribe/route.ts` | `zai.asr` | 503 if auth else 500 | `{ success:false, error: "Failed to transcribe audio: " + msg }` |
+| 10 | `src/app/api/check-continuity/route.ts` | `zai.chat` (JSON output) | 422 if JSON.parse fails; 503 if auth else 500 on ZAIError | `{ success:false, error: "Continuity check failed: " + msg, rawPreview? }` |
+| 11 | `src/app/api/split-scenes/route.ts` | `zai.chat` (JSON output) | 422 if JSON.parse fails; 503 if auth else 500 on ZAIError — always returns a `fallback:true` payload | `{ success:false, error:"Failed to analyze prompt: "+msg, fallback:true, scenes:[{prompt}], characters:[], isSingle:true }` |
+| 12 | `src/app/api/preview/image/route.ts` | `zai.generateImage` (free, watermarked) | 502 (refunds quota on ZAIError) | `{ success:false, error: <raw ZAIError.message>, previewQuota }` |
+| 13 | `src/app/api/preview/storyboard/route.ts` | `zai.chat` (free, JSON) | 502 on ZAIError; 502 on JSON.parse fail (both refund quota) | `{ success:false, error: msg, raw?, previewQuota }` |
+| 14 | `src/app/api/projects/[id]/characters/[characterId]/generate-image/route.ts` | `zai.generateImage` | 503 if auth else 500 | `{ success:false, error: "Failed to generate character image: " + msg }` |
+| 15 | `src/app/api/scenes/[id]/subtitles/route.ts` | `zai.chat` (SRT generation) | 503 inner-catch; 500 outer-catch | Inner: `{ success:false, error: <raw msg> }`. Outer: `{ success:false, error: "Failed to generate subtitles" }` |
+| 16 | `src/app/api/scenes/[id]/dubbing/route.ts` | `zai.chat` (translate) + `zai.tts` (synthesize) | 503 inner-catch; 500 outer-catch | Inner: `{ success:false, error: <raw ZAIError.message> }`. Outer: `{ success:false, error: "Failed to generate dubbing" }` |
+| 17 | `src/app/api/ai/health/route.ts` | `zai.chat` (1-token ping) | Always 200 with body `{status:"ok"|"degraded"|"down", message, checkedAt, cached?}` — does NOT propagate HTTP error | — |
+
+### Table 2 — Frontend error surfaces in src/app/page.tsx (Z.ai-route callers)
+
+| Component / handler | Line(s) | API called | Toast title | Toast description | variant |
+|---|---|---|---|---|---|
+| `handleGenerateAll` | 924 | /api/generate-video | "Generation failed" | `data.error` (raw) | destructive |
+| `handleGenerateAll` | 927 | (catch) | "Error" | "Failed to start generation" | destructive |
+| `handleGenerateSingle` | 965 | /api/video-status poll | "Generation failed" | "The video could not be generated." | destructive |
+| `handleGenerateSingle` | 982 | /api/generate-video-scene | "Failed" | `data.error` (raw) | destructive |
+| `handleGenerateSingle` | 985 | (catch) | "Error" | (no description) | destructive |
+| `handleGenerateCharPortrait` | 1133 | /api/projects/:id/characters/:cid/generate-image | "Generation failed" | `data.error` (raw) | destructive |
+| `handleGenerateCharPortrait` | 1136 | (catch) | "Portrait generation failed" | (no description) | destructive |
+| `handleNarrateScene` | 1174 | /api/generate-narration | "Narration failed" | `data.error` (raw) | destructive |
+| `handleNarrateScene` | 1177 | (catch) | "Narration error" | (no description) | destructive |
+| `handleEnhanceScene` | 1215 | /api/enhance-scene | "Enhancement failed" | `data.error` (raw) | destructive |
+| `handleEnhanceScene` | 1218 | (catch) | "Error enhancing scene" | (no description) | destructive |
+| `handleCheckContinuity` | 1302 | /api/check-continuity | "Continuity check failed" | `data.error` (raw) | destructive |
+| `handleCheckContinuity` | 1305 | (catch) | "Error" | (no description) | destructive |
+| `handleAnalyzeScript` | 1376 | /api/split-scenes | "Analysis failed" | `data.error` (raw) | destructive |
+| `handleAnalyzeScript` | 1379 | (catch) | "Error analyzing script" | (no description) | destructive |
+| `handleEnhanceTextPrompt` | 1399 | /api/enhance-prompt | "Enhancement failed" | `data.error || "Could not enhance your prompt. Please try again."` | destructive |
+| `handleEnhanceTextPrompt` | 1402 | (catch) | "Enhancement failed" | "Could not connect to the server. Please try again." | destructive |
+| `handleGenerateDubbing` | 1700-1707 | /api/scenes/:id/dubbing | **"Dubbing unavailable"** (if `/insufficient balance|quota|1113|1112/i`) else **"Dubbing failed"** | Balance: "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing." else `errMsg || "Please try again."` | destructive |
+| `handleGenerateDubbing` | 1710 | (catch) | "Network error" | "Could not reach the dubbing service." | destructive |
+| `handleGenerateStoryboardPreview` | 1859 | /api/preview/storyboard | "Preview failed" | `data.error` (raw) | destructive |
+| `handleGenerateStoryboardPreview` | 1864 | (catch) | "Preview failed" | "Network error. Please try again." | destructive |
+| `handleGeneratePreviewImage` | 1904 | /api/preview/image | "Preview failed" | `data.error` (raw) | destructive |
+| `handleGeneratePreviewImage` | 1909 | (catch) | "Preview failed" | "Network error. Please try again." | destructive |
+| `handleRecordAudio` (transcribe) | 1935 | /api/transcribe | "Transcription failed" | `d.error || "Could not process your audio. Please try again."` | destructive |
+| `handleRecordAudio` (transcribe) | 1939 | (catch) | "Transcription failed" | "Could not connect to the server. Please try again." | destructive |
+| `handleRecordAudio` (mic) | 1948 | navigator.mediaDevices | "Microphone access denied" | (no description) | destructive |
+| AIAssistant.tsx `handleSend` | 70-78 (component) | /api/assistant/chat | (no toast; in-chat reply) | Balance: "I'm temporarily offline while our AI service recharges. Please try again shortly, or check the Documentation below. 🙏" else `Sorry, I couldn't respond right now: ${errMsg}` | (in-chat message) |
+| AIAssistant.tsx `handleSend` | 89 (component) | (catch) | "Connection error" | "Could not reach the assistant." | destructive |
+
+### ZAIError class excerpt (src/lib/zai.ts lines 34-59)
+
+```ts
+export type ZAIErrorKind =
+  | "auth" | "rate_limit" | "timeout" | "network" | "server" | "validation" | "unknown";
+
+export class ZAIError extends Error {
+  readonly kind: ZAIErrorKind;
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly cause?: unknown;
+
+  constructor(message: string, kind: ZAIErrorKind, opts?: { status?: number; cause?: unknown }) {
+    super(message);
+    this.name = "ZAIError";
+    this.kind = kind;
+    this.status = opts?.status;
+    this.cause = opts?.cause;
+    // Rate-limit, network, timeout, and 5xx server errors are worth retrying.
+    this.retryable =
+      kind === "rate_limit" || kind === "network" || kind === "timeout" || kind === "server";
+  }
+}
+```
+
+### How 1113 / Insufficient balance flows (two detection sites in zai.ts)
+
+```ts
+// Site 1 — classifyError() (lines 71-193): for THROWN SDK errors
+//   The SDK formats errors as: 'API request failed with status 429: {"error":{"code":"1113",...}}'
+//   We regex-extract the JSON body, parse it, and classify by apiCode.
+if (apiCode === "1113" || apiCode === "1112" || lower.includes("insufficient balance")) {
+  return new ZAIError(
+    apiMessage || "ZAI account has insufficient balance. Please recharge your Z.ai account.",
+    "auth",                          // ← kind=auth → NOT retryable → route maps to HTTP 503
+    { cause: err }
+  );
+}
+
+// Site 2 — assertNoBodyError() (lines 345-373): for HTTP-200-with-error-body responses
+//   The SDK's response.ok check passes, so the error surfaces as an empty completion.
+//   This helper inspects the parsed body and throws a ZAIError if it contains an error field.
+if (code === "1113" || code === "1112") {
+  kind = "auth";                     // ← also kind=auth
+}
+```
+
+### Admin role detection patterns found
+
+| # | File:line | Pattern | Context |
+|---|---|---|---|
+| 1 | `src/lib/auth.ts:35` | `role: user.role` | NextAuth `authorize()` returns user with role from DB |
+| 2 | `src/lib/auth.ts:46` | `token.role = (user as ...).role` | JWT callback persists role into token |
+| 3 | `src/lib/auth.ts:54` | `(session.user as Record<string,unknown>).role = token.role` | Session callback exposes role on session.user |
+| 4 | `src/lib/project-auth.ts:58` | `role: (user.role as string) || "user"` | requireAuth() builds AuthSession with role (defaults to "user") |
+| 5 | `src/lib/project-auth.ts:126` | `const isAdmin = authResult.session.role === "admin"` | requireProjectAccess() — admin gets view-only access |
+| 6 | `src/lib/project-auth.ts:219` | `const isAdmin = authResult.session.role === "admin"` | requireSceneAccess() — same pattern |
+| 7 | `src/lib/admin.ts:13-15` | `const role = (session.user as Record<string,unknown>).role as string; if (role !== "admin")` | requireAdmin() — used by /api/admin/* routes, returns 403 |
+| 8 | `src/app/api/projects/route.ts:19` | `const where = role === "admin" ? {} : { userId }` | Admins see all projects in GET /api/projects |
+| 9 | `src/app/page.tsx:2713` | `{userProfile?.role === "admin" && (...)}` | Header: shows "Admin" button only to admins |
+| 10 | `src/app/page.tsx:4469` | `{userProfile?.role === "admin" ? "🛡️ Admin" : "✨ Member"}` | Profile badge label |
+| 11 | `src/app/page.tsx:4673` | `{currentView === "admin" && userProfile?.role === "admin" && (...)}` | Admin Portal view gate |
+| 12 | `src/app/page.tsx:5669` | `...(userProfile?.role === "admin" ? [{ view: "admin", ... }] : [])` | Mobile nav: Admin entry conditional |
+| 13 | `src/app/page.tsx:4911, 4927, 4928` | `u.role === "admin"` | Admin user-management table rendering |
+
+**Note**: `userProfile` is the client-side state populated from `GET /api/auth/user` (which returns `db.user.findUnique({select:{role:true, ...}})`). No `isAdmin()` helper exists — every call site re-inlines the `=== "admin"` check.
+
+### Existing user-friendly error patterns (only TWO exist)
+
+1. **`src/components/AIAssistant.tsx` lines 69-78** — regex-detects balance errors and swaps in a friendly chat reply:
+   ```ts
+   const errMsg = String(data.error || "Something went wrong.");
+   const isBalance = /insufficient balance|quota|1113/i.test(errMsg);
+   setMessages([...newMessages, {
+     role: "assistant",
+     content: isBalance
+       ? "I'm temporarily offline while our AI service recharges. Please try again shortly, or check the Documentation below. 🙏"
+       : `Sorry, I couldn't respond right now: ${errMsg}`,
+   }]);
+   ```
+
+2. **`src/app/page.tsx` lines 1698-1707** (`handleGenerateDubbing`) — same regex, friendly toast:
+   ```ts
+   const errMsg = String(data.error || "");
+   const isBalanceIssue = /insufficient balance|quota|1113|1112/i.test(errMsg);
+   toast({
+     title: isBalanceIssue ? "Dubbing unavailable" : "Dubbing failed",
+     description: isBalanceIssue
+       ? "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing."
+       : errMsg || "Please try again.",
+     variant: "destructive",
+   });
+   ```
+
+All other ~22 Z.ai-error toasts in page.tsx pass the raw `data.error` string straight through to the user. This is the consistency gap the planned UX change should close.

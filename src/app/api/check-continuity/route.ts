@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai, cleanLLMOutput } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
 
 /**
@@ -98,11 +101,10 @@ export async function POST(req: NextRequest) {
       summary: parsed.summary || "Continuity check complete",
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
-    console.error("Failed to check continuity:", error);
-    return NextResponse.json(
-      { success: false, error: "Continuity check failed: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "check-continuity",
+    });
   }
 }

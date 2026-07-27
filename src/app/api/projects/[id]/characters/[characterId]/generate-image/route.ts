@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zai, ZAIError } from "@/lib/zai";
+import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
@@ -63,10 +64,9 @@ export async function POST(
     });
   } catch (error) {
     console.error("Failed to generate character image:", error);
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json(
-      { success: false, error: "Failed to generate character image: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    return zaiErrorResponse(error, {
+      session: authResult.ok ? authResult.session : null,
+      logLabel: "character-image",
+    });
   }
 }

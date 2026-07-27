@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai, cleanLLMOutput } from "@/lib/zai";
+import { userFriendlyZaiMessage, isAdminSession } from "@/lib/zai-errors";
 
 const KNOWN_CHARACTERS: Record<string, { description: string; stylePrompt: string }> = {
   // PAW Patrol
@@ -398,17 +401,21 @@ export async function POST(req: NextRequest) {
       source: "ai",
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to split scenes:", error);
-    // Provide a graceful fallback so the UI still works, but surface the real error
+    // Provide a graceful fallback so the UI still works, but surface a friendly error.
+    // For non-admin users, hide the raw technical detail; admins get it in `adminDetail`.
     const body = await req.clone().json().catch(() => null);
+    const session = await getServerSession(authOptions).catch(() => null);
+    const isAdmin = isAdminSession(session);
+    const friendly = userFriendlyZaiMessage(error);
     return NextResponse.json({
       success: false,
-      error: "Failed to analyze prompt: " + message,
+      error: friendly,
+      adminDetail: isAdmin ? (error instanceof Error ? error.message : String(error)) : undefined,
       fallback: true,
       scenes: body?.prompt ? [{ prompt: body.prompt }] : [],
       characters: [],
       isSingle: true,
-    }, { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 });
+    }, { status: 503 });
   }
 }

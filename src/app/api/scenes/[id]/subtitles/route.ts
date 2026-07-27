@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 /**
  * POST /api/scenes/[id]/subtitles
@@ -78,9 +79,11 @@ Next few words here`,
 
       return NextResponse.json({ success: true, srt, lang });
     } catch (aiError) {
-      const msg = aiError instanceof Error ? aiError.message : "AI subtitle generation failed";
       await db.videoScene.update({ where: { id }, data: { subtitleStatus: "failed" } });
-      return NextResponse.json({ success: false, error: msg }, { status: 503 });
+      return zaiErrorResponse(aiError, {
+        session: authResult.ok ? authResult.session : null,
+        logLabel: "subtitles",
+      });
     }
   } catch (error) {
     console.error("[subtitles POST]", error);
