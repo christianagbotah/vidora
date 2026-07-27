@@ -1697,3 +1697,24 @@ Stage Summary:
 - Responsive: on mobile (below sm), everything stacks vertically; on sm+, portrait is narrow left column, video+settings are side-by-side
 - Commit: db06cc9
 
+---
+Task ID: 2
+Agent: Main
+Task: Fix preloader not showing when navigating between views
+
+Work Log:
+- Investigated Preloader.tsx — initial preloader is one-shot (only fires on mount, never again)
+- Created ViewTransitionOverlay component that responds to custom events
+  - vidora:view-loading: fades in immediately with label
+  - vidora:view-ready: fades out after minimum 280ms display
+- Added CSS for view transition spinner (gradient pulsing Clapperboard icon) and shimmer bar
+- Added ViewTransitionOverlay to layout.tsx (z-index 9998, below initial preloader 9999)
+- Added useEffect in page.tsx that dispatches events on currentView change
+- Each view has a custom label (Loading Home, Opening Studio, Preparing Creator, etc.)
+- Verified with agent-browser: events fire correctly, ~350ms transition duration
+
+Stage Summary:
+- Initial load: Full preloader with progress bar (unchanged)
+- View transitions: Lightweight blur overlay with spinner + shimmer (new)
+- Commit: 0b3a032
+
