@@ -576,3 +576,26 @@
     display: inline;
   }
 }
+
+/* ── Dark mode specific overrides ── */
+.dark .glass-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.dark .glass-card-light {
+  background: rgba(15, 10, 46, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.dark .orb-violet { background: rgba(139, 92, 246, 0.45); }
+.dark .orb-amber { background: rgba(245, 158, 11, 0.25); }
+.dark .orb-rose { background: rgba(236, 72, 153, 0.25); }
+.dark .card-glow:hover {
+  box-shadow: 0 12px 40px rgba(139, 92, 246, 0.2), 0 4px 12px rgba(0, 0, 0, 0.3);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+.dark .card-glow::before {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(245, 158, 11, 0.08));
+}
+.dark .section-divider {
+  background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.4), rgba(245, 158, 11, 0.3), transparent);
+}

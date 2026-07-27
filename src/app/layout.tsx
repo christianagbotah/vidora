@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Preloader, ViewTransitionOverlay } from "@/components/Preloader";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,15 +17,52 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Vidora — Professional AI Video Creator",
-  description:
-    "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
+  description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
   keywords: [
     "AI video",
     "video generation",
     "cinematic scenes",
     "AI creator",
     "text to video",
+    "AI filmmaking",
+    "video production",
+    "script to video",
   ],
+  authors: [{ name: "Vidora" }],
+  creator: "Vidora",
+  publisher: "Vidora",
+  metadataBase: new URL("https://vidora.lightworldtech.com"),
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_US",
+    url: "https://vidora.lightworldtech.com",
+    title: "Vidora — Professional AI Video Creator",
+    description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
+    siteName: "Vidora",
+    images: [
+      {
+        url: "/images/hero-bg.png",
+        width: 1200,
+        height: 630,
+        alt: "Vidora — AI Video Creator",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Vidora — Professional AI Video Creator",
+    description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos.",
+    images: ["/images/hero-bg.png"],
+    creator: "@vidora",
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, "max-video-preview": -1, "max-image-preview": "large", "max-snippet": -1 },
+  },
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
@@ -56,10 +94,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <Preloader />
-        <ViewTransitionOverlay />
-        {children}
-        <Toaster />
+        <ErrorBoundary>
+          <Preloader />
+          <ViewTransitionOverlay />
+          {children}
+          <Toaster />
+        </ErrorBoundary>
       </body>
     </html>
   );

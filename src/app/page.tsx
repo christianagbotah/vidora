@@ -66,6 +66,7 @@ import {
   SortableContext, useSortable, verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import ScrollReveal from "@/components/ScrollReveal";
 
 /* ════════════════════════════════════════════════════════════════
    DATA CONSTANTS
@@ -1036,6 +1037,8 @@ function VidoraApp() {
   const [exportTitleCard, setExportTitleCard] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [galleryCategory, setGalleryCategory] = useState("All");
+  const [gallerySearch, setGallerySearch] = useState("");
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<"week" | "month" | "year">("month");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<{ type: string; id: string } | null>(null);
   const [continuityResult, setContinuityResult] = useState<{ score: number; issues: ContinuityIssue[]; summary?: string } | null>(null);
@@ -1288,6 +1291,27 @@ function VidoraApp() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [currentView]);
 
+  // ── Network error toast: offline / online detection ──
+  const onlineToastShown = useRef(false);
+  useEffect(() => {
+    const goOffline = () => {
+      onlineToastShown.current = false;
+      toast({ title: "You're offline", description: "Check your internet connection", variant: "destructive" });
+    };
+    const goOnline = () => {
+      if (!onlineToastShown.current) {
+        onlineToastShown.current = true;
+        toast({ title: "Back online", description: "Your connection has been restored" });
+      }
+    };
+    window.addEventListener("offline", goOffline);
+    window.addEventListener("online", goOnline);
+    return () => {
+      window.removeEventListener("offline", goOffline);
+      window.removeEventListener("online", goOnline);
+    };
+  }, []);
+
   // ── Show ViewTransitionOverlay on view changes ──
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1323,6 +1347,41 @@ function VidoraApp() {
       }
     }
   }, [currentView]);
+
+  // ── Keyboard shortcuts for studio view ──
+  const [activeSceneIdx, setActiveSceneIdx] = useState(0);
+  useEffect(() => {
+    if (currentView !== "studio") return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName.toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || tag === "select";
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setCurrentView("home");
+      }
+      if (!isTyping && e.key === " ") {
+        e.preventDefault();
+        const firstScene = safeScenes[0];
+        if (firstScene?.videoUrl) {
+          toast({ title: "Play/Pause", description: `Toggling scene: ${firstScene.prompt?.slice(0, 40) || "Scene 1"}` });
+        }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        toast({ title: "Undo not supported yet", description: "This feature is coming soon" });
+      }
+      if (!isTyping && e.key >= "1" && e.key <= "9") {
+        const idx = parseInt(e.key) - 1;
+        if (idx < safeScenes.length) {
+          setActiveSceneIdx(idx);
+          toast({ title: `Scene ${e.key}`, description: `Switched to scene ${e.key}` });
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [currentView, safeScenes, setCurrentView]);
 
   const handleGenerateAll = async () => {
     if (!currentProject) return;
@@ -3474,6 +3533,97 @@ function VidoraApp() {
                 </div>
               </section>
 
+              {/* Simple, Transparent Pricing */}
+              <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
+                <div className="section-divider mb-12" />
+                <div className="text-center mb-10">
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Simple, Transparent Pricing</h2>
+                  <p className="text-muted-foreground mt-2">Choose the plan that fits your creative needs</p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Starter */}
+                  <ScrollReveal delay={0}>
+                    <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white h-full flex flex-col">
+                      <CardHeader className="pb-4">
+                        <div className="flex items-center justify-between">
+                          <Badge className="bg-gradient-to-r from-emerald-400 to-teal-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">FREE</Badge>
+                          <span className="text-sm text-muted-foreground">Starter</span>
+                        </div>
+                        <CardTitle className="text-2xl font-extrabold mt-2">$0<span className="text-sm font-normal text-muted-foreground">/forever</span></CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex-1 space-y-3">
+                        {["100 Free Tokens", "5 projects", "720p export", "Basic styles", "Community support"].map((f) => (
+                          <div key={f} className="flex items-center gap-2 text-sm">
+                            <Check className="h-4 w-4 text-emerald-500 shrink-0" />
+                            <span>{f}</span>
+                          </div>
+                        ))}
+                      </CardContent>
+                      <div className="px-6 pb-6">
+                        <Button className="w-full" variant="outline" onClick={() => setCurrentView("create")}>
+                          Get Started
+                        </Button>
+                      </div>
+                    </Card>
+                  </ScrollReveal>
+
+                  {/* Pro */}
+                  <ScrollReveal delay={100}>
+                    <Card className="card-glow border-2 border-violet-400 shadow-lg shadow-violet-500/10 bg-white h-full flex flex-col relative">
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                        <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-xs px-3 shadow-md">POPULAR</Badge>
+                      </div>
+                      <CardHeader className="pb-4">
+                        <div className="flex items-center justify-between">
+                          <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">POPULAR</Badge>
+                          <span className="text-sm text-muted-foreground">Pro</span>
+                        </div>
+                        <CardTitle className="text-2xl font-extrabold mt-2">$9.99<span className="text-sm font-normal text-muted-foreground">/month</span></CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex-1 space-y-3">
+                        {["2,000 Tokens", "Unlimited projects", "1080p export", "All styles + AI Director", "Priority rendering", "Email support"].map((f) => (
+                          <div key={f} className="flex items-center gap-2 text-sm">
+                            <Check className="h-4 w-4 text-violet-500 shrink-0" />
+                            <span>{f}</span>
+                          </div>
+                        ))}
+                      </CardContent>
+                      <div className="px-6 pb-6">
+                        <Button className="w-full btn-gradient" onClick={() => setCurrentView("buy-tokens")}>
+                          Buy Tokens
+                        </Button>
+                      </div>
+                    </Card>
+                  </ScrollReveal>
+
+                  {/* Enterprise */}
+                  <ScrollReveal delay={200}>
+                    <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white h-full flex flex-col">
+                      <CardHeader className="pb-4">
+                        <div className="flex items-center justify-between">
+                          <Badge className="bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">BEST VALUE</Badge>
+                          <span className="text-sm text-muted-foreground">Enterprise</span>
+                        </div>
+                        <CardTitle className="text-2xl font-extrabold mt-2">$49.99<span className="text-sm font-normal text-muted-foreground">/month</span></CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex-1 space-y-3">
+                        {["10,000 Tokens", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"].map((f) => (
+                          <div key={f} className="flex items-center gap-2 text-sm">
+                            <Check className="h-4 w-4 text-amber-500 shrink-0" />
+                            <span>{f}</span>
+                          </div>
+                        ))}
+                      </CardContent>
+                      <div className="px-6 pb-6">
+                        <Button className="w-full" variant="outline" onClick={() => setContactDialogOpen(true)}>
+                          Contact Us
+                        </Button>
+                      </div>
+                    </Card>
+                  </ScrollReveal>
+                </div>
+              </section>
+
               {/* Testimonials */}
               <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
                 <div className="section-divider mb-12" />
@@ -4489,6 +4639,17 @@ function VidoraApp() {
                 <p className="text-muted-foreground mt-1">Choose a pre-designed scene to start creating</p>
               </div>
 
+              {/* Gallery Search */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search templates by title or category..."
+                  value={gallerySearch}
+                  onChange={(e) => setGallerySearch(e.target.value)}
+                  className="pl-9 bg-white border-slate-200"
+                />
+              </div>
+
               {/* Category Filter */}
               <div className="flex items-center gap-2 flex-wrap">
                 {GALLERY_CATEGORIES.map((cat) => (
@@ -4548,6 +4709,50 @@ function VidoraApp() {
                   <p className="text-muted-foreground">No templates found in this category.</p>
                 </div>
               )}
+
+              {/* Your Projects Search Results */}
+              {(() => {
+                const filteredGalleryProjects = safeProjects.filter((p: VideoProject) =>
+                  p.title?.toLowerCase().includes(gallerySearch.toLowerCase()) ||
+                  p.status?.toLowerCase().includes(gallerySearch.toLowerCase())
+                );
+                if (filteredGalleryProjects.length === 0 || !gallerySearch) return null;
+                return (
+                  <div className="pt-6 border-t border-slate-200">
+                    <h2 className="text-lg font-bold mb-4">Your Projects ({filteredGalleryProjects.length})</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                      {filteredGalleryProjects.map((p: VideoProject) => (
+                        <Card
+                          key={p.id}
+                          className="card-glow cursor-pointer bg-white border-0 shadow-md shadow-black/5"
+                          onClick={() => openProject(p)}
+                        >
+                          <CardHeader className="pb-2">
+                            <div className="flex items-start justify-between">
+                              <CardTitle className="text-base font-bold truncate pr-2">{p.title}</CardTitle>
+                              <Badge className={`text-xs font-semibold px-2 shrink-0 ${
+                                p.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : p.status === "generating" ? "bg-violet-50 text-violet-700 border-violet-200"
+                                : p.status === "failed" ? "bg-red-50 text-red-700 border-red-200"
+                                : "bg-slate-50 text-slate-600 border-slate-200"
+                              }`}>
+                                {p.status}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+                              <Badge variant="outline" className="text-xs">{p.aspectRatio}</Badge>
+                              <Badge variant="outline" className="text-xs">{p.style}</Badge>
+                              <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{formatDuration(p.targetDuration)}</span>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Back button */}
               <div className="pt-4">
@@ -4766,6 +4971,91 @@ function VidoraApp() {
                   </Card>
                 ))}
               </div>
+
+              {/* Token Usage Analytics */}
+              <ScrollReveal>
+                <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                          <BarChart2 className="h-3.5 w-3.5" />
+                        </div>
+                        Token Usage
+                      </CardTitle>
+                      <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+                        {(["week", "month", "year"] as const).map((period) => (
+                          <button
+                            key={period}
+                            onClick={() => setAnalyticsPeriod(period)}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                              analyticsPeriod === period
+                                ? "bg-white text-violet-700 shadow-sm"
+                                : "text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            {period.charAt(0).toUpperCase() + period.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="relative h-48">
+                      {/* Y-axis labels */}
+                      <div className="absolute left-0 top-0 bottom-6 w-8 flex flex-col justify-between text-[10px] text-muted-foreground font-medium">
+                        <span>50</span>
+                        <span>25</span>
+                        <span>0</span>
+                      </div>
+                      {/* Chart area */}
+                      <div className="ml-10 h-full flex items-end gap-1.5 pb-6 relative">
+                        {/* Grid lines */}
+                        <div className="absolute inset-x-0 top-0 bottom-6 flex flex-col justify-between pointer-events-none">
+                          <div className="border-b border-dashed border-slate-100" />
+                          <div className="border-b border-dashed border-slate-100" />
+                          <div className="border-b border-slate-200" />
+                        </div>
+                        {/* Bars */}
+                        {(() => {
+                          const labels = analyticsPeriod === "week"
+                            ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                            : analyticsPeriod === "month"
+                              ? ["Wk 1", "Wk 2", "Wk 3", "Wk 4"]
+                              : ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                          const barCount = labels.length;
+                          // Deterministic pseudo-random data based on period string
+                          const seed = analyticsPeriod === "week" ? 42 : analyticsPeriod === "month" ? 73 : 99;
+                          const values = Array.from({ length: barCount }, (_, i) => Math.round(((Math.sin(seed + i * 2.5) + 1) / 2) * 45 + 5));
+                          const maxVal = Math.max(...values);
+                          return values.map((val, i) => (
+                            <div key={i} className="flex-1 flex flex-col items-center gap-1 relative z-10">
+                              <span className="text-[10px] text-muted-foreground font-medium">{val}</span>
+                              <div
+                                className="w-full rounded-t-md bg-gradient-to-t from-violet-500 to-fuchsia-400 min-h-[4px] transition-all duration-500"
+                                style={{ height: `${(val / maxVal) * 100}%` }}
+                              />
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                      {/* X-axis labels */}
+                      <div className="ml-10 flex gap-1.5 mt-0">
+                        {(() => {
+                          const labels = analyticsPeriod === "week"
+                            ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                            : analyticsPeriod === "month"
+                              ? ["Wk 1", "Wk 2", "Wk 3", "Wk 4"]
+                              : ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                          return labels.map((l) => (
+                            <div key={l} className="flex-1 text-center text-[10px] text-muted-foreground font-medium truncate">{l}</div>
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </ScrollReveal>
 
               {/* My Projects */}
               <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
@@ -6367,6 +6657,32 @@ function VidoraApp() {
               <span className="text-sm text-violet-700">
                 Your balance: <strong>{userTokens} tokens</strong>
               </span>
+            </div>
+
+            {/* Quality Picker */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Select Quality</p>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { value: "standard", label: "Standard", res: "720p", tokens: 1 },
+                  { value: "high", label: "High", res: "1080p", tokens: 3 },
+                  { value: "ultra", label: "Ultra", res: "4K", tokens: 8 },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setDownloadQuality(opt.value)}
+                    className={`rounded-lg border-2 p-3 text-center transition-all ${
+                      downloadQuality === opt.value
+                        ? "border-violet-400 bg-violet-50 shadow-sm"
+                        : "border-slate-100 bg-white hover:border-violet-200"
+                    }`}
+                  >
+                    <p className={`text-sm font-bold ${downloadQuality === opt.value ? "text-violet-700" : "text-foreground"}`}>{opt.label}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{opt.res}</p>
+                    <p className="text-xs text-amber-600 font-semibold mt-1">{opt.tokens} token{opt.tokens > 1 ? "s" : ""}</p>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Insufficient Warning */}
