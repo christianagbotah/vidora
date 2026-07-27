@@ -667,6 +667,321 @@ function SortableSceneCard({
 }
 
 /* ════════════════════════════════════════════════════════════════
+   HERO SLIDER
+   ════════════════════════════════════════════════════════════════
+   Professional cinematic auto-advancing slider with:
+   - Crossfade transitions + Ken Burns zoom on images
+   - Staggered text entrance animations per slide
+   - Auto-play with pause on hover
+   - Dot indicators + thin progress bar
+   - Responsive layout
+   ════════════════════════════════════════════════════════════════ */
+
+const HERO_SLIDES = [
+  {
+    image: "/images/hero-slide-1.png",
+    badge: "AI-Powered Studio",
+    badgeIcon: <Zap className="h-3 w-3 mr-1.5 text-amber-400" />,
+    headline: "Create Production-Ready",
+    headlineAccent: "AI Videos",
+    description: "Write scripts, design characters, generate cinematic scenes with AI Director controls. From birthday stories to commercials — all powered by AI.",
+    gradient: "from-black/75 via-violet-950/60 to-black/80",
+    orbColor: "violet",
+  },
+  {
+    image: "/images/hero-slide-2.png",
+    badge: "Endless Creativity",
+    badgeIcon: <Wand2 className="h-3 w-3 mr-1.5 text-fuchsia-400" />,
+    headline: "From Script to Screen",
+    headlineAccent: "in Minutes",
+    description: "Upload your script, choose a style, and let AI transform your words into stunning cinematic scenes with professional quality.",
+    gradient: "from-black/75 via-fuchsia-950/50 to-black/80",
+    orbColor: "amber",
+  },
+  {
+    image: "/images/hero-slide-3.png",
+    badge: "Hollywood Quality",
+    badgeIcon: <Sparkles className="h-3 w-3 mr-1.5 text-emerald-400" />,
+    headline: "Cinematic Scenes",
+    headlineAccent: "on Demand",
+    description: "AI Director controls for mood, camera moves, lighting, and transitions. Every scene looks like it was shot by a professional crew.",
+    gradient: "from-black/75 via-emerald-950/50 to-black/80",
+    orbColor: "rose",
+  },
+  {
+    image: "/images/hero-slide-4.png",
+    badge: "Team Ready",
+    badgeIcon: <Users className="h-3 w-3 mr-1.5 text-cyan-400" />,
+    headline: "Character Systems",
+    headlineAccent: "& Storyboarding",
+    description: "Build character profiles with voice casting, manage multi-scene storyboards, and export broadcast-ready videos in any format.",
+    gradient: "from-black/75 via-cyan-950/50 to-black/80",
+    orbColor: "violet",
+  },
+] as const;
+
+const SLIDE_INTERVAL = 7000; // ms per slide
+const KEN_BURNS_DURATION = 10; // seconds for slow zoom
+
+function HeroSlider({
+  onNavigateCreate,
+  onNavigateDemo,
+  onNavigateGallery,
+  isCreatingDemo,
+}: {
+  onNavigateCreate: () => void;
+  onNavigateDemo: () => void;
+  onNavigateGallery: () => void;
+  isCreatingDemo: boolean;
+}) {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const rafRef = useRef(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startRef = useRef(performance.now());
+
+  // Auto-advance timer
+  useEffect(() => {
+    if (isPaused) return;
+    startRef.current = performance.now();
+    const tick = (now: number) => {
+      const elapsed = now - startRef.current;
+      setProgress(Math.min(100, (elapsed / SLIDE_INTERVAL) * 100));
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+
+    intervalRef.current = setInterval(() => {
+      setActiveSlide((prev) => (prev + 1) % HERO_SLIDES.length);
+      startRef.current = performance.now();
+      setProgress(0);
+    }, SLIDE_INTERVAL);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [isPaused, activeSlide]);
+
+  const goToSlide = (idx: number) => {
+    setActiveSlide(idx);
+    startRef.current = performance.now();
+    setProgress(0);
+  };
+
+  const slide = HERO_SLIDES[activeSlide];
+
+  return (
+    <div
+      className="relative w-full min-h-[520px] sm:min-h-[600px] group"
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+      role="region"
+      aria-label="Hero slider"
+      aria-roledescription="carousel"
+    >
+      {/* ── Slides ── */}
+      {HERO_SLIDES.map((s, idx) => {
+        const isActive = idx === activeSlide;
+        const prevActive = idx === (activeSlide - 1 + HERO_SLIDES.length) % HERO_SLIDES.length;
+        return (
+          <div
+            key={idx}
+            className="absolute inset-0 transition-opacity duration-[1200ms] ease-in-out"
+            style={{ opacity: isActive || prevActive ? (isActive ? 1 : 0) : 0 }}
+          >
+            {/* Ken Burns image */}
+            <div
+              className="absolute inset-0"
+              style={{
+                transform: isActive ? "scale(1)" : "scale(1.08)",
+                transition: `transform ${KEN_BURNS_DURATION}s ease-out`,
+              }}
+            >
+              <img
+                src={s.image}
+                alt=""
+                className="w-full h-full object-cover"
+                loading={idx === 0 ? "eager" : "lazy"}
+              />
+            </div>
+          </div>
+        );
+      })}
+
+      {/* ── Active slide gradient overlay ── */}
+      <div className={`absolute inset-0 bg-gradient-to-b ${slide.gradient} transition-all duration-1000`} />
+
+      {/* ── Floating orbs (matches active slide color) ── */}
+      <div className={`orb orb-${slide.orbColor} w-[400px] h-[400px] -top-20 -left-32 transition-all duration-1000`} />
+      <div className="orb orb-amber w-[300px] h-[300px] top-10 right-10 opacity-60 transition-all duration-1000" />
+      <div className="orb orb-rose w-[250px] h-[250px] bottom-20 left-1/2 opacity-50 transition-all duration-1000" />
+
+      {/* ── Content ── */}
+      <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20 lg:py-24 text-center">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeSlide}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6 }}
+            className="space-y-6"
+          >
+            {/* Badge */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.1 }}
+            >
+              <Badge className="px-4 py-1.5 text-xs font-semibold glass-card text-violet-200 hover:bg-white/10 cursor-default">
+                {slide.badgeIcon}{slide.badge}
+              </Badge>
+            </motion.div>
+
+            {/* Headline */}
+            <motion.h1
+              className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-tight"
+              initial={{ opacity: 0, y: 25 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+            >
+              <span className="text-white">{slide.headline}</span>
+              <br />
+              <span className="hero-text-gradient">{slide.headlineAccent}</span>
+            </motion.h1>
+
+            {/* Description */}
+            <motion.p
+              className="text-base sm:text-lg text-violet-200/80 max-w-2xl mx-auto leading-relaxed"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.35 }}
+            >
+              {slide.description}
+            </motion.p>
+
+            {/* CTA Buttons */}
+            <motion.div
+              className="flex flex-col sm:flex-row gap-3 justify-center pt-2"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.5 }}
+            >
+              <Button
+                size="lg"
+                onClick={onNavigateCreate}
+                className="btn-gradient text-sm sm:text-base px-6 py-4 h-auto"
+              >
+                <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Start Creating
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={onNavigateDemo}
+                disabled={isCreatingDemo}
+                className="glass-card text-white hover:text-white hover:bg-violet-500/20 px-6 py-4 h-auto !border-2 !border-violet-400/70 hover:!border-violet-300 shadow-lg shadow-violet-500/20"
+              >
+                {isCreatingDemo ? (
+                  <><Loader2 className="h-4 w-4 sm:h-5 sm:w-5 mr-2 animate-spin" />Loading demo…</>
+                ) : (
+                  <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-violet-300" />Try Live Demo</>
+                )}
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={onNavigateGallery}
+                className="glass-card text-white/90 hover:text-white hover:bg-fuchsia-500/20 px-6 py-4 h-auto !border-2 !border-fuchsia-400/70 hover:!border-fuchsia-300 shadow-lg shadow-fuchsia-500/20"
+              >
+                <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
+              </Button>
+            </motion.div>
+
+            {/* Subtext */}
+            <motion.p
+              className="text-xs text-amber-200/80 pt-1"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5, delay: 0.65 }}
+            >
+              ✨ No signup needed — the demo loads a finished video project instantly.
+            </motion.p>
+
+            {/* Feature pills */}
+            <motion.div
+              className="flex items-center justify-center gap-6 sm:gap-8 pt-4 text-sm flex-wrap"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.75 }}
+            >
+              {[
+                { icon: Users, label: "Character", sub: "System" },
+                { icon: FileText, label: "Script", sub: "Parsing" },
+                { icon: Film, label: "10s – 5min", sub: "Duration" },
+                { icon: Monitor, label: "5 Aspect", sub: "Ratios" },
+                { icon: Wand2, label: "AI Director", sub: "Controls" },
+              ].map((s) => (
+                <div key={s.label} className="flex items-center gap-2 text-violet-300/70">
+                  <s.icon className="h-4 w-4" />
+                  <div className="text-left">
+                    <p className="font-semibold text-white/90">{s.label}</p>
+                    <p className="text-xs">{s.sub}</p>
+                  </div>
+                </div>
+              ))}
+            </motion.div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* ── Dot Indicators ── */}
+      <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5">
+        {HERO_SLIDES.map((_, idx) => (
+          <button
+            key={idx}
+            onClick={() => goToSlide(idx)}
+            className="relative flex items-center justify-center group/dot"
+            aria-label={`Go to slide ${idx + 1}`}
+            aria-current={idx === activeSlide ? "true" : undefined}
+          >
+            {/* Progress ring background */}
+            <span className={`block h-2.5 w-2.5 rounded-full transition-all duration-500 ${
+              idx === activeSlide ? "bg-white/40 scale-100" : "bg-white/20 scale-75 group-hover/dot:bg-white/30 group-hover/dot:scale-100"
+            }`} />
+            {/* Animated progress fill */}
+            {idx === activeSlide && (
+              <span
+                className="absolute inset-0 rounded-full bg-white"
+                style={{
+                  clipPath: `inset(0 ${100 - progress}% 0 0)`,
+                  transition: "none",
+                }}
+              />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Thin progress bar at very bottom ── */}
+      <div className="absolute bottom-0 inset-x-0 z-20 h-[2px] bg-white/10">
+        <div
+          className="h-full bg-gradient-to-r from-violet-400 via-fuchsia-400 to-amber-400"
+          style={{
+            width: `${progress}%`,
+            transition: isPaused ? "none" : "width 0.1s linear",
+          }}
+        />
+      </div>
+
+      {/* ── Bottom fade to background ── */}
+      <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-background to-transparent z-10 pointer-events-none" />
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════
    MAIN PAGE COMPONENT
    ════════════════════════════════════════════════════════════════ */
 
@@ -2998,87 +3313,8 @@ function VidoraApp() {
             <motion.div key="home" {...fadeUp}>
               {/* Hero */}
               <section className="relative overflow-hidden min-h-[520px] sm:min-h-[600px]">
-                {/* Hero Background Image */}
-                <img
-                  src="/images/hero-bg.png"
-                  alt="Vidora AI Video Studio"
-                  className="absolute inset-0 w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-violet-950/60 to-black/80" />
-                <div className="orb orb-violet w-[400px] h-[400px] -top-20 -left-32" />
-                <div className="orb orb-amber w-[300px] h-[300px] top-10 right-10" />
-                <div className="orb orb-rose w-[250px] h-[250px] bottom-20 left-1/2" />
-                <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-20 lg:py-24 text-center">
-                  <motion.div
-                    initial={{ opacity: 0, y: 30 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.6 }}
-                    className="space-y-6"
-                  >
-                    <Badge className="px-4 py-1.5 text-xs font-semibold glass-card text-violet-200 hover:bg-white/10 cursor-default">
-                      <Zap className="h-3 w-3 mr-1.5 text-amber-400" />Professional AI Video Studio
-                    </Badge>
-                    <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-tight">
-                      <span className="text-white">Create Production-Ready</span>
-                      <br />
-                      <span className="hero-text-gradient">AI Videos</span>
-                    </h1>
-                    <p className="text-base sm:text-lg text-violet-200/80 max-w-2xl mx-auto leading-relaxed">
-                      Write scripts, design characters, generate cinematic scenes with AI Director controls. From birthday stories to commercials — all powered by AI.
-                    </p>
-                    <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
-                      <Button
-                        size="lg"
-                        onClick={() => setCurrentView("create")}
-                        className="btn-gradient text-sm sm:text-base px-6 py-4 h-auto"
-                      >
-                        <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Start Creating
-                      </Button>
-                      <Button
-                        size="lg"
-                        variant="outline"
-                        onClick={() => handleTryDemo()}
-                        disabled={isCreatingDemo}
-                        className="glass-card text-white hover:text-white hover:bg-violet-500/20 px-6 py-4 h-auto !border-2 !border-violet-400/70 hover:!border-violet-300 shadow-lg shadow-violet-500/20"
-                      >
-                        {isCreatingDemo ? (
-                          <><Loader2 className="h-4 w-4 sm:h-5 sm:w-5 mr-2 animate-spin" />Loading demo…</>
-                        ) : (
-                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-violet-300" />Try Live Demo</>
-                        )}
-                      </Button>
-                      <Button
-                        size="lg"
-                        variant="outline"
-                        onClick={() => setCurrentView("gallery")}
-                        className="glass-card text-white/90 hover:text-white hover:bg-fuchsia-500/20 px-6 py-4 h-auto !border-2 !border-fuchsia-400/70 hover:!border-fuchsia-300 shadow-lg shadow-fuchsia-500/20"
-                      >
-                        <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
-                      </Button>
-                    </div>
-                    <p className="text-xs text-amber-200/80 pt-1">
-                      ✨ No signup needed — the demo loads a finished video project instantly.
-                    </p>
-                    <div className="flex items-center justify-center gap-6 sm:gap-8 pt-4 text-sm flex-wrap">
-                      {[
-                        { icon: Users, label: "Character", sub: "System" },
-                        { icon: FileText, label: "Script", sub: "Parsing" },
-                        { icon: Film, label: "10s – 5min", sub: "Duration" },
-                        { icon: Monitor, label: "5 Aspect", sub: "Ratios" },
-                        { icon: Wand2, label: "AI Director", sub: "Controls" },
-                      ].map((s) => (
-                        <div key={s.label} className="flex items-center gap-2 text-violet-300/70">
-                          <s.icon className="h-4 w-4" />
-                          <div className="text-left">
-                            <p className="font-semibold text-white/90">{s.label}</p>
-                            <p className="text-xs">{s.sub}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                </div>
-                <div className="absolute bottom-0 inset-x-0 h-24 bg-gradient-to-t from-background to-transparent" />
+                {/* ── Hero Slider ── */}
+                <HeroSlider onNavigateCreate={() => setCurrentView("create")} onNavigateDemo={handleTryDemo} onNavigateGallery={() => setCurrentView("gallery")} isCreatingDemo={isCreatingDemo} />
               </section>
 
               {/* Quick Create Cards */}
