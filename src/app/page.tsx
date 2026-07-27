@@ -735,7 +735,6 @@ function HeroSlider({
   isCreatingDemo: boolean;
 }) {
   const [activeSlide, setActiveSlide] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const rafRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -743,7 +742,6 @@ function HeroSlider({
 
   // Auto-advance timer
   useEffect(() => {
-    if (isPaused) return;
     startRef.current = performance.now();
     const tick = (now: number) => {
       const elapsed = now - startRef.current;
@@ -762,7 +760,7 @@ function HeroSlider({
       cancelAnimationFrame(rafRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isPaused, activeSlide]);
+  }, [activeSlide]);
 
   const goToSlide = (idx: number) => {
     setActiveSlide(idx);
@@ -774,9 +772,7 @@ function HeroSlider({
 
   return (
     <div
-      className="relative w-full min-h-[520px] sm:min-h-[600px] group"
-      onMouseEnter={() => setIsPaused(true)}
-      onMouseLeave={() => setIsPaused(false)}
+      className="relative w-full min-h-[520px] sm:min-h-[600px]"
       role="region"
       aria-label="Hero slider"
       aria-roledescription="carousel"
