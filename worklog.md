@@ -1580,3 +1580,51 @@ if (code === "1113" || code === "1112") {
    ```
 
 All other ~22 Z.ai-error toasts in page.tsx pass the raw `data.error` string straight through to the user. This is the consistency gap the planned UX change should close.
+
+---
+Task ID: 13
+Agent: main
+Task: Diagnose missing login/signup/forgot-password enhancements + re-implement them
+
+Work Log:
+- Diagnosed: dev server is running fine (PID 1076, HTTP 200) — NOT crashed.
+- Diagnosed: the auth enhancements (4-mode dialog, forgot password, reset password, password strength meter, split branding layout) were LOST. They existed only as uncommitted working-copy changes in the previous session and were never committed/pushed. The sandbox's auto-commit snapshots captured a different set of changes. The reflog and stash are empty — no recoverable trace.
+- Diagnosed: remote GitHub (origin/main) also did NOT have them — verified by checking `git show origin/main:src/app/page.tsx` (only 2-mode auth) and confirming forgot-password/reset-password API routes don't exist on remote.
+- Merged origin/main into local (brought in 5 remote commits: footer/WhatsApp/socials, hero buttons, sticky header, AI chat, Z.ai error differentiation). Resolved worklog.md conflict (took remote).
+- Created /api/auth/forgot-password/route.ts: generates crypto-random 32-byte token, stores SHA-256 hash in SystemConfig (key=pwreset:<hash>) with 30-min expiry, logs reset URL to server console, anti-enumeration (always returns same success message).
+- Created /api/auth/reset-password/route.ts: validates token by hash lookup, checks expiry + email match, hashes new password with bcrypt (12 rounds), updates user, deletes consumed token (one-time use).
+- Re-implemented 4-mode auth dialog in page.tsx:
+  - Extended authMode type: "login" | "register" | "forgot" | "reset"
+  - Added state: authShowPassword, authShowConfirm, authConfirmPassword, authRemember, authResetToken, authSuccess
+  - Added passwordStrength useMemo (6-level scoring: Too weak → Very strong, with colored bar + requirement checklist)
+  - Added handleForgotPassword + handleResetPassword handlers with full validation
+  - Added URL param useEffect: ?reset=<token>&email=<x> → opens reset mode; ?auth=login → opens login
+  - Split-layout dialog (sm:max-w-4xl): left branding panel (violet→fuchsia gradient, Clapperboard logo, mode-specific headline + 3 feature bullets) hidden on mobile; right form panel with mode-specific icon + title
+  - Login mode: email, password (show/hide), remember me checkbox, forgot password link, sign in button, switch to register
+  - Register mode: name, email, password (show/hide) + live strength meter with requirement checklist, create account button, switch to login
+  - Forgot mode: email, send reset link button, back to sign in
+  - Reset mode: email (disabled if token present), new password (show/hide) + strength meter, confirm password (show/hide) with mismatch indicator, reset button
+  - Success (emerald) + error (red) banners
+  - Mobile: Clapperboard header replaces hidden branding panel
+  - Clapperboard logo used consistently (matching header/footer)
+- Seeded admin user (vidora@lightworldtech.com) — DB had 0 users after merge.
+- Verified end-to-end with Agent Browser:
+  - Login mode: split layout renders, branding "Welcome back to the studio.", email/password fields, show/hide toggle, remember me checkbox (checked), forgot password link, sign up toggle ✅
+  - Register mode: name/email/password fields, password strength meter shows "Strong" for "Str0ng!Pass" with all 4 requirements (8+ chars, Uppercase, Number, Special) ✅
+  - Forgot mode: branding "Let's get you back in.", email field, Send Reset Link button, Back to Sign In link ✅
+  - Forgot submit (existing email): API returned 200, anti-enumeration success message shown, token stored in DB ✅
+  - Reset URL auto-open: navigated to /?reset=<token>&email=<x> → dialog auto-opened in reset mode, email pre-filled + disabled ✅
+  - Reset mode: branding "Secure your account.", new password + confirm fields with show/hide, strength meter shows "Very strong", mismatch indicator works ✅
+  - Reset submit: API returned 200, "password has been reset successfully" shown, dialog auto-switched to login after 2.5s ✅
+  - Token consumed: DB check confirmed 0 remaining tokens (one-time use enforced) ✅
+  - New password works: bcrypt.compare("NewStr0ng!Pass", hash) = true ✅
+  - Login with new password: signed in successfully (Dashboard/Admin/Sign Out buttons appeared, "Welcome back!" toast) ✅
+  - Zero console errors, zero page errors ✅
+- Lint passes clean (0 errors, 0 warnings).
+
+Stage Summary:
+- ANSWER: The dev server had NOT crashed. The login/signup/forgot-password enhancements were lost because they were never committed to git — they existed only as uncommitted working-copy changes that got wiped when the sandbox auto-committed a different snapshot. The remote GitHub also didn't have them. I re-implemented everything from scratch and verified all 4 auth modes work end-to-end.
+- All 4 auth modes now work: login (with remember me + forgot link), register (with live password strength meter), forgot password (anti-enumeration, 30-min token), reset password (token-validated, one-time use, auto-switches to login on success).
+- The split-layout dialog with violet→fuchsia branding panel + Clapperboard logo is consistent with the header/footer branding.
+- The reset flow is fully functional: forgot → token stored in DB → reset URL (logged to server console since SMTP not configured) → token-validated reset → password updated → token consumed → auto-switch to login.
+- Artifacts: src/app/api/auth/forgot-password/route.ts (new), src/app/api/auth/reset-password/route.ts (new), src/app/page.tsx (4-mode auth dialog + handlers + URL param effect + password strength meter), prisma schema unchanged (SystemConfig table already existed).

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useToast } from "@/hooks/use-toast";
@@ -13,7 +13,7 @@ import {
   Film, Mic, MicOff, Upload, Sparkles, Play, Plus, Trash2,
   ChevronRight, Wand2, ArrowLeft, ImageIcon, LayoutGrid, Loader2,
   X, Download, Layers, Palette, Clapperboard,
-  Copy, Eye, Volume2, Clock, Video, RefreshCw, Zap, Timer, Monitor,
+  Copy, Eye, EyeOff, Volume2, Clock, Video, RefreshCw, Zap, Timer, Monitor,
   Smartphone, RectangleHorizontal, Square,
   Users, UserPlus, UploadCloud, FileText, MessageSquare,
   Crown, Star, Heart, Briefcase, PartyPopper, Camera,
@@ -766,15 +766,42 @@ function VidoraApp() {
   /* ── Auth State ── */
   const { data: session, status: authStatus } = useSession();
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authMode, setAuthMode] = useState<"login" | "register" | "forgot" | "reset">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
-  const [authFieldError, setAuthFieldError] = useState<"email" | "password" | "name" | "">("");
+  const [authFieldError, setAuthFieldError] = useState<"email" | "password" | "name" | "confirm" | "">("");
+  const [authShowPassword, setAuthShowPassword] = useState(false);
+  const [authShowConfirm, setAuthShowConfirm] = useState(false);
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authRemember, setAuthRemember] = useState(true);
+  const [authResetToken, setAuthResetToken] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
   const [userTokens, setUserTokens] = useState(0);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
+
+  // ── Password strength meter (register + reset modes) ──
+  const passwordStrength = useMemo(() => {
+    const p = authPassword;
+    if (!p) return { score: 0, label: "", color: "", pct: 0 };
+    let score = 0;
+    if (p.length >= 8) score++;
+    if (p.length >= 12) score++;
+    if (/[A-Z]/.test(p)) score++;
+    if (/[0-9]/.test(p)) score++;
+    if (/[^A-Za-z0-9]/.test(p)) score++;
+    const levels = [
+      { label: "Too weak", color: "bg-red-500", pct: 20 },
+      { label: "Weak", color: "bg-red-400", pct: 35 },
+      { label: "Fair", color: "bg-amber-400", pct: 55 },
+      { label: "Good", color: "bg-lime-500", pct: 75 },
+      { label: "Strong", color: "bg-emerald-500", pct: 90 },
+      { label: "Very strong", color: "bg-emerald-600", pct: 100 },
+    ];
+    return { score, ...levels[Math.min(score, 5)] };
+  }, [authPassword]);
 
   // ── Z.ai error differentiation helper ──
   // Picks the right error string to show in toasts based on user role:
@@ -2156,6 +2183,138 @@ function VidoraApp() {
       setAuthLoading(false);
     }
   };
+
+  /* ── Forgot Password ──
+     Sends a reset link to the user's email (server logs the link since SMTP
+     isn't configured in this environment). Always shows the same success
+     message regardless of whether the email exists (anti-enumeration). */
+  const handleForgotPassword = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthFieldError("");
+    setAuthSuccess("");
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!authEmail.trim()) {
+      setAuthError("Please enter your email address.");
+      setAuthFieldError("email");
+      setAuthLoading(false);
+      return;
+    }
+    if (!emailRegex.test(authEmail)) {
+      setAuthError("Please enter a valid email address.");
+      setAuthFieldError("email");
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAuthSuccess(data.message);
+      } else {
+        setAuthError(data.error || "Unable to send reset link. Please try again.");
+      }
+    } catch {
+      setAuthError("Could not connect to the server. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  /* ── Reset Password ──
+     Validates the token (from URL), sets a new password. */
+  const handleResetPassword = async () => {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthFieldError("");
+    setAuthSuccess("");
+
+    if (!authResetToken) {
+      setAuthError("Invalid reset link. Please request a new password reset.");
+      setAuthLoading(false);
+      return;
+    }
+    if (authPassword.length < 8) {
+      setAuthError("Password must be at least 8 characters long.");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+    if (!/[A-Z]/.test(authPassword) || !/[0-9]/.test(authPassword) || !/[^A-Za-z0-9]/.test(authPassword)) {
+      setAuthError("Password must include an uppercase letter, a number, and a special character.");
+      setAuthFieldError("password");
+      setAuthLoading(false);
+      return;
+    }
+    if (authPassword !== authConfirmPassword) {
+      setAuthError("Passwords do not match.");
+      setAuthFieldError("confirm");
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: authResetToken,
+          email: authEmail,
+          password: authPassword,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAuthSuccess(data.message);
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthResetToken("");
+        // Auto-switch to login mode after a short delay
+        setTimeout(() => {
+          setAuthMode("login");
+          setAuthSuccess("");
+        }, 2500);
+      } else {
+        setAuthError(data.error || "Unable to reset password. Please try again.");
+      }
+    } catch {
+      setAuthError("Could not connect to the server. Please try again.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // ── URL param: auto-open auth dialog for reset flow or login prompt ──
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get("reset");
+    const resetEmail = params.get("email");
+    const authParam = params.get("auth");
+    if (resetToken) {
+      setAuthResetToken(resetToken);
+      if (resetEmail) setAuthEmail(resetEmail);
+      setAuthMode("reset");
+      setAuthDialogOpen(true);
+      // clean the URL so a refresh doesn't re-trigger
+      const url = new URL(window.location.href);
+      url.searchParams.delete("reset");
+      url.searchParams.delete("email");
+      window.history.replaceState({}, "", url.toString());
+    } else if (authParam === "login") {
+      setAuthMode("login");
+      setAuthDialogOpen(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("auth");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
 
   const handleSignOut = async () => {
     await signOut({ redirect: false });
@@ -6131,76 +6290,351 @@ function VidoraApp() {
       </Dialog>
 
       {/* ═══════════════════════════════════════════════════════
-          AUTH DIALOG (Login / Register)
+          AUTH DIALOG (Login / Register / Forgot / Reset)
+          Split layout: left branding panel + right form.
+          4 modes with password strength meter, show/hide toggles,
+          remember-me, forgot-password, and token-based reset flow.
           ═══════════════════════════════════════════════════════ */}
-      <Dialog open={authDialogOpen} onOpenChange={setAuthDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
-                <User className="h-4 w-4" />
-              </div>
-              {authMode === "login" ? "Welcome Back" : "Create Account"}
-            </DialogTitle>
-            <DialogDescription>
-              {authMode === "login" ? "Sign in to your Vidora account" : "Join Vidora and start creating AI videos"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            {authError && (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{authError}</span>
-              </div>
-            )}
-            {authMode === "register" && (
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">Full Name</Label>
-                <Input
-                  placeholder="John Doe"
-                  value={authName}
-                  onChange={(e) => { setAuthName(e.target.value); if (authFieldError === "name") { setAuthFieldError(""); setAuthError(""); } }}
-                  className={authFieldError === "name" ? "border-red-400 focus-visible:ring-red-400" : ""}
-                />
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Email</Label>
-              <Input
-                type="email"
-                placeholder="you@example.com"
-                value={authEmail}
-                onChange={(e) => { setAuthEmail(e.target.value); if (authFieldError === "email") { setAuthFieldError(""); setAuthError(""); } }}
-                className={authFieldError === "email" ? "border-red-400 focus-visible:ring-red-400" : ""}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Password</Label>
-              <Input
-                type="password"
-                placeholder="••••••••"
-                value={authPassword}
-                onChange={(e) => { setAuthPassword(e.target.value); if (authFieldError === "password") { setAuthFieldError(""); setAuthError(""); } }}
-                className={authFieldError === "password" ? "border-red-400 focus-visible:ring-red-400" : ""}
-              />
-              {authMode === "register" && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Must be 8+ characters with uppercase, lowercase, number & special character
+      <Dialog open={authDialogOpen} onOpenChange={(open) => {
+        setAuthDialogOpen(open);
+        if (!open) {
+          // reset transient state when closing
+          setAuthError("");
+          setAuthFieldError("");
+          setAuthSuccess("");
+          setAuthShowPassword(false);
+          setAuthShowConfirm(false);
+          if (authMode === "forgot" || authMode === "reset") setAuthMode("login");
+        }
+      }}>
+        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden gap-0">
+          <div className="grid grid-cols-1 md:grid-cols-2">
+            {/* ── Left: Branding panel (hidden on mobile) ── */}
+            <div className="hidden md:flex relative flex-col justify-between p-8 bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600 text-white overflow-hidden">
+              <div className="absolute inset-0 opacity-20 pointer-events-none"
+                style={{ backgroundImage: "radial-gradient(circle at 20% 30%, rgba(255,255,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,255,255,0.3) 0%, transparent 40%)" }} />
+              <div className="relative">
+                <div className="flex items-center gap-3 mb-8">
+                  <div className="h-11 w-11 rounded-xl bg-white/15 backdrop-blur flex items-center justify-center ring-1 ring-white/30">
+                    <Clapperboard className="h-6 w-6 text-white" />
+                  </div>
+                  <span className="text-2xl font-bold tracking-tight">Vidora</span>
+                </div>
+                <h2 className="text-3xl font-bold leading-tight mb-3">
+                  {authMode === "login" && "Welcome back to the studio."}
+                  {authMode === "register" && "Start creating cinematic videos."}
+                  {authMode === "forgot" && "Let's get you back in."}
+                  {authMode === "reset" && "Secure your account."}
+                </h2>
+                <p className="text-white/80 text-sm leading-relaxed">
+                  {authMode === "login" && "Sign in to continue building your AI-powered video projects, manage scenes, and publish to the world."}
+                  {authMode === "register" && "Join Vidora to turn text prompts into stunning cinematic scenes — complete with AI imagery, narration, music, and subtitles."}
+                  {authMode === "forgot" && "Enter your email and we'll send you a secure link to reset your password."}
+                  {authMode === "reset" && "Choose a strong new password to protect your Vidora account."}
                 </p>
-              )}
+              </div>
+              <div className="relative space-y-2.5 mt-8">
+                {[
+                  { icon: Sparkles, text: "AI-generated cinematic scenes" },
+                  { icon: Film, text: "Multi-language dubbing & subtitles" },
+                  { icon: Share2, text: "One-click social publishing" },
+                ].map((f, i) => (
+                  <div key={i} className="flex items-center gap-2.5 text-sm text-white/90">
+                    <f.icon className="h-4 w-4 shrink-0" />
+                    <span>{f.text}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <Button
-              className="w-full btn-gradient"
-              disabled={authLoading || !authEmail || !authPassword || (authMode === "register" && !authName.trim())}
-              onClick={authMode === "login" ? handleLogin : handleRegister}
-            >
-              {authLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{authMode === "login" ? "Signing in..." : "Creating account..."}</> : authMode === "login" ? "Sign In" : "Create Account"}
-            </Button>
-            <div className="text-center text-sm text-muted-foreground">
-              {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-              <button onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); setAuthFieldError(""); }} className="text-violet-600 font-semibold hover:underline">
-                {authMode === "login" ? "Sign Up" : "Sign In"}
-              </button>
+
+            {/* ── Right: Form panel ── */}
+            <div className="flex flex-col p-6 sm:p-8 max-h-[90vh] overflow-y-auto">
+              {/* Mobile-only header (branding panel is hidden on mobile) */}
+              <div className="md:hidden flex items-center gap-2.5 mb-5">
+                <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                  <Clapperboard className="h-5 w-5" />
+                </div>
+                <span className="text-lg font-bold">Vidora</span>
+              </div>
+
+              <DialogHeader className="mb-1">
+                <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                  {authMode === "login" && <><LogIn className="h-5 w-5 text-violet-600" />Welcome Back</>}
+                  {authMode === "register" && <><UserPlus className="h-5 w-5 text-violet-600" />Create Account</>}
+                  {authMode === "forgot" && <><KeyRound className="h-5 w-5 text-violet-600" />Forgot Password</>}
+                  {authMode === "reset" && <><ShieldCheck className="h-5 w-5 text-violet-600" />Reset Password</>}
+                </DialogTitle>
+                <DialogDescription>
+                  {authMode === "login" && "Sign in to your Vidora account"}
+                  {authMode === "register" && "Join Vidora and start creating AI videos"}
+                  {authMode === "forgot" && "We'll send you a reset link"}
+                  {authMode === "reset" && "Set a new password for your account"}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 pt-3">
+                {/* Success banner */}
+                {authSuccess && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-emerald-50 text-emerald-700 text-sm border border-emerald-200">
+                    <CheckCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{authSuccess}</span>
+                  </div>
+                )}
+                {/* Error banner */}
+                {authError && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm border border-red-200">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{authError}</span>
+                  </div>
+                )}
+
+                {/* ── LOGIN / REGISTER mode ── */}
+                {(authMode === "login" || authMode === "register") && (
+                  <>
+                    {authMode === "register" && (
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">Full Name</Label>
+                        <Input
+                          placeholder="John Doe"
+                          value={authName}
+                          onChange={(e) => { setAuthName(e.target.value); if (authFieldError === "name") { setAuthFieldError(""); setAuthError(""); } }}
+                          className={authFieldError === "name" ? "border-red-400 focus-visible:ring-red-400" : ""}
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="you@example.com"
+                        value={authEmail}
+                        onChange={(e) => { setAuthEmail(e.target.value); if (authFieldError === "email") { setAuthFieldError(""); setAuthError(""); } }}
+                        className={authFieldError === "email" ? "border-red-400 focus-visible:ring-red-400" : ""}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Password</Label>
+                      <div className="relative">
+                        <Input
+                          type={authShowPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          value={authPassword}
+                          onChange={(e) => { setAuthPassword(e.target.value); if (authFieldError === "password") { setAuthFieldError(""); setAuthError(""); } }}
+                          className={`pr-10 ${authFieldError === "password" ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setAuthShowPassword((v) => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          tabIndex={-1}
+                          aria-label={authShowPassword ? "Hide password" : "Show password"}
+                        >
+                          {authShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      {/* Password strength meter (register only) */}
+                      {authMode === "register" && authPassword && (
+                        <div className="mt-2 space-y-1.5">
+                          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${passwordStrength.color}`}
+                              style={{ width: `${passwordStrength.pct}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">
+                              Strength: <span className="font-medium">{passwordStrength.label}</span>
+                            </span>
+                            <span className="text-muted-foreground">{authPassword.length} chars</span>
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                            <span className={authPassword.length >= 8 ? "text-emerald-600" : "text-muted-foreground"}>8+ chars</span>
+                            <span className={/[A-Z]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Uppercase</span>
+                            <span className={/[0-9]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Number</span>
+                            <span className={/[^A-Za-z0-9]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Special</span>
+                          </div>
+                        </div>
+                      )}
+                      {authMode === "register" && !authPassword && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Must be 8+ characters with uppercase, lowercase, number & special character
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Remember me + Forgot password (login only) */}
+                    {authMode === "login" && (
+                      <div className="flex items-center justify-between text-sm">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={authRemember}
+                            onChange={(e) => setAuthRemember(e.target.checked)}
+                            className="h-4 w-4 rounded border-border accent-violet-600"
+                          />
+                          <span className="text-muted-foreground">Remember me</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => { setAuthMode("forgot"); setAuthError(""); setAuthFieldError(""); setAuthSuccess(""); }}
+                          className="text-violet-600 font-medium hover:underline"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+                    )}
+
+                    <Button
+                      className="w-full btn-gradient"
+                      disabled={authLoading || !authEmail || !authPassword || (authMode === "register" && !authName.trim())}
+                      onClick={authMode === "login" ? handleLogin : handleRegister}
+                    >
+                      {authLoading
+                        ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{authMode === "login" ? "Signing in..." : "Creating account..."}</>
+                        : authMode === "login" ? "Sign In" : "Create Account"}
+                    </Button>
+                    <div className="text-center text-sm text-muted-foreground">
+                      {authMode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); setAuthFieldError(""); setAuthSuccess(""); }}
+                        className="text-violet-600 font-semibold hover:underline"
+                      >
+                        {authMode === "login" ? "Sign Up" : "Sign In"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* ── FORGOT mode ── */}
+                {authMode === "forgot" && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="you@example.com"
+                        value={authEmail}
+                        onChange={(e) => { setAuthEmail(e.target.value); if (authFieldError === "email") { setAuthFieldError(""); setAuthError(""); } }}
+                        className={authFieldError === "email" ? "border-red-400 focus-visible:ring-red-400" : ""}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Enter the email associated with your account. If it exists, you'll receive a reset link.
+                      </p>
+                    </div>
+                    <Button
+                      className="w-full btn-gradient"
+                      disabled={authLoading || !authEmail}
+                      onClick={handleForgotPassword}
+                    >
+                      {authLoading
+                        ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending link...</>
+                        : <><Mail className="h-4 w-4 mr-2" />Send Reset Link</>}
+                    </Button>
+                    <div className="text-center text-sm text-muted-foreground">
+                      <button
+                        type="button"
+                        onClick={() => { setAuthMode("login"); setAuthError(""); setAuthFieldError(""); setAuthSuccess(""); }}
+                        className="text-violet-600 font-semibold hover:inline-flex hover:items-center hover:gap-1"
+                      >
+                        <ArrowLeft className="inline h-3.5 w-3.5 mr-1" />Back to Sign In
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* ── RESET mode ── */}
+                {authMode === "reset" && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="you@example.com"
+                        value={authEmail}
+                        onChange={(e) => { setAuthEmail(e.target.value); if (authFieldError === "email") { setAuthFieldError(""); setAuthError(""); } }}
+                        disabled={!!authResetToken}
+                        className={`opacity-70 ${authFieldError === "email" ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">New Password</Label>
+                      <div className="relative">
+                        <Input
+                          type={authShowPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          value={authPassword}
+                          onChange={(e) => { setAuthPassword(e.target.value); if (authFieldError === "password") { setAuthFieldError(""); setAuthError(""); } }}
+                          className={`pr-10 ${authFieldError === "password" ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setAuthShowPassword((v) => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          tabIndex={-1}
+                          aria-label={authShowPassword ? "Hide password" : "Show password"}
+                        >
+                          {authShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      {authPassword && (
+                        <div className="mt-2 space-y-1.5">
+                          <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${passwordStrength.color}`}
+                              style={{ width: `${passwordStrength.pct}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">
+                              Strength: <span className="font-medium">{passwordStrength.label}</span>
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                            <span className={authPassword.length >= 8 ? "text-emerald-600" : "text-muted-foreground"}>8+ chars</span>
+                            <span className={/[A-Z]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Uppercase</span>
+                            <span className={/[0-9]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Number</span>
+                            <span className={/[^A-Za-z0-9]/.test(authPassword) ? "text-emerald-600" : "text-muted-foreground"}>Special</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">Confirm New Password</Label>
+                      <div className="relative">
+                        <Input
+                          type={authShowConfirm ? "text" : "password"}
+                          placeholder="••••••••"
+                          value={authConfirmPassword}
+                          onChange={(e) => { setAuthConfirmPassword(e.target.value); if (authFieldError === "confirm") { setAuthFieldError(""); setAuthError(""); } }}
+                          className={`pr-10 ${authFieldError === "confirm" ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setAuthShowConfirm((v) => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          tabIndex={-1}
+                          aria-label={authShowConfirm ? "Hide password" : "Show password"}
+                        >
+                          {authShowConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                      {authConfirmPassword && authPassword !== authConfirmPassword && (
+                        <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
+                      )}
+                    </div>
+                    <Button
+                      className="w-full btn-gradient"
+                      disabled={authLoading || !authPassword || !authConfirmPassword || authPassword !== authConfirmPassword}
+                      onClick={handleResetPassword}
+                    >
+                      {authLoading
+                        ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Resetting...</>
+                        : <><ShieldCheck className="h-4 w-4 mr-2" />Reset Password</>}
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </DialogContent>
