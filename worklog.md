@@ -1651,3 +1651,27 @@ Work Log:
 Stage Summary:
 - Tablet view for login/signup/forgot-password/reset now matches the desktop split-layout view (violet→fuchsia branding panel on the left, form on the right). Only phones get the compact single-column layout.
 - POLICY NOTE (from user): Always commit and push to GitHub after EVERY single update to avoid losing files and hours of work. This is now the standing workflow for all future changes.
+
+---
+Task ID: 15
+Agent: main
+Task: Scene timeline two-column layout (video preview + settings side-by-side on tablet+)
+
+Work Log:
+- Changed SortableSceneCard layout from stacked (thumbnail strip + single content column) to two-column layout on sm+ (640px+):
+  - Left column: video preview with scene number + status badges overlaid, narration audio player, generating spinner. Responsive widths: sm:220px, md:260px, lg:300px.
+  - Right column: title + prompt + action buttons (Narrate, AI Enhance, Music, Subs, Dub, Transition, Delete) + AI Director controls (Mood, Camera, Lighting) + dubbed audio tracks.
+- On mobile (<640px): single column stacked vertically with info first (order-1) and video second (order-2).
+- Removed old narrow 144px thumbnail strip (was only showing a tiny image, no controls).
+- Moved scene number + status badges to overlay on the video preview instead of the old thumbnail.
+- Made the thumbnail in the left column clickable for generating scenes (hover shows play icon).
+- Verified with Agent Browser at 4 viewports:
+  - 1024x768 (tablet landscape): left=300px, two-column ✅
+  - 768x1024 (iPad portrait): left=260px, two-column ✅
+  - 640x960 (small tablet): left=220px, two-column ✅
+  - 375x812 (phone): full-width stacked, info-first order ✅
+- Lint clean (0 errors, 0 warnings).
+- Committed + pushed immediately (d245f8e).
+
+Stage Summary:
+- Scene timeline cards now show video preview and settings side-by-side on all tablet+ views, matching the user's request. The layout uses responsive widths that scale with viewport size.
