@@ -288,116 +288,120 @@ function SortableSceneCard({
           >
             <GripVertical className="h-4 w-4 text-slate-300" />
           </div>
-          {/* Thumbnail */}
-          <div className="relative w-full sm:w-36 h-28 sm:h-auto shrink-0 bg-slate-100">
-            {scene.imageUrl ? (
-              <>
-                <img src={scene.imageUrl} alt="" className="w-full h-full object-cover" />
+          {/* Content — two-column layout on sm+ */}
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-col sm:flex-row sm:gap-4 p-4">
+              {/* ── LEFT COLUMN: Video Preview ── */}
+              <div className="sm:w-[220px] md:w-[260px] lg:w-[300px] shrink-0 order-2 sm:order-1">
+                <div className="relative">
+                  {/* Scene number + status badges */}
+                  <Badge className="absolute top-2 left-2 text-xs font-bold px-2 bg-black/60 text-white border-0 z-10">
+                    #{scene.sceneNumber}
+                  </Badge>
+                  <Badge className={`absolute top-2 right-2 text-xs font-semibold px-2 z-10 ${statusColor}`}>
+                    {scene.status}
+                  </Badge>
+                  {/* Video player for completed scenes */}
+                  {scene.videoUrl ? (
+                    <video
+                      src={scene.videoUrl}
+                      controls
+                      className="w-full rounded-lg bg-black"
+                      preload="metadata"
+                    />
+                  ) : scene.imageUrl ? (
+                    /* Clickable thumbnail preview */
+                    <button
+                      onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
+                      className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors"
+                    >
+                      <img src={scene.imageUrl} alt="" className="w-full aspect-video object-cover" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/preview:bg-black/40 transition-colors">
+                        <Play className="h-8 w-8 text-white drop-shadow-lg" />
+                      </div>
+                    </button>
+                  ) : (
+                    /* Placeholder */
+                    <div className="w-full aspect-video rounded-lg bg-slate-50 border border-dashed border-slate-200 flex items-center justify-center">
+                      <Film className="h-8 w-8 text-slate-300" />
+                    </div>
+                  )}
+                </div>
                 {scene.videoUrl && (
-                  <button
-                    onClick={() => onPreview(scene.videoUrl!)}
-                    className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                  <a
+                    href={scene.videoUrl}
+                    download
+                    className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
                   >
-                    <Play className="h-6 w-6 text-white" />
+                    <Download className="h-3.5 w-3.5" />Download video
+                  </a>
+                )}
+
+                {/* Narration audio player */}
+                {scene.narrationUrl && (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    <audio controls src={scene.narrationUrl} className="h-7 w-full" preload="none" />
+                  </div>
+                )}
+                {/* Progress spinner */}
+                {scene.status === "generating" && (
+                  <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Generating video...</span>
+                  </div>
+                )}
+              </div>
+
+              {/* ── RIGHT COLUMN: Scene Info + Actions + AI Director ── */}
+              <div className="flex-1 min-w-0 order-1 sm:order-2">
+                {/* Title Row */}
+                <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                  {scene.title && (
+                    <span className="text-sm font-bold truncate">{scene.title}</span>
+                  )}
+                  {scene.dialogue && (
+                    <Badge variant="outline" className="text-xs px-1.5 py-0">
+                      <MessageSquare className="h-3 w-3 mr-0.5" />Dialogue
+                    </Badge>
+                  )}
+                  {scene.mood && moodBadge && (
+                    <Badge className={`text-xs px-2 py-0 ${moodBadge}`}>{scene.mood}</Badge>
+                  )}
+                  {scene.cameraMove && (
+                    <Badge variant="outline" className="text-xs px-1.5 py-0 border-cyan-200 text-cyan-600">
+                      <Camera className="h-3 w-3 mr-0.5" />{scene.cameraMove}
+                    </Badge>
+                  )}
+                  {scene.lighting && (
+                    <Badge variant="outline" className="text-xs px-1.5 py-0 border-amber-200 text-amber-600">
+                      <Lightbulb className="h-3 w-3 mr-0.5" />{scene.lighting}
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Prompt */}
+                <p
+                  className={`text-xs text-muted-foreground leading-relaxed ${expandedPrompt ? "" : "line-clamp-2"}`}
+                >
+                  {scene.enhancedPrompt || scene.prompt}
+                </p>
+                {(scene.enhancedPrompt || scene.prompt).length > 120 && (
+                  <button
+                    onClick={() => setExpandedPrompt(!expandedPrompt)}
+                    className="text-sm text-violet-500 mt-0.5 hover:underline"
+                  >
+                    {expandedPrompt ? "Show less" : "Show more"}
                   </button>
                 )}
-              </>
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <Film className="h-6 w-6 text-slate-300" />
-              </div>
-            )}
-            <Badge className="absolute top-1.5 left-1.5 text-xs font-bold px-2 bg-black/60 text-white border-0">
-              #{scene.sceneNumber}
-            </Badge>
-            <Badge className={`absolute top-1.5 right-1.5 text-xs font-semibold px-2 ${statusColor}`}>
-              {scene.status}
-            </Badge>
-          </div>
-          {/* Content */}
-          <div className="flex-1 p-4 min-w-0">
-            {/* Title Row */}
-            <div className="flex items-center gap-1.5 flex-wrap mb-1">
-              {scene.title && (
-                <span className="text-sm font-bold truncate">{scene.title}</span>
-              )}
-              {scene.dialogue && (
-                <Badge variant="outline" className="text-xs px-1.5 py-0">
-                  <MessageSquare className="h-3 w-3 mr-0.5" />Dialogue
-                </Badge>
-              )}
-              {scene.mood && moodBadge && (
-                <Badge className={`text-xs px-2 py-0 ${moodBadge}`}>{scene.mood}</Badge>
-              )}
-              {scene.cameraMove && (
-                <Badge variant="outline" className="text-xs px-1.5 py-0 border-cyan-200 text-cyan-600">
-                  <Camera className="h-3 w-3 mr-0.5" />{scene.cameraMove}
-                </Badge>
-              )}
-              {scene.lighting && (
-                <Badge variant="outline" className="text-xs px-1.5 py-0 border-amber-200 text-amber-600">
-                  <Lightbulb className="h-3 w-3 mr-0.5" />{scene.lighting}
-                </Badge>
-              )}
-            </div>
+                {scene.dialogue && (
+                  <p className="text-xs text-violet-500 mt-1.5 italic line-clamp-1">
+                    {scene.dialogue}
+                  </p>
+                )}
 
-            {/* Prompt */}
-            <p
-              className={`text-xs text-muted-foreground leading-relaxed ${expandedPrompt ? "" : "line-clamp-2"}`}
-            >
-              {scene.enhancedPrompt || scene.prompt}
-            </p>
-            {(scene.enhancedPrompt || scene.prompt).length > 120 && (
-              <button
-                onClick={() => setExpandedPrompt(!expandedPrompt)}
-                className="text-sm text-violet-500 mt-0.5 hover:underline"
-              >
-                {expandedPrompt ? "Show less" : "Show more"}
-              </button>
-            )}
-            {scene.dialogue && (
-              <p className="text-xs text-violet-500 mt-1.5 italic line-clamp-1">
-                {scene.dialogue}
-              </p>
-            )}
-
-            {/* Narration audio player */}
-            {scene.narrationUrl && (
-              <div className="mt-2 flex items-center gap-1.5">
-                <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                <audio controls src={scene.narrationUrl} className="h-7 w-full max-w-[200px]" preload="none" />
-              </div>
-            )}
-
-            {/* Video player for completed scenes */}
-            {scene.videoUrl && (
-              <div className="mt-2">
-                <video
-                  src={scene.videoUrl}
-                  controls
-                  className="w-full max-h-40 rounded-lg bg-black"
-                  preload="metadata"
-                />
-                <a
-                  href={scene.videoUrl}
-                  download
-                  className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
-                >
-                  <Download className="h-3.5 w-3.5" />Download video
-                </a>
-              </div>
-            )}
-
-            {/* Progress spinner */}
-            {scene.status === "generating" && (
-              <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>Generating video...</span>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex items-center gap-1.5 mt-3 flex-wrap">
+                {/* Actions */}
+                <div className="flex items-center gap-1.5 mt-3 flex-wrap">
               {!scene.videoUrl && scene.status !== "generating" && (
                 <Button
                   size="sm" variant="outline" className="h-7 text-xs px-2.5"
@@ -634,7 +638,9 @@ function SortableSceneCard({
                 </div>
               </div>
             )}
-          </div>
+              </div>{/* end right column */}
+            </div>{/* end flex-col sm:flex-row inner wrapper */}
+          </div>{/* end content flex-1 outer */}
         </div>
       </Card>
     </div>
