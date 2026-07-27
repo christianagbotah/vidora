@@ -810,8 +810,22 @@ function VidoraApp() {
     return () => clearInterval(interval);
   }, [currentView, currentProject, refreshProject]);
 
-  // Load projects on mount
-  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+  // Load projects on mount — then signal the global preloader that the
+  // initial critical data fetch has resolved so it can dismiss.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await fetchProjects();
+      if (cancelled) return;
+      // Allow a tick for the first data-render to paint, then dismiss preloader
+      requestAnimationFrame(() => {
+        if (typeof window !== "undefined" && !cancelled) {
+          window.dispatchEvent(new Event("vidora:ready"));
+        }
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [fetchProjects]);
 
   // Auto-trigger generation on entering studio if there are pending scenes
   useEffect(() => {

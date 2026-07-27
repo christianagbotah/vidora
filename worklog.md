@@ -1095,3 +1095,35 @@ Stage Summary:
   9. Social Publishing ✅ (5 platforms, connect/disconnect, publish, history)
 - The ONLY remaining blocker for features 5 & 6 (subtitles + dubbing) is the Z.ai account balance (error 1113). The code paths are complete and will work end-to-end once Z.ai is recharged.
 - Artifacts: src/lib/project-auth.ts (requireSceneAccess helper + demo-project rules), src/components/BrandKitDialog.tsx (new), 4 refactored scene/project API routes, 2 new analytics sub-routes, page.tsx (Brand Kit button + dialog wiring)
+
+---
+Task ID: 12
+Agent: main
+Task: Fix preloader not animating / page blank until data arrives
+
+Work Log:
+- Diagnosed root cause: the Preloader component did not exist on disk (lost from prior session) and layout.tsx no longer rendered it — so nothing covered the blank period between first paint and post-hydration data fetch. page.tsx is a client component that fetches /api/projects on mount, leaving a blank screen.
+- Rebuilt Preloader from scratch (src/components/Preloader.tsx) with a bulletproof motion strategy:
+  - All core visuals driven by pure CSS keyframes (preloader-spin, preloader-gradient, preloader-pulse, preloader-shimmer) so they are guaranteed to animate from the very first SSR paint — no dependency on React hydration or Framer Motion timing.
+  - requestAnimationFrame loop drives a determinate progress counter (0% → ~88% while waiting, → 100% on ready) plus the progress-bar width.
+  - Indeterminate shimmer overlay always animates on top of the bar as a motion guarantee.
+  - Dismiss logic: listens for custom `vidora:ready` event (dispatched by page.tsx) AND native `window.load`; stays visible for MIN_DISPLAY (1200ms); hard-capped at MAX_DISPLAY (5500ms); fades out via CSS transition (opacity+visibility) over 600ms; body scroll locked while visible.
+  - Logo uses Clapperboard (lucide-react) + violet→fuchsia gradient, consistent with header/footer branding.
+  - prefers-reduced-motion: disables all animations.
+- Added 7 keyframes + full preloader styles to globals.css (.preloader-root, -bg, -orbs, -logo-wrap, -orbit, -dot-1/2/3, -ring, -logo, -wordmark, -tagline, -progress-wrap/track/fill/shimmer/meta/label/pct, plus reduced-motion guard).
+- Wired <Preloader /> into src/app/layout.tsx (rendered before {children}) so it is part of the SSR shell — appears instantly on first paint, covering the blank-to-contented transition for BOTH / and /share/[slug] routes.
+- Updated page.tsx mount effect: awaits fetchProjects() then dispatches window event `vidora:ready` via requestAnimationFrame so the preloader dismisses precisely when the initial critical data fetch has resolved and the first data-render has painted.
+- Verified end-to-end with Agent Browser:
+  - SSR HTML contains preloader markup (confirmed via curl grep: preloader-root, preloader-orbit, preloader-progress-track, preloader-wordmark all present in raw HTML) → shows on first paint before hydration.
+  - Immediately after reload: preloader present, ALL animations running — orbitAnim=preloader-spin 1.7s (running), shimmerAnim=preloader-shimmer 1.5s (running), logoAnim=preloader-gradient,preloader-pulse (running, running), fading=false.
+  - Progress advances visibly: 95% at ~500ms, 100% at ~1.1s, then fades.
+  - At ~2.8s: preloader removed from DOM (preloaderPresent=false), body overflow restored (scroll unlocked), hero "Create Production-Ready AI Videos" visible, 3176 chars of page content rendered.
+  - Console: zero errors (only React DevTools info + HMR logs).
+  - Dev log: zero errors/warnings related to preloader.
+- Lint passes clean (0 errors, 0 warnings).
+
+Stage Summary:
+- PROBLEM SOLVED: The page no longer remains blank until data arrives. A cinematic preloader (dark gradient bg, orbiting violet/rose/amber dots, pulsing gradient logo tile, animated "Vidora" wordmark, determinate progress bar with shimmer overlay + live percentage) now appears instantly on first paint and dismisses smoothly once the app's initial data fetch completes.
+- Root cause of the earlier "not animating" bug: the previous Preloader relied on Framer Motion + a sessionStorage skip that prevented returning visitors from ever seeing it. The new version uses pure CSS keyframes (guaranteed motion) and always shows on full page load (no sessionStorage skip).
+- Architecture: Preloader is a global client component rendered in layout.tsx (SSR'd shell). page.tsx signals readiness via a `vidora:ready` window event after fetchProjects resolves. Fallbacks: window.load + 5.5s hard cap ensure it never hangs.
+- Artifacts: src/components/Preloader.tsx (new), src/app/globals.css (preloader keyframes/styles), src/app/layout.tsx (Preloader render), src/app/page.tsx (vidora:ready dispatch in mount effect).
