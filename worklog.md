@@ -1868,3 +1868,27 @@ Stage Summary:
 - Package prices auto-convert between GHS and USD using live rate
 - Admin dashboard now shows per-operation z.ai costs, margins, and project cost estimates
 - Profit analytics now uses live exchange rate instead of hardcoded 0.08
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Upgrade Hubtel payment integration to Online Checkout API (2026)
+
+Work Log:
+- Read and analyzed Hubtel Online Checkout API documentation (payproxyapi.hubtel.com/items/initiate)
+- Compared old v1 Invoice API vs new Online Checkout API parameters and endpoints
+- Rewrote HubtelGateway class with new API endpoint (payproxyapi.hubtel.com/items/initiate)
+- Updated verification to use Transaction Status Check API (api-txnstatus.hubtel.com/transactions/{account}/status)
+- Added hubtel_merchant_account_number config (Collection Account Number) with backwards compatibility to hubtel_merchant_id
+- Enhanced webhook handler with rich Hubtel callback data (payment type, channel, phone number, checkout ID)
+- Created dedicated /api/payments/hubtel/status route for mandatory 5-minute status check
+- Updated admin dashboard UI with Hubtel API info banner, callback IP whitelist (108.129.40.25)
+- Updated .env.example with new HUBTEL_MERCHANT_ACCOUNT_NUMBER env var
+- Updated payment initialization to pass user name/phone for Hubtel payee info
+- Committed and pushed to origin/main
+
+Stage Summary:
+- Hubtel integration fully upgraded to 2026 Online Checkout API
+- Supports: Mobile Money (MTN, Telecel, AT), Bank Card, Wallet (Hubtel, G-Money), GhQR, Cash/Cheque
+- Files modified: src/lib/payments/index.ts, src/app/api/payments/webhook/route.ts, src/app/api/payments/initialize/route.ts, src/app/page.tsx, .env.example
+- Files created: src/app/api/payments/hubtel/status/route.ts
