@@ -135,24 +135,36 @@ export class PaystackGateway implements PaymentGateway {
 }
 
 // ─── Hubtel ──────────────────────────────────────────────────
-// Uses the Online Checkout API (v1) which generates a hosted checkout URL
-// the customer is redirected to. They enter their phone number on Hubtel's page.
-// Endpoint: POST https://api.hubtel.com/v1/merchantaccount/onlinecheckout/invoice/create
-// Auth: Basic client_id:client_secret
-// Response: { response_code: "00", response_text: "<checkout URL>", token: "..." }
+// Uses the Online Checkout API (2026) which supports:
+//   Mobile Money, Bank Card, Wallet (Hubtel, G-Money), GhQR, Cash / Cheque
+// Initiate: POST https://payproxyapi.hubtel.com/items/initiate
+// Status:   GET  https://api-txnstatus.hubtel.com/transactions/{AccountNumber}/status
+// Auth:     Basic clientId:clientSecret
+// Response: { responseCode: "0000", data: { checkoutUrl, checkoutId, checkoutDirectUrl }}
+// Callback: { ResponseCode: "0000", Data: { ClientReference, Status: "Success", Amount, PaymentDetails }}
 export class HubtelGateway implements PaymentGateway {
   getName() {
     return "hubtel";
   }
 
-  private async getCredentials(): Promise<{ clientId: string; clientSecret: string; merchantId: string }> {
+  private async getCredentials(): Promise<{
+    clientId: string;
+    clientSecret: string;
+    merchantAccountNumber: string;
+  }> {
     const clientIdRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_id" } });
     const clientSecretRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_secret" } });
-    const merchantIdRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_id" } });
+    const accountNumberRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_account_number" } });
     return {
       clientId: clientIdRow?.value || process.env.HUBTEL_CLIENT_ID || "",
       clientSecret: clientSecretRow?.value || process.env.HUBTEL_CLIENT_SECRET || "",
-      merchantId: merchantIdRow?.value || process.env.HUBTEL_MERCHANT_ID || "",
+      merchantAccountNumber:
+        accountNumberRow?.value ||
+        process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ||
+        // Backwards-compatible: fall back to old hubtel_merchant_id if set
+        (await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_id" } }))?.value ||
+        process.env.HUBTEL_MERCHANT_ID ||
+        "",
     };
   }
 
@@ -165,79 +177,77 @@ export class HubtelGateway implements PaymentGateway {
     metadata?: Record<string, string>;
   }): Promise<PaymentResult> {
     try {
-      const { clientId, clientSecret } = await this.getCredentials();
+      const { clientId, clientSecret, merchantAccountNumber } = await this.getCredentials();
       if (!clientId || !clientSecret) {
         return {
           success: false,
-          error: "Hubtel client ID and secret are not configured. Set them in the Admin Portal.",
+          error: "Hubtel API credentials not configured. Set Client ID and Client Secret in the Admin Portal.",
+        };
+      }
+      if (!merchantAccountNumber) {
+        return {
+          success: false,
+          error: "Hubtel Merchant Account Number not configured. Set it in the Admin Portal.",
         };
       }
 
       const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-      const amountStr = params.amount.toFixed(2);
+      const totalAmount = Number(params.amount.toFixed(2));
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
 
-      // Hubtel v1 Online Checkout — creates an invoice and returns a checkout URL
-      const res = await fetch(
-        "https://api.hubtel.com/v1/merchantaccount/onlinecheckout/invoice/create",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Basic ${auth}`,
-          },
-          body: JSON.stringify({
-            invoice: {
-              items: [
-                {
-                  name: "Vidora Tokens",
-                  quantity: 1,
-                  unit_price: amountStr,
-                  total_price: amountStr,
-                  description: `Token purchase — ${params.metadata?.tokens || ""} tokens`,
-                },
-              ],
-              total_amount: Number(amountStr),
-              description: `Vidora Token Purchase — ${params.reference}`,
-            },
-            store: {
-              name: "Vidora",
-              tagline: "Professional AI Video Studio",
-              website_url: baseUrl,
-            },
-            actions: {
-              cancel_url: `${params.callbackUrl}?reference=${params.reference}&status=cancelled`,
-              return_url: `${params.callbackUrl}?reference=${params.reference}&status=success`,
-            },
-            custom_data: {
-              payment_id: params.metadata?.paymentId || "",
-              user_id: params.metadata?.userId || "",
-              tokens: params.metadata?.tokens || "",
-              client_reference: params.reference,
-            },
-          }),
-        }
-      );
+      // Hubtel Online Checkout (2026) — initiate a hosted checkout
+      const requestBody: Record<string, unknown> = {
+        totalAmount,
+        description: `Vidora Token Purchase - ${params.metadata?.tokens || ""} tokens`,
+        callbackUrl: `${baseUrl}/api/payments/webhook`,
+        returnUrl: `${baseUrl}/api/payments/verify?reference=${params.reference}&status=success`,
+        merchantAccountNumber,
+        cancellationUrl: `${baseUrl}/api/payments/verify?reference=${params.reference}&status=cancelled`,
+        clientReference: params.reference,
+      };
 
-      // Handle non-JSON responses gracefully (Hubtel may return HTML errors on bad auth)
+      // Optional payee info
+      if (params.email) {
+        requestBody.payeeEmail = params.email;
+      }
+      if (params.metadata?.userName) {
+        requestBody.payeeName = params.metadata.userName;
+      }
+      if (params.metadata?.phone) {
+        requestBody.payeeMobileNumber = params.metadata.phone;
+      }
+
+      const res = await fetch("https://payproxyapi.hubtel.com/items/initiate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+          "Cache-Control": "no-cache",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      // Handle non-JSON responses gracefully (Hubtel may return HTML on bad auth)
       const responseText = await res.text();
       let data: Record<string, unknown>;
       try {
         data = JSON.parse(responseText);
       } catch {
-        console.error("Hubtel returned non-JSON response:", res.status, responseText.substring(0, 300));
+        console.error("Hubtel returned non-JSON response:", res.status, responseText.substring(0, 500));
         return {
           success: false,
-          error: `Hubtel API returned status ${res.status}. Verify your client ID and secret are correct in the Admin Portal.`,
+          error: `Hubtel API returned HTTP ${res.status}. Verify your API credentials and Merchant Account Number in the Admin Portal.`,
         };
       }
 
-      // Hubtel v1 returns: { response_code: "00", response_text: "<checkout URL>", token: "..." }
-      const responseCode = String(data.response_code ?? data.responseCode ?? "");
-      const checkoutUrl = String(data.response_text ?? data.responseText ?? data.checkoutUrl ?? "");
+      // Hubtel Online Checkout response:
+      // { responseCode: "0000", status: "Success", data: { checkoutUrl, checkoutId, clientReference, checkoutDirectUrl }}
+      const responseCode = String(data.responseCode ?? data.response_code ?? "");
+      const responseData = data.data as Record<string, unknown> | undefined;
+      const checkoutUrl = String(responseData?.checkoutUrl ?? data.checkoutUrl ?? "");
 
-      // Success: response_code "00" and response_text contains the checkout URL
-      if ((responseCode === "00" || responseCode === "0000") && checkoutUrl) {
+      if ((responseCode === "0000" || responseCode === "00") && checkoutUrl) {
         return {
           success: true,
           authorizationUrl: checkoutUrl,
@@ -245,7 +255,7 @@ export class HubtelGateway implements PaymentGateway {
         };
       }
 
-      // Fallback: some Hubtel responses nest the URL under checkoutUrl directly
+      // Fallback: check if checkoutUrl is at top level
       if (typeof data.checkoutUrl === "string" && data.checkoutUrl) {
         return {
           success: true,
@@ -254,12 +264,12 @@ export class HubtelGateway implements PaymentGateway {
         };
       }
 
-      // Error — surface the actual Hubtel error message so the user can see what went wrong
+      // Error — surface the actual Hubtel error for debugging
       const errorMsg =
+        responseData?.message ||
         data.message ||
         data.responseMessage ||
-        data.response_text ||
-        data.error ||
+        data.error_description ||
         `Hubtel initialization failed (HTTP ${res.status}, code: ${responseCode || "none"})`;
       console.error("Hubtel init failed:", { status: res.status, responseCode, data });
       return { success: false, error: String(errorMsg) };
@@ -274,23 +284,28 @@ export class HubtelGateway implements PaymentGateway {
 
   async verifyPayment(reference: string): Promise<VerificationResult> {
     try {
-      const { clientId, clientSecret } = await this.getCredentials();
+      const { clientId, clientSecret, merchantAccountNumber } = await this.getCredentials();
       if (!clientId || !clientSecret) {
         return { success: false, error: "Hubtel credentials not configured" };
+      }
+      if (!merchantAccountNumber) {
+        return { success: false, error: "Hubtel Merchant Account Number not configured" };
       }
 
       const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-      // Hubtel v1: check invoice status by token/reference
-      const res = await fetch(
-        `https://api.hubtel.com/v1/merchantaccount/onlinecheckout/invoice/status/${encodeURIComponent(reference)}`,
-        {
-          headers: {
-            Authorization: `Basic ${auth}`,
-            Accept: "application/json",
-          },
-        }
-      );
+      // Hubtel Online Checkout: Transaction Status Check API
+      // GET https://api-txnstatus.hubtel.com/transactions/{Collection_Account_Number}/status?clientReference=xxx
+      const url = new URL(`https://api-txnstatus.hubtel.com/transactions/${merchantAccountNumber}/status`);
+      url.searchParams.set("clientReference", reference);
+
+      const res = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: "application/json",
+        },
+      });
 
       const responseText = await res.text();
       let data: Record<string, unknown>;
@@ -299,26 +314,20 @@ export class HubtelGateway implements PaymentGateway {
       } catch {
         return {
           success: false,
-          error: `Hubtel returned non-JSON response (status ${res.status})`,
+          error: `Hubtel status API returned non-JSON response (HTTP ${res.status})`,
         };
       }
 
-      const status = String(data.status ?? data.payment_status ?? "").toLowerCase();
-      const responseCode = String(data.response_code ?? data.responseCode ?? "");
+      const responseData = data.data as Record<string, unknown> | undefined;
+      const status = String(responseData?.status ?? data.status ?? "").toLowerCase();
+      const responseCode = String(data.responseCode ?? data.response_code ?? "");
 
-      // Hubtel considers the payment complete when status is "completed"/"paid"/"success"
-      // or response_code is "00"/"0000"
-      if (
-        status === "completed" ||
-        status === "paid" ||
-        status === "success" ||
-        responseCode === "00" ||
-        responseCode === "0000"
-      ) {
+      // Hubtel considers payment complete when status is "paid"
+      if (status === "paid" || responseCode === "0000") {
         return {
           success: true,
           verified: true,
-          amount: typeof data.amount === "number" ? data.amount : Number(data.total_amount) || 0,
+          amount: typeof responseData?.amount === "number" ? responseData.amount : 0,
           reference,
         };
       }
@@ -327,7 +336,7 @@ export class HubtelGateway implements PaymentGateway {
         success: true,
         verified: false,
         reference,
-        error: data.reason || data.response_text || data.message || "Payment not completed",
+        error: data.message || responseData?.reason || "Payment not completed",
       };
     } catch (error) {
       console.error("Hubtel verify error:", error);

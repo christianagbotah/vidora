@@ -6025,7 +6025,20 @@ function VidoraApp() {
                         {/* ── Hubtel fields (only when active) ── */}
                         {adminConfigs.payment_gateway?.value === "hubtel" && (
                           <div className="space-y-4">
-                            <p className="text-sm text-muted-foreground">Accept payments via Hubtel (MoMo, Bank Transfer)</p>
+                            <p className="text-sm text-muted-foreground">
+                              Accept payments via Hubtel Online Checkout (Mobile Money, Bank Card, Wallet, GhQR, Cash/Cheque)
+                            </p>
+                            {/* Info banner about the new API */}
+                            <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-3">
+                              <p className="text-xs font-medium text-blue-700 dark:text-blue-300">Hubtel Online Checkout API (2026)</p>
+                              <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                Uses <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">payproxyapi.hubtel.com</code> for checkout initiation and <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">api-txnstatus.hubtel.com</code> for status verification.
+                                Supports MoMo (MTN, Telecel, AT), Bank Card, Hubtel/G-Money Wallet, GhQR.
+                              </p>
+                              <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                <span className="font-semibold">Callback IP whitelist:</span> 108.129.40.25
+                              </p>
+                            </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Client ID</Label>
@@ -6033,9 +6046,10 @@ function VidoraApp() {
                                   type="password"
                                   value={configForm.hubtel_client_id || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
-                                  placeholder="Hubtel client ID"
+                                  placeholder="Hubtel Online Checkout Client ID"
                                   className="h-9 text-sm"
                                 />
+                                <p className="text-xs text-muted-foreground">Used for Basic Auth (with Client Secret)</p>
                               </div>
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Client Secret</Label>
@@ -6043,29 +6057,23 @@ function VidoraApp() {
                                   type="password"
                                   value={configForm.hubtel_client_secret || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
-                                  placeholder="Hubtel client secret"
+                                  placeholder="Hubtel Online Checkout Client Secret"
                                   className="h-9 text-sm"
                                 />
+                                <p className="text-xs text-muted-foreground">Used for Basic Auth (with Client ID)</p>
                               </div>
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Merchant Account Number</Label>
                                 <Input
                                   type="text"
-                                  value={configForm.hubtel_merchant_id || ""}
-                                  onChange={(e) => updateConfigField("hubtel_merchant_id", e.target.value)}
-                                  placeholder="HM-XXXXXX"
+                                  value={configForm.hubtel_merchant_account_number || configForm.hubtel_merchant_id || ""}
+                                  onChange={(e) => updateConfigField("hubtel_merchant_account_number", e.target.value)}
+                                  placeholder="e.g. 11684"
                                   className="h-9 text-sm"
                                 />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-sm font-medium">API Key</Label>
-                                <Input
-                                  type="password"
-                                  value={configForm.hubtel_api_key || ""}
-                                  onChange={(e) => updateConfigField("hubtel_api_key", e.target.value)}
-                                  placeholder="Hubtel API key"
-                                  className="h-9 text-sm"
-                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Your Hubtel Collection Account Number. Find it in your Hubtel business dashboard.
+                                </p>
                               </div>
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Currency</Label>
@@ -6080,7 +6088,7 @@ function VidoraApp() {
                               </div>
                             </div>
                             <Button
-                              onClick={() => handleSaveGatewayConfig("hubtel", ["hubtel_client_id", "hubtel_client_secret", "hubtel_merchant_id", "hubtel_api_key", "hubtel_currency"])}
+                              onClick={() => handleSaveGatewayConfig("hubtel", ["hubtel_client_id", "hubtel_client_secret", "hubtel_merchant_account_number", "hubtel_merchant_id", "hubtel_currency"])}
                               disabled={savingConfigKey === "hubtel"}
                               className="btn-gradient w-full sm:w-auto"
                             >

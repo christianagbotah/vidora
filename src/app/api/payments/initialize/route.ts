@@ -46,6 +46,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Fetch user details for Hubtel payee info (optional)
+    const user = await db.user.findUnique({ where: { id: userId } });
+
     // Initialize with the gateway
     const gateway = await getActiveGateway();
     const result = await gateway.initializePayment({
@@ -58,6 +61,8 @@ export async function POST(req: NextRequest) {
         paymentId: payment.id,
         userId,
         tokens: String(tokensPurchased),
+        ...(user?.name ? { userName: user.name } : {}),
+        ...(body.phone ? { phone: String(body.phone) } : {}),
       },
     });
 
