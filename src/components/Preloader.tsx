@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Clapperboard } from "lucide-react";
+import { useEffect, useState, useRef } from "react";
+import { Clapperboard, Loader2 } from "lucide-react";
 
 /**
  * Vidora Preloader
@@ -188,6 +188,99 @@ export function Preloader() {
             <span className="preloader-progress-label">Loading</span>
             <span className="preloader-progress-pct">{progress}%</span>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════
+   View Transition Overlay
+   ════════════════════════════════════════════════════════════════
+   A lightweight overlay shown during client-side view switches
+   (e.g. home → studio, studio → gallery). It listens for:
+     • vidora:view-loading  — fade in immediately
+     • vidora:view-ready   — fade out after a brief hold
+   Dispatched by page.tsx whenever currentView changes.
+   ════════════════════════════════════════════════════════════════ */
+
+const VIEW_TRANSITION_MIN = 280;  // ms — minimum visible time
+const VIEW_TRANSITION_MAX = 3000; // ms — hard cap
+
+export function ViewTransitionOverlay() {
+  const [visible, setVisible] = useState(false);
+  const [fading, setFading] = useState(false);
+  const [label, setLabel] = useState("Loading");
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const start = performance.now();
+
+    const clearTimers = () => {
+      timers.current.forEach(clearTimeout);
+      timers.current = [];
+    };
+
+    const onLoading = ((e: Event) => {
+      const ce = e as CustomEvent;
+      if (ce.detail?.label) setLabel(ce.detail.label);
+      else setLabel("Loading");
+      clearTimers();
+      setFading(false);
+      setVisible(true);
+    }) as EventListener;
+
+    const onReady = () => {
+      const elapsed = performance.now() - start;
+      const delay = Math.max(0, VIEW_TRANSITION_MIN - elapsed);
+
+      // Safety cap: auto-dismiss after MAX regardless
+      timers.current.push(
+        setTimeout(() => {
+          setFading(true);
+          timers.current.push(
+            setTimeout(() => {
+              setVisible(false);
+              setFading(false);
+            }, 320)
+          );
+        }, Math.min(delay + 80, VIEW_TRANSITION_MAX))
+      );
+    };
+
+    window.addEventListener("vidora:view-loading", onLoading);
+    window.addEventListener("vidora:view-ready", onReady);
+
+    return () => {
+      window.removeEventListener("vidora:view-loading", onLoading);
+      window.removeEventListener("vidora:view-ready", onReady);
+      clearTimers();
+    };
+  }, []);
+
+  if (!visible) return null;
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`fixed inset-0 z-[9998] flex flex-col items-center justify-center pointer-events-none
+        transition-opacity duration-300 ease-in-out ${fading ? "opacity-0" : "opacity-100"}`}
+      style={{ background: "rgba(7, 3, 15, 0.72)", backdropFilter: "blur(8px)" }}
+    >
+      <div className="flex flex-col items-center gap-4">
+        {/* Spinning Clapperboard */}
+        <div className="view-trans-spinner">
+          <div className="view-trans-spinner-inner">
+            <Clapperboard className="h-10 w-10 text-white/90" strokeWidth={1.5} />
+          </div>
+        </div>
+        {/* Label */}
+        <span className="view-trans-label">{label}</span>
+        {/* Shimmer bar */}
+        <div className="w-48 h-1 rounded-full bg-white/10 overflow-hidden">
+          <div className="view-trans-bar" />
         </div>
       </div>
     </div>

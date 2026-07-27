@@ -977,6 +977,31 @@ function VidoraApp() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [currentView]);
 
+  // ── Show ViewTransitionOverlay on view changes ──
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // Skip on first render (the main Preloader handles initial load)
+    const viewLabels: Record<string, string> = {
+      home: "Loading Home",
+      create: "Preparing Creator",
+      studio: "Opening Studio",
+      gallery: "Loading Gallery",
+      dashboard: "Loading Dashboard",
+      "buy-tokens": "Loading Tokens",
+      profile: "Loading Profile",
+      admin: "Loading Admin",
+    };
+    const label = viewLabels[currentView] || "Loading";
+    window.dispatchEvent(
+      new CustomEvent("vidora:view-loading", { detail: { label } })
+    );
+    // Let the view render, then signal ready
+    const timer = setTimeout(() => {
+      window.dispatchEvent(new Event("vidora:view-ready"));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [currentView]);
+
   // Auto-trigger generation on entering studio if there are pending scenes
   useEffect(() => {
     if (currentView === "studio" && currentProject && safeScenes.length > 0) {
