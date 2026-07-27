@@ -715,7 +715,7 @@ const HERO_SLIDES = [
     headline: "Character Systems",
     headlineAccent: "& Storyboarding",
     description: "Build character profiles with voice casting, manage multi-scene storyboards, and export broadcast-ready videos in any format.",
-    gradient: "from-black/80 via-cyan-950/60 to-black/85"
+    gradient: "from-black/80 via-cyan-950/60 to-black/85",
     orbColor: "violet",
   },
 ] as const;
