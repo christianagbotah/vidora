@@ -6308,9 +6308,9 @@ function VidoraApp() {
         }
       }}>
         <DialogContent className="sm:max-w-4xl p-0 overflow-hidden gap-0">
-          <div className="grid grid-cols-1 md:grid-cols-2">
-            {/* ── Left: Branding panel (hidden on mobile) ── */}
-            <div className="hidden md:flex relative flex-col justify-between p-8 bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600 text-white overflow-hidden">
+          <div className="grid grid-cols-1 sm:grid-cols-2">
+            {/* ── Left: Branding panel (hidden on small phones only; shows on tablets & desktops) ── */}
+            <div className="hidden sm:flex relative flex-col justify-between p-8 bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600 text-white overflow-hidden">
               <div className="absolute inset-0 opacity-20 pointer-events-none"
                 style={{ backgroundImage: "radial-gradient(circle at 20% 30%, rgba(255,255,255,0.4) 0%, transparent 40%), radial-gradient(circle at 80% 70%, rgba(255,255,255,0.3) 0%, transparent 40%)" }} />
               <div className="relative">
@@ -6350,7 +6350,7 @@ function VidoraApp() {
             {/* ── Right: Form panel ── */}
             <div className="flex flex-col p-6 sm:p-8 max-h-[90vh] overflow-y-auto">
               {/* Mobile-only header (branding panel is hidden on mobile) */}
-              <div className="md:hidden flex items-center gap-2.5 mb-5">
+              <div className="sm:hidden flex items-center gap-2.5 mb-5">
                 <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
                   <Clapperboard className="h-5 w-5" />
                 </div>

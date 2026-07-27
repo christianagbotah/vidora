@@ -1628,3 +1628,26 @@ Stage Summary:
 - The split-layout dialog with violet→fuchsia branding panel + Clapperboard logo is consistent with the header/footer branding.
 - The reset flow is fully functional: forgot → token stored in DB → reset URL (logged to server console since SMTP not configured) → token-validated reset → password updated → token consumed → auto-switch to login.
 - Artifacts: src/app/api/auth/forgot-password/route.ts (new), src/app/api/auth/reset-password/route.ts (new), src/app/page.tsx (4-mode auth dialog + handlers + URL param effect + password strength meter), prisma schema unchanged (SystemConfig table already existed).
+
+---
+Task ID: 14
+Agent: main
+Task: Fix tablet view for auth dialog (show split branding layout on tablets) + commit-and-push policy
+
+Work Log:
+- Diagnosed: the auth dialog's split branding layout used `md:` (768px) breakpoint — so small tablets in portrait (640-767px) got the single-column mobile view instead of the desktop split layout.
+- Changed three breakpoint classes in the auth dialog (src/app/page.tsx):
+  - Grid: `grid-cols-1 md:grid-cols-2` → `grid-cols-1 sm:grid-cols-2`
+  - Branding panel: `hidden md:flex` → `hidden sm:flex`
+  - Mobile-only header: `md:hidden` → `sm:hidden`
+- Now the split layout (branding panel + form panel side-by-side) activates at `sm` (640px)+, covering ALL tablets (iPad Mini portrait 768px, iPad portrait 768/810px, iPad Pro 11" 834px, small tablets 640px+). Only phones (<640px) get the single-column mobile layout with the compact Clapperboard header.
+- Verified with Agent Browser at three viewports:
+  - 768x1024 (iPad portrait): grid=383px 383px (two cols), branding visible, mobile header hidden ✅
+  - 640x960 (small tablet): grid=319px 319px (two cols), branding visible ("Welcome back to the studio." heading), mobile header hidden ✅
+  - 375x812 (phone): grid=343px (single col), mobile layout ✅
+- Lint passes clean (0 errors, 0 warnings).
+- Committed + pushed immediately (per new policy).
+
+Stage Summary:
+- Tablet view for login/signup/forgot-password/reset now matches the desktop split-layout view (violet→fuchsia branding panel on the left, form on the right). Only phones get the compact single-column layout.
+- POLICY NOTE (from user): Always commit and push to GitHub after EVERY single update to avoid losing files and hours of work. This is now the standing workflow for all future changes.
