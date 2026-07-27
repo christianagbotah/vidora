@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { zai, cleanLLMOutput, ZAIError } from "@/lib/zai";
+import { zai, cleanLLMOutput } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { consumePreviewQuota, refundPreviewQuota } from "@/lib/preview-limit";
 import { db } from "@/lib/db";
 import { PRICING } from "@/lib/pricing";
@@ -120,11 +121,14 @@ Return the JSON storyboard now.`;
     // Server-side failure (Z.ai down / insufficient balance) — refund the
     // quota so the user isn't penalized for a failure that wasn't their fault.
     await refundPreviewQuota(userId, "storyboard");
-    const message = err instanceof ZAIError ? err.message : "AI storyboard generation failed.";
-    return NextResponse.json(
-      { success: false, error: message, previewQuota: quota },
-      { status: 502 }
-    );
+    const resp = zaiErrorResponse(err, {
+      session: { role: (session.user as Record<string, unknown>).role as string },
+      fallbackStatus: 502,
+      logLabel: "preview-storyboard",
+    });
+    const body = await resp.json();
+    body.previewQuota = quota;
+    return NextResponse.json(body, { status: resp.status });
   }
 
   // ── Parse & validate the JSON ──

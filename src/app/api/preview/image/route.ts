@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { zai, ZAIError } from "@/lib/zai";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { applyWatermark } from "@/lib/watermark";
 import { consumePreviewQuota, refundPreviewQuota } from "@/lib/preview-limit";
 import { db } from "@/lib/db";
@@ -86,11 +87,16 @@ export async function POST(req: NextRequest) {
     // Server-side failure (Z.ai down / insufficient balance) — refund quota
     // so the user isn't penalized for a failure that wasn't their fault.
     await refundPreviewQuota(userId, "image");
-    const message = err instanceof ZAIError ? err.message : "Image generation failed.";
-    return NextResponse.json(
-      { success: false, error: message, previewQuota: quota },
-      { status: 502 }
-    );
+    // Use the differentiated responder — admins see raw detail, users see friendly copy.
+    const resp = zaiErrorResponse(err, {
+      session: { role: (session.user as Record<string, unknown>).role as string },
+      fallbackStatus: 502,
+      logLabel: "preview-image",
+    });
+    // Attach previewQuota onto the body so the client can still show remaining count.
+    const body = await resp.json();
+    body.previewQuota = quota;
+    return NextResponse.json(body, { status: resp.status });
   }
 
   // ── Apply the watermark ──

@@ -648,7 +648,9 @@ export async function tts(opts: TTSOptions): Promise<ArrayBuffer> {
   const body: CreateAudioTTSBody = {
     input: opts.input,
     voice: opts.voice ?? "tongtong",
-    response_format: opts.responseFormat ?? "mp3",
+    // Z.ai API only accepts "wav" (default), "pcm". Sending "mp3" returns
+    // error 1214 "不支持当前response_format值" (unsupported response_format).
+    response_format: opts.responseFormat ?? "wav",
     speed: opts.speed ?? 1,
     stream: false,
   };

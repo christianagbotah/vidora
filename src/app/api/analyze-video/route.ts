@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export async function POST(req: NextRequest) {
   let tempPath: string | null = null;
@@ -65,11 +68,10 @@ export async function POST(req: NextRequest) {
       suggestedPrompt,
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
-    console.error("Failed to analyze video:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to analyze video: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "analyze-video",
+    });
   }
 }

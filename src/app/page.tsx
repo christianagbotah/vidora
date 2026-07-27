@@ -27,6 +27,7 @@ import {
   Pencil, Power, Save, ChevronUp, ChevronDown, Sparkle, AlertCircle,
   Share2, Music2, Subtitles, Languages, BarChart2, Globe, Image as ImageIcon2,
   Building, Youtube, Instagram, Facebook, Send,
+  ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,7 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader,
@@ -54,6 +55,9 @@ import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
+import AIAssistant from "@/components/AIAssistant";
+import ScrollToTop from "@/components/ScrollToTop";
+import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES, DUBBING_LANGUAGE_COUNT } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -230,7 +234,7 @@ function SortableSceneCard({
   onPreview, onGenerate, onRetry, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
   isGeneratingNarration,
-  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, musicTracks,
+  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
   onPreview: (url: string) => void;
@@ -248,6 +252,7 @@ function SortableSceneCard({
   onGenerateSubtitles: (sceneId: string) => void;
   onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
   onGenerateDubbing: (sceneId: string, lang: string, langName: string) => void;
+  onDeleteDubbing: (sceneId: string, lang: string, langName: string) => void;
   musicTracks: Array<{ id: string; title: string; mood: string; url: string; duration: number }>;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition: dndTransition, isDragging } = useSortable({ id: scene.id });
@@ -392,7 +397,7 @@ function SortableSceneCard({
             )}
 
             {/* Actions */}
-            <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <div className="flex items-center gap-1.5 mt-3 flex-wrap">
               {!scene.videoUrl && scene.status !== "generating" && (
                 <Button
                   size="sm" variant="outline" className="h-7 text-xs px-2.5"
@@ -429,7 +434,7 @@ function SortableSceneCard({
                     disabled={isGeneratingNarration}
                   >
                     {isGeneratingNarration
-                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Generating...</>
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
                       : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
                     }
                   </Button>
@@ -447,7 +452,7 @@ function SortableSceneCard({
                 onValueChange={(v) => onSetMusic(scene.id, v === "none" ? null : v, scene.musicVolume || 30)}
               >
                 <SelectTrigger className="h-7 w-28 text-xs px-1.5">
-                  <Music2 className="h-3 w-3 mr-1 inline" />
+                  <Music2 className="h-3 w-3 mr-1 inline shrink-0" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -478,27 +483,36 @@ function SortableSceneCard({
                   {scene.burnSubtitles ? "Burn ✓" : "Burn"}
                 </Button>
               )}
-              {/* ── Dubbing Button ── */}
+              {/* ── Dubbing Selector (30+ languages, grouped) ── */}
               <Select
-                value="dub"
+                value=""
                 onValueChange={(v) => {
-                  const langs: Record<string, string> = {
-                    fr: "French", twi: "Twi", ga: "Ga", ha: "Hausa", es: "Spanish", sw: "Swahili",
-                  };
-                  if (langs[v]) onGenerateDubbing(scene.id, v, langs[v]);
+                  // Find the language in the shared catalog
+                  const lang = ALL_DUBBING_LANGUAGES.find((l) => l.code === v);
+                  if (lang) onGenerateDubbing(scene.id, lang.code, lang.name);
                 }}
               >
-                <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                  <Languages className="h-3 w-3 mr-1 inline" />
+                <SelectTrigger className="h-7 w-[88px] text-xs px-1.5 gap-1">
+                  <Languages className="h-3 w-3 shrink-0" />
                   <SelectValue placeholder="Dub" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="fr"><span className="text-xs">🇫🇷 French</span></SelectItem>
-                  <SelectItem value="twi"><span className="text-xs">🇬🇭 Twi</span></SelectItem>
-                  <SelectItem value="ga"><span className="text-xs">🇬🇭 Ga</span></SelectItem>
-                  <SelectItem value="ha"><span className="text-xs">🇬🇭 Hausa</span></SelectItem>
-                  <SelectItem value="es"><span className="text-xs">🇪🇸 Spanish</span></SelectItem>
-                  <SelectItem value="sw"><span className="text-xs">🇰🇪 Swahili</span></SelectItem>
+                <SelectContent className="min-w-[240px] max-h-[320px]">
+                  <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {DUBBING_LANGUAGE_COUNT} languages
+                  </div>
+                  {DUBBING_LANGUAGE_GROUPS.map((group) => (
+                    <SelectGroup key={group.label}>
+                      <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pt-2">
+                        {group.label}
+                      </SelectLabel>
+                      {group.languages.map((lang) => (
+                        <SelectItem key={lang.code} value={lang.code} className="text-xs">
+                          <span className="mr-1.5">{lang.flag}</span>
+                          {lang.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
@@ -524,11 +538,11 @@ function SortableSceneCard({
 
             {/* AI Director Controls */}
             <div className="mt-3 pt-3 border-t border-slate-100">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-2">
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Mood</Label>
                   <Select value={scene.mood || ""} onValueChange={(v) => onMoodChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Set mood" />
                     </SelectTrigger>
                     <SelectContent>
@@ -543,7 +557,7 @@ function SortableSceneCard({
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Camera</Label>
                   <Select value={scene.cameraMove || ""} onValueChange={(v) => onCameraChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Camera move" />
                     </SelectTrigger>
                     <SelectContent>
@@ -558,7 +572,7 @@ function SortableSceneCard({
                 <div>
                   <Label className="text-xs text-muted-foreground uppercase tracking-wider">Lighting</Label>
                   <Select value={scene.lighting || ""} onValueChange={(v) => onLightingChange(scene.id, v)}>
-                    <SelectTrigger className="h-9 text-sm px-1.5 mt-1">
+                    <SelectTrigger className="h-9 text-sm px-2 mt-1 w-full">
                       <SelectValue placeholder="Lighting" />
                     </SelectTrigger>
                     <SelectContent>
@@ -572,6 +586,54 @@ function SortableSceneCard({
                 </div>
               </div>
             </div>
+
+            {/* ── Dubbed Audio Tracks (translations) ── */}
+            {scene.translations && scene.translations.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Languages className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Dubbed Audio ({scene.translations.length})
+                  </span>
+                </div>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {scene.translations
+                    .filter((t) => t.status === "ready" && t.narrationUrl)
+                    .map((t) => {
+                      const langMeta = ALL_DUBBING_LANGUAGES.find((l) => l.code === t.lang);
+                      return (
+                        <div
+                          key={t.id}
+                          className="flex items-center gap-2 rounded-lg bg-violet-50/50 border border-violet-100 p-1.5"
+                        >
+                          <span className="text-base shrink-0">{langMeta?.flag || "🌐"}</span>
+                          <span className="text-xs font-medium shrink-0 min-w-[70px]">{t.langName}</span>
+                          <audio
+                            controls
+                            src={t.narrationUrl!}
+                            className="h-7 flex-1 min-w-0"
+                            preload="none"
+                          />
+                          <button
+                            onClick={() => onDeleteDubbing(scene.id, t.lang, t.langName)}
+                            className="shrink-0 p-1 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                            title={`Delete ${t.langName} dubbing`}
+                            aria-label={`Delete ${t.langName} dubbing`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  {scene.translations.some((t) => t.status === "generating") && (
+                    <div className="flex items-center gap-2 text-xs text-violet-500 px-1">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Generating dubbing…</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -714,6 +776,22 @@ function VidoraApp() {
   const [userTokens, setUserTokens] = useState(0);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
 
+  // ── Z.ai error differentiation helper ──
+  // Picks the right error string to show in toasts based on user role:
+  //  - Admins see `adminDetail` (raw diagnostic — e.g. "[ZAI auth (non-retryable) [HTTP 429]] Insufficient balance…")
+  //    so they can diagnose / recharge the Z.ai account.
+  //  - Regular users see `error` (friendly copy — e.g. "This AI feature is temporarily unavailable…")
+  //    so they're not exposed to internal billing/config details.
+  // Falls back to `fallback` when neither field is present.
+  const getApiError = useCallback(
+    (data: { error?: string; adminDetail?: string } | null | undefined, fallback = "Something went wrong. Please try again."): string => {
+      if (!data) return fallback;
+      if (userProfile?.role === "admin" && data.adminDetail) return data.adminDetail;
+      return data.error || fallback;
+    },
+    [userProfile],
+  );
+
   /* ── Admin State ── */
   const [adminUsers, setAdminUsers] = useState<unknown[]>([]);
   const [adminPayments, setAdminPayments] = useState<unknown[]>([]);
@@ -725,6 +803,13 @@ function VidoraApp() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // ── Sticky header: transparent at top, solid (with shadow) after scroll ──
+  const [headerScrolled, setHeaderScrolled] = useState(false);
+  // ── Contact dialog (opened from footer) ──
+  const [contactDialogOpen, setContactDialogOpen] = useState(false);
+  // ── Docs & API Reference dialogs (opened from footer) ──
+  const [docsDialogOpen, setDocsDialogOpen] = useState(false);
+  const [apiRefDialogOpen, setApiRefDialogOpen] = useState(false);
   // ── Admin: Token Package Management ──
   const [adminPackages, setAdminPackages] = useState<AdminTokenPackage[]>([]);
   const [editingPackage, setEditingPackage] = useState<AdminTokenPackage | null>(null);
@@ -827,6 +912,19 @@ function VidoraApp() {
     return () => { cancelled = true; };
   }, [fetchProjects]);
 
+  // ── Sticky header: add shadow + stronger bg once the user scrolls past 10px ──
+  useEffect(() => {
+    const onScroll = () => setHeaderScrolled(window.scrollY > 10);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // ── Scroll to top whenever the view changes (so the new view starts at top) ──
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [currentView]);
+
   // Auto-trigger generation on entering studio if there are pending scenes
   useEffect(() => {
     if (currentView === "studio" && currentProject && safeScenes.length > 0) {
@@ -853,7 +951,7 @@ function VidoraApp() {
         toast({ title: "Generation started", description: data.message });
         setTimeout(refreshProject, 5000);
       } else {
-        toast({ title: "Generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", description: "Failed to start generation", variant: "destructive" });
@@ -911,7 +1009,7 @@ function VidoraApp() {
           await refreshProject();
         }
       } else {
-        toast({ title: "Failed", description: data.error, variant: "destructive" });
+        toast({ title: "Failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1062,7 +1160,7 @@ function VidoraApp() {
         toast({ title: "AI portrait generated" });
         refreshProject();
       } else {
-        toast({ title: "Generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Portrait generation failed", variant: "destructive" });
@@ -1103,7 +1201,7 @@ function VidoraApp() {
         toast({ title: "Narration generated" });
         refreshProject();
       } else {
-        toast({ title: "Narration failed", description: data.error, variant: "destructive" });
+        toast({ title: "Narration failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Narration error", variant: "destructive" });
@@ -1144,60 +1242,52 @@ function VidoraApp() {
         refreshProject();
         toast({ title: "Scene enhanced by AI Director" });
       } else {
-        toast({ title: "Enhancement failed", description: data.error, variant: "destructive" });
+        toast({ title: "Enhancement failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error enhancing scene", variant: "destructive" });
     }
   };
 
-  const handleSceneMoodChange = async (sceneId: string, mood: string) => {
+  /**
+   * Optimistically updates a scene field in the local store so the UI
+   * reflects the change immediately (before the API round-trip completes).
+   * Then persists to the API and re-fetches the authoritative version.
+   */
+  const updateSceneField = async (
+    sceneId: string,
+    field: string,
+    value: string
+  ) => {
     if (!currentProject) return;
+    // Optimistic local update
+    setCurrentProject({
+      ...currentProject,
+      scenes: currentProject.scenes.map((s) =>
+        s.id === sceneId ? { ...s, [field]: value } : s
+      ),
+    });
     try {
       await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mood }),
+        body: JSON.stringify({ [field]: value }),
       });
       refreshProject();
     } catch { /* silent */ }
   };
 
-  const handleSceneCameraChange = async (sceneId: string, cameraMove: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cameraMove }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneMoodChange = (sceneId: string, mood: string) =>
+    updateSceneField(sceneId, "mood", mood);
 
-  const handleSceneLightingChange = async (sceneId: string, lighting: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lighting }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneCameraChange = (sceneId: string, cameraMove: string) =>
+    updateSceneField(sceneId, "cameraMove", cameraMove);
 
-  const handleSceneTransitionChange = async (sceneId: string, transition: string) => {
-    if (!currentProject) return;
-    try {
-      await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transition }),
-      });
-      refreshProject();
-    } catch { /* silent */ }
-  };
+  const handleSceneLightingChange = (sceneId: string, lighting: string) =>
+    updateSceneField(sceneId, "lighting", lighting);
+
+  const handleSceneTransitionChange = (sceneId: string, transition: string) =>
+    updateSceneField(sceneId, "transition", transition);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     if (!currentProject) return;
@@ -1239,7 +1329,7 @@ function VidoraApp() {
         setContinuityResult({ score: data.score, issues: data.issues || [], summary: data.summary });
         setContinuityDialogOpen(true);
       } else {
-        toast({ title: "Continuity check failed", description: data.error, variant: "destructive" });
+        toast({ title: "Continuity check failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1285,7 +1375,7 @@ function VidoraApp() {
         toast({ title: "Export complete!", description: data.message });
         refreshProject();
       } else {
-        toast({ title: "Export failed", description: data.error, variant: "destructive" });
+        toast({ title: "Export failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Export error", variant: "destructive" });
@@ -1313,7 +1403,7 @@ function VidoraApp() {
           description: `Found ${data.scenes.length} scene${data.scenes.length > 1 ? "s" : ""}${data.characters?.length ? ` and ${data.characters.length} character${data.characters.length > 1 ? "s" : ""}` : ""}`,
         });
       } else {
-        toast({ title: "Analysis failed", description: data.error, variant: "destructive" });
+        toast({ title: "Analysis failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error analyzing script", variant: "destructive" });
@@ -1336,7 +1426,7 @@ function VidoraApp() {
         setEnhancedText(data.enhancedPrompt);
         toast({ title: "Prompt enhanced", description: "Review the enhanced version below." });
       } else {
-        toast({ title: "Enhancement failed", description: data.error || "Could not enhance your prompt. Please try again.", variant: "destructive" });
+        toast({ title: "Enhancement failed", description: getApiError(data, "Could not enhance your prompt. Please try again."), variant: "destructive" });
       }
     } catch {
       toast({ title: "Enhancement failed", description: "Could not connect to the server. Please try again.", variant: "destructive" });
@@ -1599,7 +1689,7 @@ function VidoraApp() {
         toast({ title: "Subtitles generated!", description: "SRT captions are ready for this scene." });
         if (currentProject) refreshProject();
       } else {
-        toast({ title: "Subtitle generation failed", description: data.error, variant: "destructive" });
+        toast({ title: "Subtitle generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
@@ -1628,12 +1718,41 @@ function VidoraApp() {
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: `${langName} dubbing ready!`, description: "Translation + voice generated." });
+        toast({
+          title: `${langName} dubbing ready!`,
+          description: data.chunks > 1 ? `Translation + voice generated (${data.chunks} segments).` : "Translation + voice generated.",
+        });
+        // Reload project so the new translation + audio URL appear in the scene card
+        if (currentProject) refreshProject();
       } else {
-        toast({ title: "Dubbing failed", description: data.error, variant: "destructive" });
+        // The API now returns a friendly user-facing message by default.
+        // Admins get the raw diagnostic via `adminDetail`; users see "service
+        // temporarily unavailable" instead of internal billing details.
+        toast({
+          title: "Dubbing failed",
+          description: getApiError(data, "Please try again in a moment."),
+          variant: "destructive",
+        });
       }
     } catch {
-      toast({ title: "Error", variant: "destructive" });
+      toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
+    }
+  };
+
+  const handleDeleteDubbing = async (sceneId: string, lang: string, langName: string) => {
+    try {
+      const res = await fetch(`/api/scenes/${sceneId}/dubbing?lang=${encodeURIComponent(lang)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: `${langName} dubbing removed`, description: "The translation was deleted." });
+        if (currentProject) refreshProject();
+      } else {
+        toast({ title: "Could not delete", description: getApiError(data, "Please try again."), variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
     }
   };
 
@@ -1765,7 +1884,7 @@ function VidoraApp() {
         setPreviewQuota(data.previewQuota ? { storyboard: data.previewQuota, image: previewQuota?.image ?? { used: 0, limit: 3 } } : previewQuota);
         toast({ title: "Storyboard ready!", description: "See your scene-by-scene plan below." });
       } else {
-        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+        toast({ title: "Preview failed", description: getApiError(data), variant: "destructive" });
       }
       // Always refresh quota (backend may have refunded on server-side failure)
       fetchPreviewUsage();
@@ -1810,7 +1929,7 @@ function VidoraApp() {
         setPreviewQuota(data.previewQuota ? { image: data.previewQuota, storyboard: previewQuota?.storyboard ?? { used: 0, limit: 10 } } : previewQuota);
         toast({ title: "Style preview ready!", description: "Watermarked preview — buy tokens for the full HD video." });
       } else {
-        toast({ title: "Preview failed", description: data.error, variant: "destructive" });
+        toast({ title: "Preview failed", description: getApiError(data), variant: "destructive" });
       }
       // Always refresh quota (backend may have refunded on server-side failure)
       fetchPreviewUsage();
@@ -1841,7 +1960,7 @@ function VidoraApp() {
               setTextPrompt(d.transcription);
               toast({ title: "Transcription complete!" });
             } else {
-              toast({ title: "Transcription failed", description: d.error || "Could not process your audio. Please try again.", variant: "destructive" });
+              toast({ title: "Transcription failed", description: getApiError(d, "Could not process your audio. Please try again."), variant: "destructive" });
             }
           })
           .catch(() => {
@@ -2590,7 +2709,11 @@ function VidoraApp() {
   return (
     <div className="min-h-screen flex flex-col bg-background overflow-x-hidden">
       {/* ── Header ── */}
-      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-xl overflow-hidden">
+      <header className={`sticky top-0 z-50 border-b backdrop-blur-xl transition-all duration-300 overflow-hidden ${
+        headerScrolled
+          ? "bg-background/95 shadow-md shadow-black/5 border-slate-200/80"
+          : "bg-background/70 border-transparent"
+      }`}>
         <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-1.5 sm:gap-2 min-w-0 overflow-hidden">
           <button
             onClick={() => currentView !== "home" ? setCurrentView("home") : undefined}
@@ -2708,19 +2831,19 @@ function VidoraApp() {
                         variant="outline"
                         onClick={() => handleTryDemo()}
                         disabled={isCreatingDemo}
-                        className="glass-card text-white hover:text-white hover:bg-white/15 px-6 py-4 h-auto border-amber-300/40"
+                        className="glass-card text-white hover:text-white hover:bg-violet-500/20 px-6 py-4 h-auto !border-2 !border-violet-400/70 hover:!border-violet-300 shadow-lg shadow-violet-500/20"
                       >
                         {isCreatingDemo ? (
                           <><Loader2 className="h-4 w-4 sm:h-5 sm:w-5 mr-2 animate-spin" />Loading demo…</>
                         ) : (
-                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-amber-300" />Try Live Demo</>
+                          <><Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 text-violet-300" />Try Live Demo</>
                         )}
                       </Button>
                       <Button
                         size="lg"
                         variant="outline"
                         onClick={() => setCurrentView("gallery")}
-                        className="glass-card text-white/80 hover:text-white hover:bg-white/10 px-6 py-4 h-auto"
+                        className="glass-card text-white/90 hover:text-white hover:bg-fuchsia-500/20 px-6 py-4 h-auto !border-2 !border-fuchsia-400/70 hover:!border-fuchsia-300 shadow-lg shadow-fuchsia-500/20"
                       >
                         <LayoutGrid className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />Browse Templates
                       </Button>
@@ -2994,42 +3117,6 @@ function VidoraApp() {
                 </section>
               )}
 
-              {/* Footer */}
-              <footer className="mt-auto border-t bg-slate-50/50">
-                <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-8">
-                    <div className="sm:col-span-2">
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-                          <Clapperboard className="h-3.5 w-3.5 text-white" />
-                        </div>
-                        <span className="font-extrabold text-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">Vidora</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground leading-relaxed max-w-sm">
-                        Professional AI video studio. Create stunning videos from scripts, text prompts, voice, or images with AI-powered scene generation.
-                      </p>
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-sm mb-3">Product</h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li><button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors">Create Video</button></li>
-                        <li><button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors">Templates</button></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Features</span></li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-sm mb-3">Support</h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Documentation</span></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">API Reference</span></li>
-                        <li><span className="hover:text-violet-500 transition-colors cursor-default">Contact</span></li>
-                      </ul>
-                    </div>
-                  </div>
-                  <Separator className="my-6" />
-                  <p className="text-xs text-muted-foreground text-center">&copy; {new Date().getFullYear()} Vidora AI. Professional AI Video Studio.</p>
-                </div>
-              </footer>
             </motion.div>
           )}
 
@@ -3884,6 +3971,7 @@ function VidoraApp() {
                               onGenerateSubtitles={handleGenerateSubtitles}
                               onToggleBurnSubtitles={handleToggleBurnSubtitles}
                               onGenerateDubbing={handleGenerateDubbing}
+                              onDeleteDubbing={handleDeleteDubbing}
                               musicTracks={musicTracks}
                             />
                           ))}
@@ -5421,6 +5509,140 @@ function VidoraApp() {
         </nav>
       )}
 
+      {/* ── Global Footer (renders on ALL views) ── */}
+      <footer className="mt-auto border-t bg-slate-50/50 pb-20 md:pb-0">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-8">
+            <div className="sm:col-span-2">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                  <Clapperboard className="h-3.5 w-3.5 text-white" />
+                </div>
+                <span className="font-extrabold text-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 bg-clip-text text-transparent">Vidora</span>
+              </div>
+              <p className="text-sm text-muted-foreground leading-relaxed max-w-sm">
+                Professional AI video studio. Create stunning videos from scripts, text prompts, voice, or images with AI-powered scene generation.
+              </p>
+              <div className="flex items-center gap-3 mt-4">
+                <a
+                  href="https://youtube.com/@vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors"
+                  aria-label="YouTube"
+                  title="@vidorapro on YouTube"
+                >
+                  <Youtube className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://instagram.com/vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-pink-600 hover:border-pink-200 transition-colors"
+                  aria-label="Instagram"
+                  title="@vidorapro on Instagram"
+                >
+                  <Instagram className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://facebook.com/vidorapro"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-colors"
+                  aria-label="Facebook"
+                  title="@vidorapro on Facebook"
+                >
+                  <Facebook className="h-4 w-4" />
+                </a>
+                <a
+                  href="mailto:vidora@lightworldtech.com"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-violet-600 hover:border-violet-200 transition-colors"
+                  aria-label="Email"
+                  title="vidora@lightworldtech.com"
+                >
+                  <MailIcon className="h-4 w-4" />
+                </a>
+                <a
+                  href="https://wa.me/233243618186"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-8 w-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-500 hover:text-emerald-600 hover:border-emerald-200 transition-colors"
+                  aria-label="WhatsApp"
+                  title="Chat on WhatsApp: 0243618186"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+            <div>
+              <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                <Layers className="h-3.5 w-3.5 text-violet-500" />Product
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>
+                  <button onClick={() => setCurrentView("create")} className="hover:text-violet-500 transition-colors text-left">
+                    Create Video
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => setCurrentView("gallery")} className="hover:text-violet-500 transition-colors text-left">
+                    Templates
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => handleTryDemo()} className="hover:text-violet-500 transition-colors text-left">
+                    Features
+                  </button>
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-bold text-sm mb-3 flex items-center gap-1.5">
+                <Shield className="h-3.5 w-3.5 text-fuchsia-500" />Support
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>
+                  <button
+                    onClick={() => setDocsDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <BookOpen className="h-3 w-3" />Documentation
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setApiRefDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <Code className="h-3 w-3" />API Reference
+                  </button>
+                </li>
+                <li>
+                  <button
+                    onClick={() => setContactDialogOpen(true)}
+                    className="hover:text-violet-500 transition-colors flex items-center gap-1 text-left"
+                  >
+                    <Phone className="h-3 w-3" />Contact
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <Separator className="my-6" />
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground text-center sm:text-left">
+              &copy; {new Date().getFullYear()} Vidora AI · A product of LightWorld Technologies.
+            </p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Globe className="h-3 w-3" />
+              <a href="https://vidora.lightworldtech.com" className="hover:text-violet-500 transition-colors" target="_blank" rel="noopener noreferrer">
+                vidora.lightworldtech.com
+              </a>
+            </p>
+          </div>
+        </div>
+      </footer>
+
       {/* ═══════════════════════════════════════════════════════
           MOBILE NAVIGATION DRAWER (hamburger menu)
           ═══════════════════════════════════════════════════════ */}
@@ -6330,6 +6552,231 @@ function VidoraApp() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Contact Dialog (opened from footer) ── */}
+      <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <Phone className="h-4 w-4 text-white" />
+              </div>
+              Get in Touch
+            </DialogTitle>
+            <DialogDescription>
+              We'd love to hear from you. Reach out with any questions, feedback, or partnership ideas.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <a
+              href="mailto:vidora@lightworldtech.com"
+              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-colors group"
+            >
+              <div className="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 group-hover:bg-violet-200 transition-colors shrink-0">
+                <MailIcon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Email Us</p>
+                <p className="text-xs text-muted-foreground truncate">vidora@lightworldtech.com</p>
+              </div>
+            </a>
+            <a
+              href="https://wa.me/233243618186"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
+            >
+              <div className="h-10 w-10 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-200 transition-colors shrink-0">
+                <MessageCircle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">WhatsApp</p>
+                <p className="text-xs text-muted-foreground truncate">0243618186</p>
+              </div>
+            </a>
+            <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+              <div className="h-10 w-10 rounded-lg bg-fuchsia-100 flex items-center justify-center text-fuchsia-600 shrink-0">
+                <Globe className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Website</p>
+                <p className="text-xs text-muted-foreground truncate">vidora.lightworldtech.com</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+              <Bot className="h-5 w-5 text-violet-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-muted-foreground">
+                Need a quick answer? Try our <strong className="text-violet-600">AI Assistant</strong> —
+                click the chat bubble in the bottom-right corner. It's available 24/7 and can help with
+                most questions instantly.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setContactDialogOpen(false)}>
+              Close
+            </Button>
+            <Button
+              className="btn-gradient"
+              onClick={() => {
+                setContactDialogOpen(false);
+                window.location.href = "mailto:vidora@lightworldtech.com";
+              }}
+            >
+              <MailIcon className="h-4 w-4 mr-1.5" /> Send Email
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Documentation Dialog (opened from footer) ── */}
+      <Dialog open={docsDialogOpen} onOpenChange={setDocsDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <BookOpen className="h-4 w-4 text-white" />
+              </div>
+              Vidora Documentation
+            </DialogTitle>
+            <DialogDescription>
+              Everything you need to create AI-powered videos with Vidora.
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4 -mr-4">
+            <div className="space-y-5 text-sm">
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Sparkles className="h-4 w-4 text-violet-500" />Quick Start</h3>
+                <ol className="space-y-2 text-muted-foreground list-decimal list-inside pl-1">
+                  <li>Click <strong className="text-foreground">Start Creating</strong> from the home page.</li>
+                  <li>Choose an input mode: <strong className="text-foreground">Text</strong>, <strong className="text-foreground">Voice</strong>, or <strong className="text-foreground">Image</strong>.</li>
+                  <li>Write or paste your script, then click <strong className="text-foreground">Enhance Prompt</strong> to let AI refine it.</li>
+                  <li>Pick a visual style (Cinematic, Anime, Photorealistic, etc.) and aspect ratio.</li>
+                  <li>Generate scenes — each scene gets an AI image + 10s video clip.</li>
+                  <li>Open the Studio to arrange, dub, subtitle, and add music.</li>
+                  <li>Export the final video or share a public link.</li>
+                </ol>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Wand2 className="h-4 w-4 text-fuchsia-500" />AI Director Controls</h3>
+                <p className="text-muted-foreground mb-2">Per-scene cinematic controls:</p>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li><strong className="text-foreground">Camera:</strong> Aerial Drone, Dolly Zoom, Crane Shot, Handheld, Static Wide.</li>
+                  <li><strong className="text-foreground">Lighting:</strong> Golden Hour, Neon, Soft Box, Backlit, Natural.</li>
+                  <li><strong className="text-foreground">Mood:</strong> Epic, Intimate, Tense, Dreamy, Melancholic.</li>
+                  <li><strong className="text-foreground">Music:</strong> Orchestral, Lo-fi, Electronic, Ambient, Cinematic.</li>
+                  <li><strong className="text-foreground">Transition:</strong> Cut, Fade, Dissolve, Wipe, Zoom.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Languages className="h-4 w-4 text-violet-500" />Dubbing & Subtitles</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li>Generate dubbed audio in <strong className="text-foreground">30+ languages</strong> including English, French, Twi, Yoruba, Hausa, Swahili.</li>
+                  <li>Each dubbed track appears as a playable audio row inside the scene card.</li>
+                  <li>Auto-generated SRT subtitles can be toggled on/off per scene.</li>
+                  <li>Delete a dubbed track anytime — the source audio file is cleaned up.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Share2 className="h-4 w-4 text-fuchsia-500" />Sharing & Brand Kit</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li><strong className="text-foreground">Share Pages:</strong> generate a public link with optional password protection.</li>
+                  <li><strong className="text-foreground">Brand Kit:</strong> upload logo, brand colors, fonts — auto-applied to intros/outros.</li>
+                  <li><strong className="text-foreground">Embed:</strong> copy an iframe snippet for any external site.</li>
+                  <li><strong className="text-foreground">Analytics:</strong> view counts tracked per share page.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Coins className="h-4 w-4 text-amber-500" />Tokens & Billing</h3>
+                <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
+                  <li>Each image generation costs <strong className="text-foreground">1 token</strong>, each video clip <strong className="text-foreground">3 tokens</strong>.</li>
+                  <li>Buy tokens via Paystack (Ghana), Hubtel, or Stripe (international).</li>
+                  <li>Free guests get a no-signup demo. Sign in to save projects and earn bonus tokens.</li>
+                </ul>
+              </section>
+              <Separator />
+              <section>
+                <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><MailIcon className="h-4 w-4 text-violet-500" />Need More Help?</h3>
+                <p className="text-muted-foreground">
+                  Reach us at <a href="mailto:vidora@lightworldtech.com" className="text-violet-600 hover:underline font-medium">vidora@lightworldtech.com</a> or WhatsApp <a href="https://wa.me/233243618186" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline font-medium">0243618186</a>. You can also use the AI Assistant chat bubble (bottom-right) for instant answers.
+                </p>
+              </section>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDocsDialogOpen(false)}>Close</Button>
+            <Button className="btn-gradient" onClick={() => { setDocsDialogOpen(false); setCurrentView("create"); }}>
+              <Sparkles className="h-4 w-4 mr-1.5" /> Start Creating
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── API Reference Dialog (opened from footer) ── */}
+      <Dialog open={apiRefDialogOpen} onOpenChange={setApiRefDialogOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+                <Code className="h-4 w-4 text-white" />
+              </div>
+              Vidora API Reference
+            </DialogTitle>
+            <DialogDescription>
+              REST endpoints for projects, scenes, and AI generation. All routes are relative to your deployment origin.
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4 -mr-4">
+            <div className="space-y-4 text-sm font-mono">
+              {[
+                { method: "GET", path: "/api/projects", desc: "List all video projects for the signed-in user." },
+                { method: "POST", path: "/api/projects", desc: "Create a new video project. Body: { title, description, style, aspectRatio }." },
+                { method: "GET", path: "/api/projects/:id", desc: "Fetch a single project with all scenes, characters, and translations." },
+                { method: "PUT", path: "/api/projects/:id", desc: "Update project metadata or reorder scenes." },
+                { method: "DELETE", path: "/api/projects/:id", desc: "Delete a project and its scenes." },
+                { method: "POST", path: "/api/projects/:id/scenes", desc: "Add a new scene to a project." },
+                { method: "PUT", path: "/api/projects/:id/scenes/:sceneId", desc: "Update scene prompt, AI Director controls, status." },
+                { method: "DELETE", path: "/api/projects/:id/scenes/:sceneId", desc: "Delete a scene." },
+                { method: "POST", path: "/api/enhance-prompt", desc: "LLM-powered prompt enhancement. Body: { prompt }." },
+                { method: "POST", path: "/api/generate-scene", desc: "Generate an AI image for a scene. Body: { sceneId, prompt, style }." },
+                { method: "POST", path: "/api/generate-video", desc: "Batch-generate video clips for all ready scenes in a project." },
+                { method: "POST", path: "/api/transcribe", desc: "ASR — transcribe an uploaded audio file to text." },
+                { method: "POST", path: "/api/analyze-video", desc: "VLM — analyze an uploaded video and return scene descriptions." },
+                { method: "GET", path: "/api/scenes/:id/dubbing", desc: "List dubbed audio translations for a scene + language catalog." },
+                { method: "POST", path: "/api/scenes/:id/dubbing", desc: "Generate a dubbed audio track. Body: { lang }." },
+                { method: "DELETE", path: "/api/scenes/:id/dubbing?lang=xx", desc: "Delete a single dubbed translation by language code." },
+                { method: "GET", path: "/api/history", desc: "List generation history for the signed-in user." },
+                { method: "GET", path: "/api/payments/packages", desc: "List available token packages." },
+                { method: "POST", path: "/api/assistant/chat", desc: "AI assistant chat. Body: { messages: [{role, content}] }." },
+              ].map((endpoint) => (
+                <div key={endpoint.path + endpoint.method} className="border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${endpoint.method === "GET" ? "bg-emerald-100 text-emerald-700" : endpoint.method === "POST" ? "bg-violet-100 text-violet-700" : endpoint.method === "PUT" ? "bg-amber-100 text-amber-700" : "bg-rose-100 text-rose-700"}`}>{endpoint.method}</span>
+                    <code className="text-xs text-foreground break-all">{endpoint.path}</code>
+                  </div>
+                  <p className="text-xs text-muted-foreground font-sans pl-1">{endpoint.desc}</p>
+                </div>
+              ))}
+              <div className="border border-violet-200 bg-violet-50/50 rounded-lg p-3 mt-4 font-sans">
+                <p className="text-xs text-muted-foreground">
+                  <strong className="text-violet-700">Auth:</strong> All endpoints except <code className="text-violet-700">/api/assistant/chat</code> and the public share page require a NextAuth session cookie. Guest demo projects (no userId) are accessible without auth.
+                </p>
+              </div>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApiRefDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Global floating widgets: AI chat + scroll-to-top ── */}
+      <AIAssistant />
+      <ScrollToTop />
 
     </div>
   );

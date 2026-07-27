@@ -1099,31 +1099,484 @@ Stage Summary:
 ---
 Task ID: 12
 Agent: main
-Task: Fix preloader not animating / page blank until data arrives
+Task: Fix scene card select fields (Mood, Camera, Lighting, Language) not selecting + mobile overlap issues
 
 Work Log:
-- Diagnosed root cause: the Preloader component did not exist on disk (lost from prior session) and layout.tsx no longer rendered it — so nothing covered the blank period between first paint and post-hydration data fetch. page.tsx is a client component that fetches /api/projects on mount, leaving a blank screen.
-- Rebuilt Preloader from scratch (src/components/Preloader.tsx) with a bulletproof motion strategy:
-  - All core visuals driven by pure CSS keyframes (preloader-spin, preloader-gradient, preloader-pulse, preloader-shimmer) so they are guaranteed to animate from the very first SSR paint — no dependency on React hydration or Framer Motion timing.
-  - requestAnimationFrame loop drives a determinate progress counter (0% → ~88% while waiting, → 100% on ready) plus the progress-bar width.
-  - Indeterminate shimmer overlay always animates on top of the bar as a motion guarantee.
-  - Dismiss logic: listens for custom `vidora:ready` event (dispatched by page.tsx) AND native `window.load`; stays visible for MIN_DISPLAY (1200ms); hard-capped at MAX_DISPLAY (5500ms); fades out via CSS transition (opacity+visibility) over 600ms; body scroll locked while visible.
-  - Logo uses Clapperboard (lucide-react) + violet→fuchsia gradient, consistent with header/footer branding.
-  - prefers-reduced-motion: disables all animations.
-- Added 7 keyframes + full preloader styles to globals.css (.preloader-root, -bg, -orbs, -logo-wrap, -orbit, -dot-1/2/3, -ring, -logo, -wordmark, -tagline, -progress-wrap/track/fill/shimmer/meta/label/pct, plus reduced-motion guard).
-- Wired <Preloader /> into src/app/layout.tsx (rendered before {children}) so it is part of the SSR shell — appears instantly on first paint, covering the blank-to-contented transition for BOTH / and /share/[slug] routes.
-- Updated page.tsx mount effect: awaits fetchProjects() then dispatches window event `vidora:ready` via requestAnimationFrame so the preloader dismisses precisely when the initial critical data fetch has resolved and the first data-render has painted.
-- Verified end-to-end with Agent Browser:
-  - SSR HTML contains preloader markup (confirmed via curl grep: preloader-root, preloader-orbit, preloader-progress-track, preloader-wordmark all present in raw HTML) → shows on first paint before hydration.
-  - Immediately after reload: preloader present, ALL animations running — orbitAnim=preloader-spin 1.7s (running), shimmerAnim=preloader-shimmer 1.5s (running), logoAnim=preloader-gradient,preloader-pulse (running, running), fading=false.
-  - Progress advances visibly: 95% at ~500ms, 100% at ~1.1s, then fades.
-  - At ~2.8s: preloader removed from DOM (preloaderPresent=false), body overflow restored (scroll unlocked), hero "Create Production-Ready AI Videos" visible, 3176 chars of page content rendered.
-  - Console: zero errors (only React DevTools info + HMR logs).
-  - Dev log: zero errors/warnings related to preloader.
-- Lint passes clean (0 errors, 0 warnings).
+- Root cause analysis: The "selects not working" bug had THREE underlying causes:
+  1. **Scene PUT API didn't accept mood/cameraMove/lighting** — the route only destructured `prompt, enhancedPrompt, duration, transition, status, imageUrl`. All other fields were silently ignored, so selecting a mood/camera/lighting saved nothing.
+  2. **No `lighting` column in the database** — the VideoScene schema had no `lighting` field at all, so even if the API accepted it, there was nowhere to store it.
+  3. **No optimistic local updates** — even for fields that DID work (like mood on some flows), the UI didn't update until the async API call + refreshProject() completed, making selects feel "stuck".
+- Additional issues found:
+  4. **Dubbing Select had `value="dub"`** — a static value that didn't match any SelectItem ("fr", "twi", etc.), causing Radix Select to behave incorrectly.
+  5. **Mobile layout: `grid-cols-3`** for AI Director Controls was too cramped on mobile — selects overlapped and were too narrow to tap.
+  6. **SelectTrigger widths** used fixed `px-1.5` with no `w-full`, causing inconsistent widths.
+
+- Fixes applied:
+  • Added `lighting String?` field to VideoScene in prisma/schema.prisma, ran `db:push` + `prisma generate` to sync DB + regenerate Prisma Client
+  • Added `lighting?: string | null` to VideoScene TypeScript interface in src/types/video.ts
+  • Updated scene PUT API route (`/api/projects/[id]/scenes/[sceneId]/route.ts`) to accept ALL editable fields: mood, cameraMove, lighting, narrationVoice, narrationLang, title, visualNote, dialogue (in addition to existing prompt, enhancedPrompt, duration, transition, status, imageUrl). Each field uses `field: field || null` to properly clear values when empty string is passed.
+  • Created `updateSceneField()` helper in page.tsx that does OPTIMISTIC local state update (updates currentProject.scenes in the Zustand store immediately) THEN makes the API call THEN refreshes. This makes all selects feel instant.
+  • Refactored handleSceneMoodChange, handleSceneCameraChange, handleSceneLightingChange, handleSceneTransitionChange to use the new helper (reduced from 4 separate async functions to 4 one-liners).
+  • Fixed dubbing Select: changed `value="dub"` to `value=""` (uncontrolled with placeholder "Dub") so Radix Select works correctly — selecting a language fires onValueChange which triggers the dubbing generation.
+  • Fixed mobile layout: AI Director Controls grid changed from `grid-cols-3 gap-2` to `grid-cols-1 sm:grid-cols-3 gap-2` — dropdowns stack vertically on mobile (full-width, easy to tap), 3-column grid on desktop.
+  • Made all AI Director SelectTriggers `w-full` (instead of auto-width) so they fill their grid cell properly on both mobile and desktop.
+  • Added `shrink-0` to inline icons in action bar selects (Music, Dub) to prevent icon compression when wrapping.
+  • Tightened action bar spacing from `gap-2` to `gap-1.5` for better mobile fit.
+  • Shortened "Generating..." to "..." on the Narrate button to save space on mobile.
+
+- Restarted dev server to pick up the new Prisma Client (Turbopack caches the old client).
+
+- Verified end-to-end:
+  • API tests (curl): PUT /api/projects/{id}/scenes/{sceneId} with {lighting:"golden hour"} → 200, DB executes SET lighting = ? ✅
+  • API tests: PUT with {mood:"epic"} → 200, SET mood = ? ✅
+  • API tests: PUT with {cameraMove:"tracking shot"} → 200, SET cameraMove = ? ✅
+  • Browser test (desktop 1280px): Opened demo → scrolled to scene card → Mood/Camera/Lighting in clean 3-column grid → clicked Lighting → dropdown opened → selected "Golden Hour" → combobox immediately showed "Golden Hour" (optimistic update) → DB UPDATE executed → PUT 200 ✅
+  • Browser test: Selected "Epic" mood → combobox showed "Epic" immediately ✅
+  • Browser test (mobile 375px): AI Director Controls stack vertically (full-width) → action bar wraps into 3 rows without overlap → all touch targets ≥44px ✅
+  • Lint passes clean (0 errors, 0 warnings)
 
 Stage Summary:
-- PROBLEM SOLVED: The page no longer remains blank until data arrives. A cinematic preloader (dark gradient bg, orbiting violet/rose/amber dots, pulsing gradient logo tile, animated "Vidora" wordmark, determinate progress bar with shimmer overlay + live percentage) now appears instantly on first paint and dismisses smoothly once the app's initial data fetch completes.
-- Root cause of the earlier "not animating" bug: the previous Preloader relied on Framer Motion + a sessionStorage skip that prevented returning visitors from ever seeing it. The new version uses pure CSS keyframes (guaranteed motion) and always shows on full page load (no sessionStorage skip).
-- Architecture: Preloader is a global client component rendered in layout.tsx (SSR'd shell). page.tsx signals readiness via a `vidora:ready` window event after fetchProjects resolves. Fallbacks: window.load + 5.5s hard cap ensure it never hangs.
-- Artifacts: src/components/Preloader.tsx (new), src/app/globals.css (preloader keyframes/styles), src/app/layout.tsx (Preloader render), src/app/page.tsx (vidora:ready dispatch in mount effect).
+- ALL select fields now work: Mood, Camera, Lighting, Transition, Narration Voice, Music, Dubbing language — every select saves to the database and updates the UI instantly via optimistic updates.
+- The `lighting` field was completely missing from the database schema — now added and working.
+- Mobile layout fixed: AI Director Controls (Mood/Camera/Lighting) stack vertically on mobile, 3-column grid on desktop. Action bar wraps properly without overlap.
+- Dubbing select fixed: was using a static `value="dub"` that broke Radix Select — now uses `value=""` with placeholder.
+- The optimistic update pattern (`updateSceneField` helper) can be reused for any future scene field edits — it updates the local store immediately, then persists to the API, then refreshes the authoritative version.
+
+---
+Task ID: 13
+Agent: main
+Task: Fix dubbing: "Dubbing is failing. The languages are limited, can we add more? I cannot see English"
+
+Work Log:
+- Root cause analysis found FIVE bugs causing dubbing to fail + limited languages:
+  1. **Frontend hardcoded only 6 languages** (fr, twi, ga, ha, es, sw) — English was completely missing from the dropdown, even though the backend supported it.
+  2. **`zai.chat()` called with wrong parameter** — the dubbing route passed `{ messages: [{role:"user", content:...}] }` but the `ChatOptions` interface expects `{ systemPrompt?, userPrompt }`. The `messages` field was silently ignored, `userPrompt` was undefined, so Z.ai rejected with "API 调用参数有误" (API parameters incorrect). The SAME bug existed in the subtitles route.
+  3. **`zai.tts()` called with wrong parameter name** — the dubbing route passed `{ text: ... }` but `TTSOptions` expects `{ input: ... }`. The `input` was undefined.
+  4. **Wrong buffer conversion** — `Buffer.from(arrayBuffer, "base64")` treated the ArrayBuffer's raw bytes AS IF they were base64 text → corrupt audio. Should be `Buffer.from(new Uint8Array(arrayBuffer))`.
+  5. **TTS `response_format: "mp3"` rejected by Z.ai** — the API returns error 1214 "不支持当前response_format值" (unsupported response_format). The Z.ai CLI docs show the default is "wav", not "mp3".
+  6. **Turbopack dev server intercepts `fs.writeFile`** — files written to `public/` (or anywhere in the project dir) at runtime go into a VIRTUAL filesystem layer (for HMR tracking) and are NOT visible to the real filesystem. `fs.existsSync` returns true (sees the virtual file) but `ls` and HTTP serving can't find it. This affected both the dubbing and narration routes.
+
+- Fixes applied:
+  • Created `src/lib/dubbing-languages.ts` — single source of truth for the language catalog, with 31 languages in 5 groups (Popular, European, Asian, West African, Other African). English is first.
+  • Rewrote the frontend dubbing Select to import from the shared lib, render with `SelectGroup`/`SelectLabel` for visual grouping, wider dropdown (min-w-[240px], max-h-[320px] scrollable), compact trigger (w-[88px]).
+  • Fixed the dubbing API route's `zai.chat()` call: changed `{ messages: [...] }` → `{ systemPrompt: "...", userPrompt: sourceText }`.
+  • Fixed the subtitles API route's `zai.chat()` call: same fix (messages → systemPrompt + userPrompt).
+  • Fixed the dubbing API route's `zai.tts()` call: changed `{ text: ... }` → `{ input: ... }`.
+  • Fixed buffer conversion: `Buffer.from(new Uint8Array(arrayBuffer))`.
+  • Changed `zai.ts` TTS default `response_format` from `"mp3"` to `"wav"` (Z.ai rejects mp3 with error 1214).
+  • Updated dubbing + narration routes to save files as `.wav` instead of `.mp3`.
+  • Created `src/lib/audio-storage.ts` — helper that writes audio files to `/tmp/vidora-audio/` using `execFileSync('bash', ['-c', 'cat > file'])` to BYPASS Turbopack's fs interception. Reads still use `fs.readFile` (works fine — only writes are intercepted).
+  • Created `/api/audio/[filename]/route.ts` — serves audio files from `/tmp/vidora-audio/` with correct Content-Type (audio/wav, audio/mpeg), path-traversal protection, and 24h cache headers.
+  • Updated dubbing + narration routes to use the audio-storage helper for all file writes (chunks, concat list, final file).
+  • Fixed `concatMp3Files` single-chunk case: was returning `true` without creating the output file (the chunk was at `chunkPaths[0]`, not at `outputPath`). Now copies the single chunk to the output path via bash `cp`.
+  • Improved frontend error UX: `handleGenerateDubbing` now detects Z.ai balance/quota errors (1113, 1112, "insufficient balance") and shows a clearer toast: "Dubbing unavailable — The AI voice service is out of credit."
+
+- Verified end-to-end with Agent Browser (desktop 1280px + mobile 375px):
+  • Dubbing dropdown shows ALL 31 languages with proper grouping (Popular/European/Asian/West African/Other African) — English is at the top ✅
+  • Selected English → POST /api/scenes/{id}/dubbing 200 in 2.0s → LLM translated "Before the world woke, the mountains held the light." → TTS generated 157KB WAV → file written to /tmp/vidora-audio/ → served via /api/audio/ with Content-Type: audio/wav ✅
+  • Selected French → POST 200 in 2.8s → translated "Narrateur : Avant que le monde ne s'éveille, les montaines gardaient la lumière." → 245KB WAV ✅
+  • Mobile (375px): dropdown is compact (w-[88px] trigger), opens to a scrollable grouped list, no overlap with other scene card elements ✅
+  • Zero browser console errors across all tests ✅
+  • Lint passes clean (0 errors, 0 warnings) ✅
+
+Stage Summary:
+- Dubbing is now FULLY FUNCTIONAL end-to-end: language selection → LLM translation → TTS synthesis → audio file persistence → browser playback.
+- The language catalog expanded from 6 to 31 languages, with English prominently at the top.
+- Five code-level bugs were fixed (wrong chat param, wrong TTS param, wrong buffer conversion, wrong response_format, Turbopack fs interception).
+- The Turbopack fs interception issue was the most insidious — `fs.writeFile` appeared to succeed (existsSync=true) but files were invisible on disk. Solved by routing all audio file writes through bash child processes.
+- The same fixes also fix the narration route (generate-narration) which had the same mp3 + Turbopack issues.
+- The subtitles route's `zai.chat()` bug is also fixed — subtitles will now generate correctly once Z.ai balance is recharged.
+- Artifacts: src/lib/dubbing-languages.ts (new), src/lib/audio-storage.ts (new), src/app/api/audio/[filename]/route.ts (new), src/app/api/scenes/[id]/dubbing/route.ts (rewritten), src/app/api/scenes/[id]/subtitles/route.ts (chat fix), src/app/api/generate-narration/route.ts (wav + audio-storage), src/lib/zai.ts (TTS default wav), src/app/page.tsx (grouped dubbing Select + better error toast)
+
+---
+Task ID: push-1
+Agent: main (orchestrator)
+Task: commit and push updates
+
+Work Log:
+- Checked git status: working tree clean but branch was 5 commits ahead of origin/main
+- Discovered critical issue: committed prisma/schema.prisma was set to `sqlite` (temporary local-testing state), but VPS deploy uses PostgreSQL → pushing as-is would break production (`bun install` triggers prisma generate against postgres DATABASE_URL)
+- Verified the production backup `prisma/schema.prisma.prod.bak` was STALE: missing all 8 advanced-feature models (BrandKit, SceneTranslation, SocialConnection, SocialPublish, ProjectTemplate, VideoView, Workspace, WorkspaceMember) added during the 9 advanced features work
+- Could NOT simply restore the .bak (would delete those features). Instead converted the CURRENT full schema to PostgreSQL:
+  - provider: sqlite → postgresql
+  - re-added @db.Text annotations on all long-text fields (matching old .bak patterns + new models' text fields: subtitleSrt, musicTrackUrl, tagline, translatedText, accessToken, refreshToken, externalUrl, description, errorMessage, sceneTemplates, characterTemplates, userAgent, referer, coverImage, etc.)
+- Validated the postgres schema with `DATABASE_URL=postgresql://... bunx prisma validate` → "The schema at prisma/schema.prisma is valid 🚀" (used inline URL because local .env is sqlite)
+- Saved the committed sqlite version to `prisma/schema.prisma.local` (extracted via `git show HEAD:prisma/schema.prisma`) so local dev can be restored with `cp prisma/schema.prisma.local prisma/schema.prisma`
+- Refreshed `prisma/schema.prisma.prod.bak` to match the new postgres schema (was stale)
+- Confirmed running dev server unaffected: dev.log shows 200s on sqlite queries (`main`.`VideoProject`...) — editing schema.prisma does NOT regenerate the prisma client, so the old sqlite client keeps working
+- Committed: "fix: restore PostgreSQL schema for production deploy" (3 files: schema.prisma, schema.prisma.prod.bak, schema.prisma.local)
+- Pushed b55fe0a..1190178 to origin/main — 6 commits now on remote
+
+Stage Summary:
+- All 6 local commits are now pushed to origin/main (was 5 ahead + 1 new schema-restoration commit)
+- prisma/schema.prisma is now PostgreSQL + deploy-ready, INCLUDING all 8 advanced-feature models
+- Local dev server still running on sqlite (pre-generated client); to run `bun install`/`db:push` locally, restore sqlite via `cp prisma/schema.prisma.local prisma/schema.prisma` first
+- VPS deploy (`./deploy.sh`) is now safe: `bun install` will generate a postgres client matching the postgres DATABASE_URL
+- NOTE: On the VPS, after `git pull`, the new models (BrandKit, SceneTranslation, etc.) must be applied to the postgres DB. deploy.sh does NOT run `prisma db push` — recommend running `bunx prisma db push` on the VPS after deploy to create the new tables (or use `prisma migrate`). This is a manual step the owner must perform.
+- Still pending (NOT done in this task): dubbing language list missing English + dubbing failure investigation; select fields (camera/light/mode/language) not selecting on video gen page; mobile overlap of select fields.
+
+---
+Task ID: push-2
+Agent: main (orchestrator)
+Task: tackle all (dubbing + select fields + mobile overlap) then commit and push so user can pull from VPS
+
+Work Log:
+- Read dubbing API route (src/app/api/scenes/[id]/dubbing/route.ts) and the dubbing language catalog (src/lib/dubbing-languages.ts)
+- DISCOVERY: The dubbing catalog ALREADY includes English (first in "Popular" group) + 30 languages across 5 groups (Popular, European, Asian, West African, Other African). The user saw an old deploy.
+- DISCOVERY: The dubbing API already has proper error handling for Z.ai error 1113 (insufficient balance) — surfaces "Dubbing unavailable" toast.
+- Used agent-browser to verify live: dubbing POST returned 200 in 2.3s (Z.ai API is working now, balance must be restored). English + French both generated successfully.
+- Verified selects work: camera ("Aerial Drone Shot"), lighting ("Golden Hour" selected and persisted), mood, music, transition — all selectable and persist via optimistic update + PUT.
+- Verified NO mobile overlaps: JS eval on 390px viewport showed 10 select triggers, zero overlaps. AI Director Controls (mood/camera/lighting) stack full-width on mobile; actions toolbar wraps cleanly.
+- FOUND REAL GAP: After generating dubbing, the audio was stored in DB (SceneTranslation) but NEVER displayed in the UI — users saw only a toast with no way to play/manage the dubbed audio. This was the actual "dubbing is failing" perception.
+
+FIXES APPLIED:
+1. types/video.ts: Added SceneTranslation interface + translations?: SceneTranslation[] field on VideoScene
+2. api/projects/[id]/route.ts: Added include: { translations: { orderBy: { lang: "asc" } } } to scene query in both GET and PUT — project payload now carries dubbed audio
+3. api/scenes/[id]/dubbing/route.ts: Added DELETE handler — removes a single translation by ?lang= code (DB row + audio file on disk, best-effort)
+4. page.tsx handleGenerateDubbing: Now calls refreshProject() after success so the new translation + audio URL render immediately
+5. page.tsx handleDeleteDubbing: New handler — calls DELETE API, toasts, refreshes
+6. page.tsx SortableSceneCard: New "Dubbed Audio" section renders every ready translation as a row: flag emoji + language name + HTML5 audio player + trash delete button. Includes a spinner row for in-progress generation.
+7. page.tsx: Wired onDeleteDubbing={handleDeleteDubbing} prop to every scene card
+
+BROWSER VERIFICATION (agent-browser):
+- English dubbing: POST 200 in 2.3s, toast "English dubbing ready!", audio player appeared with 🇬🇧 flag
+- French dubbing: generated, 🇫🇷 flag row appeared alongside English (2 rows total)
+- Delete button: clicked → audio removed, section collapsed (audioCount 1→0, hasDubbedSection false)
+- Mobile 390px: dubbed audio row 270px wide, ends at 326px, no viewport overflow. 10 select triggers, zero overlaps.
+- Desktop 1440px: 30 selects on page, 2 dubbed rows, no overflow
+- Lint: clean (no errors)
+
+Stage Summary:
+- Committed as f45049a "feat: dubbed audio playback + multi-language tracks in scene card"
+- Pushed to origin/main (1190178..f45049a)
+- Remote now has: schema restoration (push-1) + dubbing UI completion (push-2) = ready for VPS pull
+- VPS deploy steps for owner: (1) git pull, (2) bun install, (3) bunx prisma db push (to create SceneTranslation + other new tables in Postgres), (4) ./deploy.sh
+- All 3 originally-reported issues RESOLVED: dubbing works (English + 30 langs visible + playable), selects work, no mobile overlap
+
+---
+Task ID: push-3
+Agent: main (orchestrator)
+Task: fix VPS git pull conflict on .env (tracked despite gitignore) — untrack permanently
+
+Work Log:
+- User reported VPS deploy blocked: `git pull` failed with "Your local changes to the following files would be overwritten by merge: .env"
+- Root cause investigation: `.env` IS tracked in git (`git ls-files --error-unmatch .env` returns it), even though `.gitignore` line 34 lists `.env`. This happened because .env was force-added before .gitignore existed. Git log showed commit 72d0f6a "fix: set DATABASE_URL to PostgreSQL in committed .env for VPS deploy" — someone even committed a production postgres URL to .env at one point.
+- Verified the tracked .env only contained `DATABASE_URL=file:/home/z/my-project/db/custom.db` (local sqlite dev URL) — no production secrets currently leaked in the repo, but the tracking itself causes every deploy to conflict when the VPS .env (postgres + ZAI_API_KEY) differs.
+- Enumerated ALL env vars used by the app via `grep process.env` in src/ + reading ecosystem.config.js: DATABASE_URL, NEXTAUTH_URL, NEXTAUTH_SECRET, NEXT_PUBLIC_BASE_URL, ZAI_BASE_URL, ZAI_API_KEY, PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY, HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, HUBTEL_MERCHANT_ACCOUNT, HUBTEL_MERCHANT_ID, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, IMAGE_API_KEY, VIDEO_API_KEY, TTS_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+- Rewrote `.env.example` (was already tracked but incomplete) as a full template documenting all 20 env vars with safe placeholders + comments showing local sqlite vs production postgres DATABASE_URL formats
+- `git rm --cached .env` → untracked .env (file stays on disk locally + on VPS; .gitignore already covers it)
+- Confirmed .env still on disk locally (50 bytes, DATABASE_URL intact) and dev server still serving 200s
+- Committed a83f6e7 "fix: untrack .env to stop deploy conflicts (gitignored)" and pushed to origin/main
+
+Stage Summary:
+- VPS is currently blocked at commit 61472d7 trying to pull f45049a (dubbing UI). Now there are TWO new commits to absorb: f45049a + a83f6e7.
+- Gave user immediate unblock commands: backup .env → stash → pull → restore .env → drop stash → prisma db push → deploy.sh --no-pull
+- After the user runs those commands ONCE, .env is untracked on the VPS forever. Future `git pull` will never conflict on .env again — no more stash dance needed.
+- `.env.example` is now the documented template in the repo for future VPS setup / new developers.
+- The production .env on the VPS (with real postgres DATABASE_URL + ZAI_API_KEY + payment keys) remains the single source of truth, preserved across all future pulls automatically.
+
+---
+Task ID: push-4
+Agent: main (orchestrator)
+Task: enforce "always develop with PostgreSQL production in mind" — guardrails so schema.prisma can never flip to sqlite again
+
+Work Log:
+- User directive: production uses PostgreSQL 17 on the VPS; always develop with production in mind, not the local sqlite server
+- Root cause of the earlier deploy outage: schema.prisma was temporarily flipped to sqlite for local testing, then committed+pushed → VPS `bun install` → `prisma generate` failed against postgres DATABASE_URL
+- No PostgreSQL/Docker available in this sandbox, so local dev must stay sqlite — but the COMMITTED schema must always be postgres
+- Added 4 guardrails:
+
+1. prisma/schema.prisma: prominent header warning ("⚠️ PRODUCTION SCHEMA — PostgreSQL ⚠️") explaining it's the single source of truth, NEVER flip to sqlite, and pointing to scripts/local-db-push.sh for local dev work
+2. prisma/schema.prisma.local: matching header marking it as the sqlite dev mirror only, with instructions to keep both files in sync (only differences: provider + no @db.Text)
+3. scripts/local-db-push.sh: safe helper — backs up postgres schema → swaps in sqlite mirror → runs prisma db push/generate → restores postgres automatically (bash trap, works even on error/Ctrl-C). The committed schema.prisma never leaves postgres state.
+4. scripts/pre-commit-guard.sh: git hook that BLOCKS any commit staging provider="sqlite" in prisma/schema.prisma. Tested: attempted a fake sqlite commit → "❌ BLOCKED" + exit 1, no commit created. Installed as symlink at .git/hooks/pre-commit in this dev environment.
+
+- .gitignore: added negation `!scripts/local-db-push.sh` because the existing `local-*` pattern was catching the script filename
+- TESTED the guard: `sed sqlite → git add → git commit` → blocked with clear error message. Restored schema. Real postgres commit passed: "✓ schema.prisma is postgresql — safe to commit"
+- Committed 2fc54c7, pushed to origin/main (a83f6e7..2fc54c7)
+- Dev server healthy: 200s on /api/payments/packages and /api/auth/session
+
+Stage Summary:
+- It is now MECHANICALLY IMPOSSIBLE to accidentally commit a sqlite schema in this dev environment (pre-commit hook blocks it)
+- The committed prisma/schema.prisma will always be postgres — production-faithful
+- Local dev workflow when schema changes are needed: `bash scripts/local-db-push.sh` (auto-swap + restore, no risk)
+- VPS doesn't need the hook (VPS only pulls+deploys, doesn't commit). If setting up a new dev clone, install the hook: `ln -sf ../../scripts/pre-commit-guard.sh .git/hooks/pre-commit`
+- Remote now has 3 commits for the user to pull: f45049a (dubbing UI) + a83f6e7 (.env untrack) + 2fc54c7 (postgres guardrails)
+
+---
+Task ID: push-5
+Agent: main (orchestrator)
+Task: UI improvements — vidora-bordered hero buttons, sticky header, AI chat, Top button, linked footer
+
+Work Log:
+- Read current hero buttons (lines 2774-2794), header (line 2661), footer (lines 3065-3100) in page.tsx
+- Loaded LLM skill to understand zai.chat signature (systemPrompt + userPrompt, returns string)
+- Created new files:
+  - src/app/api/assistant/chat/route.ts: POST endpoint for AI chat. System prompt makes it a Vidora product expert. In-memory rate limiting (5 msg/60s per IP). Folds conversation history (last 6 msgs) into userPrompt. Graceful ZAIError handling.
+  - src/components/AIAssistant.tsx: Floating chat widget. Gradient launcher button (bottom-right) with pulse ring + online indicator. Full chat panel with header, scrollable messages, typing indicator (animated dots), textarea input with Enter-to-send, quick-reply suggestion buttons. Framer Motion animations.
+  - src/components/ScrollToTop.tsx: Floating "Top" button (bottom-left). Appears after 400px scroll. Smooth-scrolls to top. Framer Motion enter/exit.
+
+- Updated src/app/page.tsx:
+  - Added imports: AIAssistant, ScrollToTop, + new lucide icons (ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon)
+  - Hero buttons: 'Try Live Demo' → !border-2 !border-violet-400/70 + violet shadow; 'Browse Templates' → !border-2 !border-fuchsia-400/70 + fuchsia shadow. Used ! important to override shadcn Button variant=outline border color (CSS layering issue).
+  - Sticky header: added headerScrolled state + scroll listener (toggles at scrollY>10). Header className now transitions: at top = bg-background/70 border-transparent no-shadow; scrolled = bg-background/95 shadow-md border-slate-200/80. Also added scrollTo(0) on view change.
+  - Footer: rewrote with all links wired. Social (YouTube/Instagram/Facebook/Email as <a> target=_blank). Product (Create Video→create view, Templates→gallery view, Features→handleTryDemo). Support (Documentation→/docs link, API Reference→/api/reference link, Contact→opens dialog). Added social icon buttons in brand section. Added website link + copyright.
+  - Contact Dialog: new Dialog with Email card (mailto), WhatsApp card (wa.me link), Website card, AI Assistant tip, Send Email CTA button. Controlled by contactDialogOpen state.
+  - Mounted <AIAssistant /> + <ScrollToTop /> globally at end of VidoraApp return (outside view switching, always visible).
+
+BROWSER VERIFICATION (agent-browser):
+- Hero button borders: computed style confirms 2px width + violet/fuchsia oklab colors with 0.7 alpha
+- AI chat: opened bubble → panel appeared with greeting + 4 suggestions. Filled "What is Vidora?" → clicked send → got real LLM reply "Vidora is an AI video creation studio..." in 1.5s (POST /api/assistant/chat 200)
+- Top button: scrolled to 1500px → button appeared → clicked via DOM (nextjs-portal overlay blocked direct click) → scrollY went 1500→0
+- Header scroll: at top shadow=false, scrolled shadow=true (transition confirmed)
+- Contact dialog: clicked footer Contact → dialog opened with Email Us / WhatsApp / Send Email
+- Footer links: all 7 verified (YouTube, Instagram, Facebook, mailto, /docs, /api/reference, website URL) with correct hrefs + targets
+- Mobile 390px: chat button (x=310, right=366) + top button (x=24, right=72) → no overlap
+- Lint: clean
+
+Stage Summary:
+- Committed b420168, pushed to origin/main (2fc54c7..b420168)
+- All 5 requested features implemented + verified end-to-end
+- AI assistant uses Z.ai LLM (glm-4.5) — working, balance appears restored
+- VPS pull will get: dubbing UI + .env untrack + postgres guardrails + this UI batch (4 commits since user's last pull)
+
+---
+Task ID: push-6
+Agent: main (orchestrator)
+Task: Fix footer issues — WhatsApp 0243618186, email vidora@lightworldtech.com, @vidorapro socials, Documentation/API Reference 404, footer missing on some pages
+
+Work Log:
+- User reported: (1) link WhatsApp to 0243618186, (2) email is vidora@lightworldtech.com, (3) Documentation + API Reference showing 404, (4) all social media should be @vidorapro, (5) footer doesn't show on some pages
+- Investigated page.tsx structure: footer was rendered ONLY inside the home view's motion.div (lines 3089-3218). When user navigated to Create/Gallery/Dashboard/etc., AnimatePresence replaced the entire motion.div — taking the footer with it. This was the root cause of "footer missing on some pages."
+- Investigated /docs and /api/reference 404s: these were plain <a href="/docs" target="_blank"> links in the footer, but no such routes exist in src/app (the project rule forbids adding new routes). The dev.log showed: `GET /docs 404 in 171ms` and `GET /api/reference 404 in 48ms`.
+- Investigated social media: YouTube/Instagram/Facebook were all pointing to bare domains (https://youtube.com, https://instagram.com, https://facebook.com) — not @vidorapro handles.
+- Investigated contact: WhatsApp was wa.me/233200000000 (placeholder), email was hello@lightworldtech.com (wrong address).
+
+FIXES APPLIED (all in src/app/page.tsx):
+1. Added 2 new state vars: docsDialogOpen, apiRefDialogOpen
+2. Extracted the footer OUT of the home view's motion.div — relocated it after </main> as a sibling of <main> inside the outer min-h-screen flex-col wrapper. Now renders on ALL views unconditionally.
+3. Added pb-20 md:pb-0 to the footer className so mobile logged-in users don't have footer content hidden behind the fixed 64px-tall mobile bottom nav.
+4. Social media links updated:
+   - YouTube: https://youtube.com/@vidorapro
+   - Instagram: https://instagram.com/vidorapro
+   - Facebook: https://facebook.com/vidorapro
+   - Added a 5th WhatsApp icon button: https://wa.me/233243618186
+5. Email: all 3 occurrences (footer icon, contact dialog email card, Send Email CTA) changed from hello@lightworldtech.com → vidora@lightworldtech.com
+6. WhatsApp: in footer social row + Contact dialog card, changed from wa.me/233200000000 → wa.me/233243618186 (with display text "0243618186")
+7. Documentation: replaced <a href="/docs" target="_blank"> with <button onClick={() => setDocsDialogOpen(true)}>. Built a new Documentation Dialog (sm:max-w-2xl, max-h-85vh, ScrollArea) with 6 sections:
+   - Quick Start (7-step guide)
+   - AI Director Controls (camera/lighting/mood/music/transition options)
+   - Dubbing & Subtitles (30+ languages, audio rows, SRT)
+   - Sharing & Brand Kit (share pages, brand kit, embed, analytics)
+   - Tokens & Billing (1 token/image, 3 tokens/video, Paystack/Hubtel/Stripe)
+   - Need More Help? (mailto + WhatsApp + AI Assistant tip)
+   - Footer: Close button + "Start Creating" CTA
+8. API Reference: replaced <a href="/api/reference" target="_blank"> with <button onClick={() => setApiRefDialogOpen(true)}>. Built a new API Reference Dialog with 20 REST endpoints rendered as cards with color-coded method badges (GET=emerald, POST=violet, PUT=amber, DELETE=rose) + path + description. Includes auth note. Endpoints: /api/projects (GET/POST), /api/projects/:id (GET/PUT/DELETE), scenes CRUD, enhance-prompt, generate-scene, generate-video, transcribe, analyze-video, dubbing (GET/POST/DELETE), history, payments/packages, assistant/chat.
+
+BROWSER VERIFICATION (agent-browser):
+- Home footer: all 5 social links verified — YouTube/@vidorapro, Instagram/vidorapro, Facebook/vidorapro, mailto:vidora@lightworldtech.com, wa.me/233243618186
+- Gallery view: clicked "Browse Templates" → footer still visible (Product, Support, Documentation, API Reference, Contact all present)
+- Create view: clicked "Create Video" → footer visible
+- Documentation dialog: clicked → opened with title "Vidora Documentation", all 6 sections present (Quick Start, AI Director, Dubbing, Sharing, Billing, contact info with 0243618186 + vidora@lightworldtech.com)
+- API Reference dialog: clicked → opened with title "Vidora API Reference", 20 endpoints listed (/api/projects, /api/projects/:id, /api/scenes/:id/dubbing, /api/assistant/chat, etc.)
+- Mobile 390x844: footer renders correctly (guest user, no bottom nav present, no overlap)
+- dev.log: zero /docs or /api/reference 404s after the fix (proof the dialogs work — no page navigation occurs)
+- No console errors, no page errors
+- Lint: clean
+
+Stage Summary:
+- Committed ce733d1, pushed to origin/main (b420168..ce733d1)
+- All 5 user-reported issues RESOLVED:
+  1. WhatsApp → 0243618186 (footer + contact dialog)
+  2. Email → vidora@lightworldtech.com (3 occurrences)
+  3. Documentation + API Reference → no more 404 (in-app dialogs with full content)
+  4. Social media → all @vidorapro (YouTube, Instagram, Facebook)
+  5. Footer → now renders on ALL views (extracted from home view's motion.div)
+- VPS pull will get this commit on top of the previous batch (f45049a + a83f6e7 + 2fc54c7 + b420168 + ce733d1)
+
+---
+Task ID: explore-1
+Agent: Explore agent
+Task: Map all Z.ai-powered API routes + frontend error handling
+
+Work Log:
+- Read worklog.md for prior context (Vidora Next.js + Prisma video studio, ~12 previous tasks)
+- Read src/lib/zai.ts (738 lines) — central Z.ai client wrapper; mapped ZAIError class shape, error classification, retry logic, all specialized helpers (chat, vision, generateImage, generateVideo, pollVideoTask, tts, asr)
+- Read src/lib/project-auth.ts — requireAuth / requireProjectAccess / requireSceneAccess with admin-aware ownership checks
+- Read src/lib/admin.ts — requireAdmin() helper (only used in /api/admin/* routes)
+- Read src/lib/auth.ts — NextAuth callbacks expose `role` on session.user via JWT
+- Enumerated all 18 files that import from @/lib/zai (1 lib + 17 API routes)
+- Read each Z.ai-powered route end-to-end and recorded: HTTP status returned on ZAIError, JSON shape, and whether auth-kind errors are mapped to 503
+- Read src/components/AIAssistant.tsx (full) — chat error handling + balance-issue friendly message
+- Grep'd src/app/page.tsx for `toast(`, `variant: "destructive"`, and catch blocks — captured every user-visible error surface that touches a Z.ai route
+- Confirmed /api/analyze-video has NO frontend caller (only referenced in the in-app API docs at line 6720)
+- Searched admin role patterns: `role === "admin"` (project-auth, projects route), `userProfile?.role === "admin"` (page.tsx x3), `session.user.role` (auth.ts callback). No client-side isAdmin() helper exists.
+- Searched for existing friendly error patterns — only TWO places currently produce friendly "service unavailable" copy: AIAssistant.tsx (line 70-78, balance detection) and handleGenerateDubbing in page.tsx (line 1700-1707, balance detection). All other routes pass raw ZAIError.message straight through.
+- Confirmed there is NO `ZAI_ERROR_CODES` constant map — codes "1113", "1112", "1211", "429" are hardcoded as string literals in TWO places inside zai.ts: `classifyError()` (lines 126, 135, 142, 148) and `assertNoBodyError()` (lines 354, 357, 360). Refactoring these to a shared constant is a low-risk extension point.
+
+Stage Summary:
+- 17 Z.ai-powered API routes identified (chat / vision / image / video / TTS / ASR), all summarized in the table below
+- All routes use the SAME error pattern: catch ZAIError → return `{ success: false, error: "<human prefix>: " + message }` with status 503 if kind==="auth" else 500. Health endpoint is the exception (always 200 with body status).
+- Error propagation flow: z-ai-web-dev-sdk throws → classifyError() in zai.ts builds ZAIError{message,kind,retryable,status,cause} → route catch block surfaces error.message in JSON → frontend reads data.error and shows in toast
+- ZAIError class: `class ZAIError extends Error { readonly kind: ZAIErrorKind; readonly retryable: boolean; readonly status?: number; readonly cause?: unknown }` — kind is one of: "auth" | "rate_limit" | "timeout" | "network" | "server" | "validation" | "unknown"
+- 1113 / Insufficient balance detection: TWO code paths in zai.ts — classifyError() line 126 (regex on raw SDK error string + apiCode check) and assertNoBodyError() line 354 (parses HTTP 200 response bodies that contain `{error:{code,message}}`). Both classify as kind="auth" (non-retryable).
+- Frontend error surfaces mapped: ~25 toast calls in page.tsx tied to Z.ai routes, ALL using `variant: "destructive"` with raw `data.error` passed through as the description. Only dubbing + AIAssistant have friendly balance-aware copy.
+- Admin detection: 4 patterns found (see table). NO client-side `isAdmin` helper exists. The frontend exclusively checks `userProfile?.role === "admin"` from the /api/auth/user response. Server-side uses `session.user.role` via requireAdmin() in /api/admin/* and requireProjectAccess() everywhere else.
+- Project-auth.ts extension point: `AuthSession` interface already exposes `role: string`, so adding an `isAdmin()` helper is trivial — either a free function `isAdmin(session: AuthSession): boolean` or a method on AuthResult. The requireAdmin() helper in src/lib/admin.ts is the closest existing pattern but is coupled to NextRequest and returns a NextResponse (less reusable for non-HTTP contexts).
+- RECOMMENDED NEXT STEPS for the planned security/UX change:
+  1. Add `ZAI_ERROR_CODES` constant map in src/lib/zai.ts (e.g. `{ INSUFFICIENT_BALANCE: "1113", QUOTA_EXCEEDED: "1112", UNKNOWN_MODEL: "1211", RATE_LIMIT: "429" }`) and replace the 6 hardcoded literals.
+  2. Add `isAdmin(session?: AuthSession | Session): boolean` helper in src/lib/project-auth.ts to deduplicate the 4 admin-check sites.
+  3. Add a `friendlyErrorMessage(zaiErr: ZAIError): string` helper in src/lib/zai.ts (or a new src/lib/zai-errors.ts) that maps kind/code → user-facing copy, so all 17 routes can switch from raw `error.message` to friendly copy with one-line changes. Pattern already proven in AIAssistant.tsx lines 70-78 and page.tsx lines 1700-1707 — generalize it.
+  4. The 503 status mapping is currently opt-in per route via `error instanceof ZAIError && error.kind === "auth" ? 503 : 500`. Consider extracting a `zaiErrorResponse(err, fallbackStatus=500)` helper to standardize.
+  5. /api/analyze-video has no frontend caller — verify whether it's still needed or can be removed before refactoring.
+
+### Table 1 — All Z.ai-powered API routes (17 routes)
+
+| # | Route file path | Z.ai feature used | HTTP status on ZAIError | JSON error shape |
+|---|---|---|---|---|
+| 1 | `src/app/api/assistant/chat/route.ts` | `zai.chat` (LLM, public) | 503 (all errors) | `{ success:false, error: <raw message> }` |
+| 2 | `src/app/api/enhance-prompt/route.ts` | `zai.chat` | 503 if kind==="auth" else 500 | `{ success:false, error: "Could not enhance your prompt: " + msg }` |
+| 3 | `src/app/api/enhance-scene/route.ts` | `zai.chat` (AI Director) | 503 if auth else 500 | `{ success:false, error: "Enhancement failed: " + msg }` |
+| 4 | `src/app/api/generate-scene/route.ts` | `zai.generateImage` | 503 if auth else 500 | `{ success:false, error: "Failed to generate scene: " + msg }` |
+| 5 | `src/app/api/generate-video/route.ts` | `zai.generateImage` + `zai.generateVideo` + `zai.pollVideoTask` (batch, background) | 500 (uses generic Error.message, NOT ZAIError-aware) | `{ success:false, error: "Failed to start generation: " + msg }` |
+| 6 | `src/app/api/generate-video-scene/route.ts` | `zai.generateImage` + `zai.generateVideo` + `zai.pollVideoTask` (single scene) | 503 if auth else 500 | `{ success:false, error: "Failed to generate video: " + msg }` |
+| 7 | `src/app/api/generate-narration/route.ts` | `zai.tts` | 503 if auth else 500 | `{ success:false, error: "Failed to generate narration: " + msg }` |
+| 8 | `src/app/api/analyze-video/route.ts` | `zai.vision` (VLM, glm-4v) — NO frontend caller | 503 if auth else 500 | `{ success:false, error: "Failed to analyze video: " + msg }` |
+| 9 | `src/app/api/transcribe/route.ts` | `zai.asr` | 503 if auth else 500 | `{ success:false, error: "Failed to transcribe audio: " + msg }` |
+| 10 | `src/app/api/check-continuity/route.ts` | `zai.chat` (JSON output) | 422 if JSON.parse fails; 503 if auth else 500 on ZAIError | `{ success:false, error: "Continuity check failed: " + msg, rawPreview? }` |
+| 11 | `src/app/api/split-scenes/route.ts` | `zai.chat` (JSON output) | 422 if JSON.parse fails; 503 if auth else 500 on ZAIError — always returns a `fallback:true` payload | `{ success:false, error:"Failed to analyze prompt: "+msg, fallback:true, scenes:[{prompt}], characters:[], isSingle:true }` |
+| 12 | `src/app/api/preview/image/route.ts` | `zai.generateImage` (free, watermarked) | 502 (refunds quota on ZAIError) | `{ success:false, error: <raw ZAIError.message>, previewQuota }` |
+| 13 | `src/app/api/preview/storyboard/route.ts` | `zai.chat` (free, JSON) | 502 on ZAIError; 502 on JSON.parse fail (both refund quota) | `{ success:false, error: msg, raw?, previewQuota }` |
+| 14 | `src/app/api/projects/[id]/characters/[characterId]/generate-image/route.ts` | `zai.generateImage` | 503 if auth else 500 | `{ success:false, error: "Failed to generate character image: " + msg }` |
+| 15 | `src/app/api/scenes/[id]/subtitles/route.ts` | `zai.chat` (SRT generation) | 503 inner-catch; 500 outer-catch | Inner: `{ success:false, error: <raw msg> }`. Outer: `{ success:false, error: "Failed to generate subtitles" }` |
+| 16 | `src/app/api/scenes/[id]/dubbing/route.ts` | `zai.chat` (translate) + `zai.tts` (synthesize) | 503 inner-catch; 500 outer-catch | Inner: `{ success:false, error: <raw ZAIError.message> }`. Outer: `{ success:false, error: "Failed to generate dubbing" }` |
+| 17 | `src/app/api/ai/health/route.ts` | `zai.chat` (1-token ping) | Always 200 with body `{status:"ok"|"degraded"|"down", message, checkedAt, cached?}` — does NOT propagate HTTP error | — |
+
+### Table 2 — Frontend error surfaces in src/app/page.tsx (Z.ai-route callers)
+
+| Component / handler | Line(s) | API called | Toast title | Toast description | variant |
+|---|---|---|---|---|---|
+| `handleGenerateAll` | 924 | /api/generate-video | "Generation failed" | `data.error` (raw) | destructive |
+| `handleGenerateAll` | 927 | (catch) | "Error" | "Failed to start generation" | destructive |
+| `handleGenerateSingle` | 965 | /api/video-status poll | "Generation failed" | "The video could not be generated." | destructive |
+| `handleGenerateSingle` | 982 | /api/generate-video-scene | "Failed" | `data.error` (raw) | destructive |
+| `handleGenerateSingle` | 985 | (catch) | "Error" | (no description) | destructive |
+| `handleGenerateCharPortrait` | 1133 | /api/projects/:id/characters/:cid/generate-image | "Generation failed" | `data.error` (raw) | destructive |
+| `handleGenerateCharPortrait` | 1136 | (catch) | "Portrait generation failed" | (no description) | destructive |
+| `handleNarrateScene` | 1174 | /api/generate-narration | "Narration failed" | `data.error` (raw) | destructive |
+| `handleNarrateScene` | 1177 | (catch) | "Narration error" | (no description) | destructive |
+| `handleEnhanceScene` | 1215 | /api/enhance-scene | "Enhancement failed" | `data.error` (raw) | destructive |
+| `handleEnhanceScene` | 1218 | (catch) | "Error enhancing scene" | (no description) | destructive |
+| `handleCheckContinuity` | 1302 | /api/check-continuity | "Continuity check failed" | `data.error` (raw) | destructive |
+| `handleCheckContinuity` | 1305 | (catch) | "Error" | (no description) | destructive |
+| `handleAnalyzeScript` | 1376 | /api/split-scenes | "Analysis failed" | `data.error` (raw) | destructive |
+| `handleAnalyzeScript` | 1379 | (catch) | "Error analyzing script" | (no description) | destructive |
+| `handleEnhanceTextPrompt` | 1399 | /api/enhance-prompt | "Enhancement failed" | `data.error || "Could not enhance your prompt. Please try again."` | destructive |
+| `handleEnhanceTextPrompt` | 1402 | (catch) | "Enhancement failed" | "Could not connect to the server. Please try again." | destructive |
+| `handleGenerateDubbing` | 1700-1707 | /api/scenes/:id/dubbing | **"Dubbing unavailable"** (if `/insufficient balance|quota|1113|1112/i`) else **"Dubbing failed"** | Balance: "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing." else `errMsg || "Please try again."` | destructive |
+| `handleGenerateDubbing` | 1710 | (catch) | "Network error" | "Could not reach the dubbing service." | destructive |
+| `handleGenerateStoryboardPreview` | 1859 | /api/preview/storyboard | "Preview failed" | `data.error` (raw) | destructive |
+| `handleGenerateStoryboardPreview` | 1864 | (catch) | "Preview failed" | "Network error. Please try again." | destructive |
+| `handleGeneratePreviewImage` | 1904 | /api/preview/image | "Preview failed" | `data.error` (raw) | destructive |
+| `handleGeneratePreviewImage` | 1909 | (catch) | "Preview failed" | "Network error. Please try again." | destructive |
+| `handleRecordAudio` (transcribe) | 1935 | /api/transcribe | "Transcription failed" | `d.error || "Could not process your audio. Please try again."` | destructive |
+| `handleRecordAudio` (transcribe) | 1939 | (catch) | "Transcription failed" | "Could not connect to the server. Please try again." | destructive |
+| `handleRecordAudio` (mic) | 1948 | navigator.mediaDevices | "Microphone access denied" | (no description) | destructive |
+| AIAssistant.tsx `handleSend` | 70-78 (component) | /api/assistant/chat | (no toast; in-chat reply) | Balance: "I'm temporarily offline while our AI service recharges. Please try again shortly, or check the Documentation below. 🙏" else `Sorry, I couldn't respond right now: ${errMsg}` | (in-chat message) |
+| AIAssistant.tsx `handleSend` | 89 (component) | (catch) | "Connection error" | "Could not reach the assistant." | destructive |
+
+### ZAIError class excerpt (src/lib/zai.ts lines 34-59)
+
+```ts
+export type ZAIErrorKind =
+  | "auth" | "rate_limit" | "timeout" | "network" | "server" | "validation" | "unknown";
+
+export class ZAIError extends Error {
+  readonly kind: ZAIErrorKind;
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly cause?: unknown;
+
+  constructor(message: string, kind: ZAIErrorKind, opts?: { status?: number; cause?: unknown }) {
+    super(message);
+    this.name = "ZAIError";
+    this.kind = kind;
+    this.status = opts?.status;
+    this.cause = opts?.cause;
+    // Rate-limit, network, timeout, and 5xx server errors are worth retrying.
+    this.retryable =
+      kind === "rate_limit" || kind === "network" || kind === "timeout" || kind === "server";
+  }
+}
+```
+
+### How 1113 / Insufficient balance flows (two detection sites in zai.ts)
+
+```ts
+// Site 1 — classifyError() (lines 71-193): for THROWN SDK errors
+//   The SDK formats errors as: 'API request failed with status 429: {"error":{"code":"1113",...}}'
+//   We regex-extract the JSON body, parse it, and classify by apiCode.
+if (apiCode === "1113" || apiCode === "1112" || lower.includes("insufficient balance")) {
+  return new ZAIError(
+    apiMessage || "ZAI account has insufficient balance. Please recharge your Z.ai account.",
+    "auth",                          // ← kind=auth → NOT retryable → route maps to HTTP 503
+    { cause: err }
+  );
+}
+
+// Site 2 — assertNoBodyError() (lines 345-373): for HTTP-200-with-error-body responses
+//   The SDK's response.ok check passes, so the error surfaces as an empty completion.
+//   This helper inspects the parsed body and throws a ZAIError if it contains an error field.
+if (code === "1113" || code === "1112") {
+  kind = "auth";                     // ← also kind=auth
+}
+```
+
+### Admin role detection patterns found
+
+| # | File:line | Pattern | Context |
+|---|---|---|---|
+| 1 | `src/lib/auth.ts:35` | `role: user.role` | NextAuth `authorize()` returns user with role from DB |
+| 2 | `src/lib/auth.ts:46` | `token.role = (user as ...).role` | JWT callback persists role into token |
+| 3 | `src/lib/auth.ts:54` | `(session.user as Record<string,unknown>).role = token.role` | Session callback exposes role on session.user |
+| 4 | `src/lib/project-auth.ts:58` | `role: (user.role as string) || "user"` | requireAuth() builds AuthSession with role (defaults to "user") |
+| 5 | `src/lib/project-auth.ts:126` | `const isAdmin = authResult.session.role === "admin"` | requireProjectAccess() — admin gets view-only access |
+| 6 | `src/lib/project-auth.ts:219` | `const isAdmin = authResult.session.role === "admin"` | requireSceneAccess() — same pattern |
+| 7 | `src/lib/admin.ts:13-15` | `const role = (session.user as Record<string,unknown>).role as string; if (role !== "admin")` | requireAdmin() — used by /api/admin/* routes, returns 403 |
+| 8 | `src/app/api/projects/route.ts:19` | `const where = role === "admin" ? {} : { userId }` | Admins see all projects in GET /api/projects |
+| 9 | `src/app/page.tsx:2713` | `{userProfile?.role === "admin" && (...)}` | Header: shows "Admin" button only to admins |
+| 10 | `src/app/page.tsx:4469` | `{userProfile?.role === "admin" ? "🛡️ Admin" : "✨ Member"}` | Profile badge label |
+| 11 | `src/app/page.tsx:4673` | `{currentView === "admin" && userProfile?.role === "admin" && (...)}` | Admin Portal view gate |
+| 12 | `src/app/page.tsx:5669` | `...(userProfile?.role === "admin" ? [{ view: "admin", ... }] : [])` | Mobile nav: Admin entry conditional |
+| 13 | `src/app/page.tsx:4911, 4927, 4928` | `u.role === "admin"` | Admin user-management table rendering |
+
+**Note**: `userProfile` is the client-side state populated from `GET /api/auth/user` (which returns `db.user.findUnique({select:{role:true, ...}})`). No `isAdmin()` helper exists — every call site re-inlines the `=== "admin"` check.
+
+### Existing user-friendly error patterns (only TWO exist)
+
+1. **`src/components/AIAssistant.tsx` lines 69-78** — regex-detects balance errors and swaps in a friendly chat reply:
+   ```ts
+   const errMsg = String(data.error || "Something went wrong.");
+   const isBalance = /insufficient balance|quota|1113/i.test(errMsg);
+   setMessages([...newMessages, {
+     role: "assistant",
+     content: isBalance
+       ? "I'm temporarily offline while our AI service recharges. Please try again shortly, or check the Documentation below. 🙏"
+       : `Sorry, I couldn't respond right now: ${errMsg}`,
+   }]);
+   ```
+
+2. **`src/app/page.tsx` lines 1698-1707** (`handleGenerateDubbing`) — same regex, friendly toast:
+   ```ts
+   const errMsg = String(data.error || "");
+   const isBalanceIssue = /insufficient balance|quota|1113|1112/i.test(errMsg);
+   toast({
+     title: isBalanceIssue ? "Dubbing unavailable" : "Dubbing failed",
+     description: isBalanceIssue
+       ? "The AI voice service is out of credit. Please recharge the Z.ai account to enable dubbing."
+       : errMsg || "Please try again.",
+     variant: "destructive",
+   });
+   ```
+
+All other ~22 Z.ai-error toasts in page.tsx pass the raw `data.error` string straight through to the user. This is the consistency gap the planned UX change should close.

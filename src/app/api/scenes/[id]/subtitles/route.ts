@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 /**
  * POST /api/scenes/[id]/subtitles
@@ -41,15 +42,12 @@ export async function POST(
     await db.videoScene.update({ where: { id }, data: { subtitleStatus: "generating", subtitleLang: lang } });
 
     try {
-      // Use LLM to generate SRT subtitles from the source text
-      // Split the text into subtitle chunks (~5-7 words per subtitle, ~2s each)
-      const prompt = `You are a subtitle generator. Convert the following narration text into SRT subtitle format.
-Each subtitle should be 5-8 words, displayed for 2-3 seconds.
-The total duration is ${scene.duration} seconds.
-Distribute subtitles evenly across the duration.
-Output ONLY valid SRT format, nothing else.
-
-Text: "${sourceText}"
+      // Use LLM to generate SRT subtitles from the source text.
+      // NOTE: zai.chat() expects { systemPrompt, userPrompt } — NOT { messages }.
+      // Passing { messages } silently drops the content → Z.ai rejects with
+      // "API parameters incorrect". This was the root cause of subtitle gen failing.
+      const srtContent = await zai.chat({
+        systemPrompt: `You are a subtitle generator. Convert the user's narration text into SRT subtitle format. Each subtitle should be 5-8 words, displayed for 2-3 seconds. The total duration is ${scene.duration} seconds. Distribute subtitles evenly across the duration. Output ONLY valid SRT format, nothing else. No markdown fences, no explanations.
 
 SRT format example:
 1
@@ -58,12 +56,8 @@ First few words here
 
 2
 00:00:02,500 --> 00:00:05,000
-Next few words here
-
-Generate the SRT now:`;
-
-      const srtContent = await zai.chat({
-        messages: [{ role: "user", content: prompt }],
+Next few words here`,
+        userPrompt: sourceText,
         retry: { label: "subtitle generation", timeoutMs: 60_000, maxRetries: 2 },
       });
 
@@ -85,9 +79,11 @@ Generate the SRT now:`;
 
       return NextResponse.json({ success: true, srt, lang });
     } catch (aiError) {
-      const msg = aiError instanceof Error ? aiError.message : "AI subtitle generation failed";
       await db.videoScene.update({ where: { id }, data: { subtitleStatus: "failed" } });
-      return NextResponse.json({ success: false, error: msg }, { status: 503 });
+      return zaiErrorResponse(aiError, {
+        session: authResult.ok ? authResult.session : null,
+        logLabel: "subtitles",
+      });
     }
   } catch (error) {
     console.error("[subtitles POST]", error);

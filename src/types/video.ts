@@ -12,6 +12,19 @@ export interface Character {
   updatedAt: string;
 }
 
+export interface SceneTranslation {
+  id: string;
+  sceneId: string;
+  lang: string;
+  langName: string;
+  translatedText?: string | null;
+  narrationUrl?: string | null;
+  voiceId?: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface VideoScene {
   id: string;
   projectId: string;
@@ -27,6 +40,7 @@ export interface VideoScene {
   narrationVoice?: string | null;
   mood?: string | null;
   cameraMove?: string | null;
+  lighting?: string | null;
   musicMood?: string | null;
   musicTrackUrl?: string | null;
   musicVolume?: number;
@@ -44,6 +58,7 @@ export interface VideoScene {
   status: string;
   createdAt: string;
   updatedAt: string;
+  translations?: SceneTranslation[];
 }
 
 export interface VideoProject {

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai, cleanLLMOutput } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export async function POST(req: NextRequest) {
   try {
@@ -39,11 +42,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, enhancedPrompt });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
-    console.error("Failed to enhance prompt:", error);
-    return NextResponse.json(
-      { success: false, error: "Could not enhance your prompt: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    // Optional session — admins get the raw diagnostic, everyone else sees a friendly message.
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "enhance-prompt",
+    });
   }
 }

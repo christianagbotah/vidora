@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError, cleanLLMOutput } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai, cleanLLMOutput } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 /**
  * AI Director Mode — Enhance scene prompts with camera movements, lighting, mood, and cinematography.
@@ -91,12 +94,11 @@ export async function POST(req: NextRequest) {
       lighting: aiLighting,
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
-    console.error("Failed to enhance scene:", error);
-    return NextResponse.json(
-      { success: false, error: "Enhancement failed: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "enhance-scene",
+    });
   }
 }
 

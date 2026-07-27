@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { zai, ZAIError } from "@/lib/zai";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { writeFile, mkdir } from "fs/promises";
@@ -313,8 +314,12 @@ export async function POST(req: NextRequest) {
       remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error("Failed to start generation:", error);
-    return NextResponse.json({ success: false, error: "Failed to start generation: " + message }, { status: 500 });
+    // session is in scope from the try block via closure — but since this is the
+    // outer catch, fetch it again to be safe (cheap, cached).
+    const sess = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session: sess,
+      logLabel: "generate-video",
+    });
   }
 }

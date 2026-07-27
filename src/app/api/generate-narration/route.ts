@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { zai, ZAIError } from "@/lib/zai";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { zai } from "@/lib/zai";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
-import { writeFile, mkdir, unlink, readdir } from "fs/promises";
-import { execFile } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
+import { unlink } from "fs/promises";
 import path from "path";
+import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,35 +42,32 @@ const TTS_VOICES = [
 ];
 
 /**
- * Concatenate multiple mp3 files into one using ffmpeg's concat demuxer.
- * Falls back to returning the first chunk if ffmpeg fails.
+ * Concatenate wav chunks via ffmpeg's concat demuxer.
+ * For single-chunk, copies the file to the output path.
+ * Uses bash for file operations to bypass Turbopack's fs interception.
  */
 async function concatMp3Files(chunkPaths: string[], outputPath: string): Promise<boolean> {
   if (chunkPaths.length === 1) {
-    // Single chunk — no concat needed, just copy
-    return true;
+    try {
+      execFileSync("bash", ["-c", `cp "${chunkPaths[0]}" "${outputPath}"`]);
+      return true;
+    } catch (err) {
+      console.error("[narration] single-chunk copy failed:", err);
+      return false;
+    }
   }
-
   const listFile = outputPath + ".concat.txt";
-  // ffmpeg concat demuxer requires paths to be escaped and use forward slashes
   const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
-  await writeFile(listFile, listContent, "utf-8");
-
+  execFileSync("bash", ["-c", `cat > "${listFile}"`], { input: listContent });
   try {
     await execFileAsync("ffmpeg", [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listFile,
-      "-c", "copy",
-      outputPath,
+      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
     ], { timeout: 30_000 });
-    // Clean up the list file
-    await unlink(listFile).catch(() => {});
+    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
     return true;
   } catch (err) {
-    console.error("ffmpeg concat failed, falling back to first chunk:", err);
-    await unlink(listFile).catch(() => {});
+    console.error("[narration] ffmpeg concat failed:", err);
+    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
     return false;
   }
 }
@@ -97,8 +98,9 @@ export async function POST(req: NextRequest) {
     // Clamp speed
     const clampedSpeed = Math.max(0.5, Math.min(2.0, speed || 1.0));
 
-    const outputDir = path.join(process.cwd(), "public", "generated", "audio");
-    await mkdir(outputDir, { recursive: true });
+    // Write to /tmp/vidora-audio/ via the audio-storage helper (uses bash
+    // to bypass Turbopack's fs interception in dev mode).
+    ensureAudioDir();
 
     // Split into chunks if needed, generate each chunk
     const chunks = splitTextIntoChunks(narrationText);
@@ -112,26 +114,27 @@ export async function POST(req: NextRequest) {
       });
 
       const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-      const chunkFile = path.join(outputDir, `chunk_${sceneId}_${i}_${Date.now()}.mp3`);
-      await writeFile(chunkFile, buffer);
+      // Z.ai TTS returns WAV audio (API rejects "mp3" response_format).
+      const chunkFilename = `chunk_${sceneId}_${i}_${Date.now()}.wav`;
+      const chunkFile = writeAudioFile(chunkFilename, buffer);
       tempChunkPaths.push(chunkFile);
     }
 
     // Generate final narration file — concatenate all chunks with ffmpeg
-    const finalFilename = `narration_${sceneId}_${Date.now()}.mp3`;
-    const finalPath = path.join(outputDir, finalFilename);
+    const finalFilename = `narration_${sceneId}_${Date.now()}.wav`;
+    const finalPath = getAudioPath(finalFilename);
     const concatenated = await concatMp3Files(tempChunkPaths, finalPath);
 
     let narrationUrl: string;
     if (concatenated) {
-      narrationUrl = `/generated/audio/${finalFilename}`;
+      narrationUrl = `/api/audio/${finalFilename}`;
       // Clean up the individual chunk files (keep only the final)
       for (const p of tempChunkPaths) {
-        await unlink(p).catch(() => {});
+        deleteAudioFile(path.basename(p));
       }
     } else {
       // Fallback: use the first chunk
-      narrationUrl = `/generated/audio/${path.basename(tempChunkPaths[0])}`;
+      narrationUrl = `/api/audio/${path.basename(tempChunkPaths[0])}`;
     }
 
     await db.videoScene.update({
@@ -150,16 +153,16 @@ export async function POST(req: NextRequest) {
       concatenated,
     });
   } catch (error) {
-    const message = error instanceof ZAIError ? error.message : error instanceof Error ? error.message : "Unknown error";
     console.error("Failed to generate narration:", error);
     // Clean up any orphaned chunk files on failure
     for (const p of tempChunkPaths) {
       await unlink(p).catch(() => {});
     }
-    return NextResponse.json(
-      { success: false, error: "Failed to generate narration: " + message },
-      { status: error instanceof ZAIError && error.kind === "auth" ? 503 : 500 }
-    );
+    const session = await getServerSession(authOptions).catch(() => null);
+    return zaiErrorResponse(error, {
+      session,
+      logLabel: "generate-narration",
+    });
   }
 }
 
