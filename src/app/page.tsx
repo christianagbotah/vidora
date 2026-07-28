@@ -2996,12 +2996,17 @@ function VidoraApp() {
       if (analyticsData.success) setAdminAnalytics(analyticsData.analytics);
       if (configData.success) {
         setAdminConfigs(configData.configs);
-        // Sync the editable form with loaded values (only keys that exist in the form)
-        const formUpdate: Record<string, string> = {};
-        Object.entries(configData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
-          formUpdate[k] = v.value || "";
+        // Merge server values into form — only set keys that DON'T already
+        // have a user-edit value, so in-flight edits aren't wiped.
+        setConfigForm((prev) => {
+          const merged = { ...prev };
+          Object.entries(configData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
+            if (!(k in merged)) {
+              merged[k] = v.value || "";
+            }
+          });
+          return merged;
         });
-        setConfigForm(formUpdate);
       }
       if (packagesData.success) setAdminPackages(packagesData.packages);
       // Exchange rate
@@ -3363,7 +3368,17 @@ function VidoraApp() {
   }, [session?.user, fetchUserProfile, toast]);
 
   useEffect(() => {
-    if (currentView === "admin" && session) handleAdminLoadData();
+    if (currentView === "admin" && session) {
+      // Only fetch if we haven't loaded yet (avoid overwriting form edits
+      // when session reference changes on periodic re-validation)
+      if (Object.keys(adminConfigs).length === 0) {
+        handleAdminLoadData();
+      }
+    }
+    // Reset config cache when navigating away from admin
+    if (currentView !== "admin") {
+      setAdminConfigs({});
+    }
   }, [currentView, session, handleAdminLoadData]);
 
   // Load dashboard data
