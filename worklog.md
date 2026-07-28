@@ -2047,3 +2047,18 @@ Stage Summary:
 - Critical Studio character upload now functional
 - Contact form now stores real messages for admin review
 - No more plaintext admin password in repo
+
+---
+Task ID: 6
+Agent: main
+Task: Fix admin config fields auto-resetting while typing
+
+Work Log:
+- Identified root cause: `useSession()` session reference changes on periodic re-validation, triggering `handleAdminLoadData` via useEffect dependency, which called `setConfigForm()` with server values — wiping user's in-flight edits
+- Fix 1: useEffect now checks `Object.keys(adminConfigs).length === 0` before fetching, so it only loads once per admin visit
+- Fix 2: configForm sync uses merge pattern `setConfigForm(prev => { ...prev, ...newValues })` — only populates keys that don't exist yet
+- Reset adminConfigs cache when navigating away from admin view so fresh data loads on next visit
+- Lint passes clean, committed and pushed
+
+Stage Summary:
+- Admin config fields (Hubtel API ID/Key, AI settings, etc.) now persist user input without auto-resetting
