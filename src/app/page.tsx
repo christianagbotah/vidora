@@ -1200,6 +1200,7 @@ function VidoraApp() {
 
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
+  const [buyTokensModalOpen, setBuyTokensModalOpen] = useState(false);
 
   /* ── Dashboard / Profile State ── */
   const [tokenHistory, setTokenHistory] = useState<Record<string, unknown>[]>([]);
@@ -7021,7 +7022,7 @@ function VidoraApp() {
               </Button>
             ) : (
               <Button
-                onClick={() => { setDownloadGateOpen(false); setCurrentView("buy-tokens"); }}
+                onClick={() => { setDownloadGateOpen(false); setBuyTokensModalOpen(true); }}
                 className="btn-amber flex-1"
               >
                 <Coins className="h-4 w-4 mr-1.5" />Buy Tokens
@@ -7686,16 +7687,16 @@ function VidoraApp() {
               </div>
             )}
 
-            {/* Style preview image */}
+            {/* Style preview image — shown ABOVE text */}
             {previewImageUrl && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <ImageIcon className="h-4 w-4 text-violet-500" />
-                  <p className="text-sm font-semibold text-slate-700">Style Preview (watermarked)</p>
-                  <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">Low-res · watermarked</Badge>
+              <div className="space-y-3">
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm">
+                  <img src={previewImageUrl} alt="Watermarked style preview" className="w-full h-auto max-h-[50vh] object-contain" />
                 </div>
-                <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
-                  <img src={previewImageUrl} alt="Watermarked style preview" className="w-full h-auto" />
+                <div className="flex items-center gap-2 flex-wrap">
+                  <ImageIcon className="h-4 w-4 text-violet-500" />
+                  <p className="text-sm font-semibold text-slate-700">Style Preview</p>
+                  <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">Low-res · watermarked</Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   This watermarked image shows the art style, lighting, and composition. Buy tokens to generate the clean, full-HD, multi-scene video — no watermark, downloadable.
@@ -7711,7 +7712,7 @@ function VidoraApp() {
               </div>
               <Button
                 className="btn-amber shrink-0"
-                onClick={() => { setPreviewModalOpen(false); setCurrentView("buy-tokens"); }}
+                onClick={() => setBuyTokensModalOpen(true)}
               >
                 <Coins className="h-4 w-4 mr-1.5" />Buy Tokens
               </Button>
@@ -7722,12 +7723,109 @@ function VidoraApp() {
           <div className="px-6 py-4 border-t bg-white shrink-0 flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" onClick={() => setPreviewModalOpen(false)}>Close</Button>
             <Button
-              variant="outline"
-              className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
-              onClick={() => { setPreviewModalOpen(false); }}
+              className="btn-gradient"
+              onClick={() => {
+                setPreviewModalOpen(false);
+                handleCreateAndGenerate();
+              }}
             >
               <Sparkles className="h-4 w-4 mr-1.5" />Create Full Video
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════
+          BUY TOKENS MODAL (in-context, doesn't navigate away)
+          ═══════════════════════════════════════════════════════ */}
+      <Dialog open={buyTokensModalOpen} onOpenChange={setBuyTokensModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden gap-0 p-0">
+          {/* Header */}
+          <div className="px-6 pt-6 pb-4 border-b shrink-0">
+            <DialogHeader className="space-y-1">
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white">
+                  <Coins className="h-4 w-4" />
+                </div>
+                Buy Tokens
+              </DialogTitle>
+              <DialogDescription>
+                Purchase tokens to generate full HD, multi-scene videos with no watermark.
+              </DialogDescription>
+            </DialogHeader>
+            {userTokens > 0 && (
+              <p className="text-xs text-muted-foreground mt-2">Current balance: <span className="font-bold text-slate-700">{userTokens} tokens</span></p>
+            )}
+          </div>
+
+          {/* Body — package grid */}
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            {tokenPackages.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {tokenPackages.map((pkg: Record<string, unknown>) => (
+                  <Card
+                    key={pkg.id as string}
+                    className={`relative overflow-hidden transition-all ${
+                      Number(pkg.popular)
+                        ? "border-amber-300 shadow-md shadow-amber-500/10"
+                        : "border-slate-100 hover:border-amber-200"
+                    }`}
+                  >
+                    {pkg.popular && (
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                        <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs px-2.5 shadow-md">
+                          <Star className="h-3 w-3 mr-1" />Popular
+                        </Badge>
+                      </div>
+                    )}
+                    <CardHeader className="text-center pb-2 pt-5">
+                      <CardTitle className="text-lg font-bold">{pkg.name as string}</CardTitle>
+                      <CardDescription className="text-xs">
+                        {pkg.tokens} tokens
+                        {pkg.bonusPct && Number(pkg.bonusPct) > 0 && (
+                          <sup className="ml-1 text-[10px] font-bold text-emerald-500">+{Math.round(pkg.tokens * Number(pkg.bonusPct) / 100)}</sup>
+                        )}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="text-center">
+                        <div className="flex items-baseline justify-center gap-1">
+                          <span className="text-2xl font-extrabold text-slate-900">
+                            {typeof pkg.priceGHS === "number" && pkg.priceGHS < 100 ? `GH₵${pkg.priceGHS}` : `$${pkg.priceUSD}`}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          or ${pkg.priceUSD} USD
+                        </p>
+                      </div>
+                      <Button
+                        className="w-full btn-gradient"
+                        onClick={() => {
+                          setBuyTokensModalOpen(false);
+                          handleBuyTokens(pkg.id as string, pkg.priceGHS as number, pkg.tokens as number, "GHS");
+                        }}
+                      >
+                        <ShoppingBag className="h-4 w-4 mr-1.5" />Buy Now
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Coins className="h-8 w-8 text-amber-400 mb-2" />
+                <p className="text-sm text-muted-foreground">No token packages available yet.</p>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground text-center">
+              <CreditCard className="h-3 w-3 inline mr-1" />
+              Pay with MTN MoMo, Vodafone Cash, Visa, Mastercard
+            </p>
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-4 border-t bg-white shrink-0 flex justify-end">
+            <Button variant="outline" onClick={() => setBuyTokensModalOpen(false)}>Cancel</Button>
           </div>
         </DialogContent>
       </Dialog>
