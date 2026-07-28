@@ -3186,6 +3186,10 @@ function VidoraApp() {
     try {
       const updates: Record<string, string> = {};
       fields.forEach((f) => { updates[f] = configForm[f] || ""; });
+      // Mirror hubtel_merchant_account_number → hubtel_merchant_id for backward compat
+      if (gateway === "hubtel" && updates.hubtel_merchant_account_number) {
+        updates.hubtel_merchant_id = updates.hubtel_merchant_account_number;
+      }
       const res = await fetch("/api/admin/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
