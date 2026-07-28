@@ -993,8 +993,9 @@ export default function HomePage() {
 function VidoraApp() {
   const {
     currentView, projects, currentProject, isGenerating, isEnhancing, isRecording,
+    persistedProjectId,
     setCurrentView, setProjects, setCurrentProject, setIsGenerating,
-    setIsEnhancing, setIsRecording,
+    setIsEnhancing, setIsRecording, clearPersistedNav,
   } = useAppStore();
   const { toast } = useToast();
 
@@ -1290,6 +1291,30 @@ function VidoraApp() {
     })();
     return () => { cancelled = true; };
   }, [fetchProjects]);
+
+  // ── Restore project from persisted ID after reload ──
+  useEffect(() => {
+    if (!persistedProjectId || currentView !== "studio") return;
+    // Only fetch if currentProject is missing (happens after reload since it's not persisted)
+    if (currentProject) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/projects/${persistedProjectId}`);
+        const data = await res.json();
+        if (cancelled || !data.success) {
+          // Project not found — reset to home
+          setCurrentView("home");
+          return;
+        }
+        setCurrentProject(data.project);
+        if (data.project.characters) setCharacters(data.project.characters);
+      } catch {
+        setCurrentView("home");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [persistedProjectId, currentView, currentProject, setCurrentProject, setCharacters]);
 
   // ── Sticky header: add shadow + stronger bg once the user scrolls past 10px ──
   useEffect(() => {
@@ -2752,7 +2777,7 @@ function VidoraApp() {
     await signOut({ redirect: false });
     setUserProfile(null);
     setUserTokens(0);
-    setCurrentView("home");
+    clearPersistedNav();
     toast({ title: "Signed out" });
   };
 
