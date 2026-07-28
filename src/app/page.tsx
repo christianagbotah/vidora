@@ -1034,7 +1034,8 @@ function VidoraApp() {
   // Pre-project character images (Create page, before project exists)
   // Keyed by character name → base64 data URL
   const [preCharImages, setPreCharImages] = useState<Record<string, string>>({});
-  const [generatingCharPortrait, setGeneratingCharPortrait] = useState<string | null>(null); // char name being generated
+  // Track multiple characters generating in parallel (Set of char names)
+  const [generatingCharPortraits, setGeneratingCharPortraits] = useState<Set<string>>(new Set());
   const preCharFileInputRef = useRef<HTMLInputElement>(null);
   const [preCharUploadTarget, setPreCharUploadTarget] = useState<string | null>(null); // char name for upload
   const [isCreating, setIsCreating] = useState(false);
@@ -1685,7 +1686,7 @@ function VidoraApp() {
 
   /** Call the standalone portrait API and store the result */
   const handlePreCharGenerate = async (charName: string, description: string) => {
-    setGeneratingCharPortrait(charName);
+    setGeneratingCharPortraits((prev) => new Set(prev).add(charName));
     try {
       const res = await fetch("/api/generate-character-portrait", {
         method: "POST",
@@ -1704,7 +1705,11 @@ function VidoraApp() {
     } catch {
       toast({ title: "Portrait generation failed", variant: "destructive" });
     } finally {
-      setGeneratingCharPortrait(null);
+      setGeneratingCharPortraits((prev) => {
+        const next = new Set(prev);
+        next.delete(charName);
+        return next;
+      });
     }
   };
 
@@ -4308,7 +4313,7 @@ function VidoraApp() {
                                         <X className="h-2.5 w-2.5" />
                                       </button>
                                     </>
-                                  ) : generatingCharPortrait === c.name ? (
+                                  ) : generatingCharPortraits.has(c.name) ? (
                                     <Loader2 className="h-4 w-4 text-violet-500 animate-spin" />
                                   ) : (
                                     <Users className="h-4 w-4 text-violet-500" />
@@ -4337,10 +4342,10 @@ function VidoraApp() {
                                     variant="ghost"
                                     className="h-7 w-7 p-0"
                                     onClick={() => handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`)}
-                                    disabled={generatingCharPortrait === c.name}
+                                    disabled={generatingCharPortraits.has(c.name)}
                                     title="Generate AI portrait"
                                   >
-                                    <Wand2 className={`h-3.5 w-3.5 ${generatingCharPortrait === c.name ? "text-violet-400" : ""}`} />
+                                    <Wand2 className={`h-3.5 w-3.5 ${generatingCharPortraits.has(c.name) ? "text-violet-400" : ""}`} />
                                   </Button>
                                 </div>
                               </div>
@@ -4348,6 +4353,100 @@ function VidoraApp() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* ── CHARACTER IMAGE MANAGEMENT (prominent card) ── */}
+              {/* Standalone card so users always see upload/generate options for
+                  detected characters — not buried inside the scrollable analysis preview. */}
+              {parsedCharacters.length > 0 && (
+                <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-fuchsia-500 to-pink-500 flex items-center justify-center text-white">
+                        <Users className="h-3.5 w-3.5" />
+                      </div>
+                      Characters
+                      <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
+                      <span className="text-xs font-normal text-muted-foreground ml-auto">Upload a photo or let AI generate a portrait for each character</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {parsedCharacters.map((c, i) => (
+                        <div
+                          key={i}
+                          className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors"
+                        >
+                          {/* Avatar */}
+                          <div className="relative h-12 w-12 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
+                            {preCharImages[c.name] ? (
+                              <>
+                                <img
+                                  src={preCharImages[c.name]}
+                                  alt={c.name}
+                                  className="h-full w-full object-cover"
+                                />
+                                <button
+                                  onClick={() => handlePreCharRemove(c.name)}
+                                  className="absolute -top-0.5 -right-0.5 h-5 w-5 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors"
+                                  title="Remove image"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </>
+                            ) : generatingCharPortraits.has(c.name) ? (
+                              <div className="flex flex-col items-center gap-1">
+                                <Loader2 className="h-4 w-4 text-violet-500 animate-spin" />
+                                <span className="text-[8px] text-violet-500">Generating</span>
+                              </div>
+                            ) : (
+                              <Users className="h-5 w-5 text-violet-500" />
+                            )}
+                          </div>
+
+                          {/* Name & role */}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold truncate">{c.name}</p>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 leading-none">{c.role}</Badge>
+                            {c.description && (
+                              <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{c.description}</p>
+                            )}
+                          </div>
+
+                          {/* Action buttons */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs gap-1"
+                              onClick={() => { setPreCharUploadTarget(c.name); preCharFileInputRef.current?.click(); }}
+                              disabled={generatingCharPortraits.has(c.name)}
+                              title="Upload photo"
+                            >
+                              <UploadCloud className="h-3.5 w-3.5" />
+                              <span className="hidden sm:inline">Upload</span>
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs gap-1"
+                              onClick={() => handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`)}
+                              disabled={generatingCharPortraits.has(c.name)}
+                              title="Generate AI portrait"
+                            >
+                              {generatingCharPortraits.has(c.name) ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Wand2 className="h-3.5 w-3.5" />
+                              )}
+                              <span className="hidden sm:inline">AI Generate</span>
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </CardContent>
                 </Card>
