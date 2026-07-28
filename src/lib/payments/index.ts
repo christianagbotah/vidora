@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 export interface PaymentResult {
   success: boolean;
   authorizationUrl?: string;
+  directCheckoutUrl?: string;
   reference?: string;
   error?: string;
 }
@@ -270,10 +271,14 @@ export class HubtelGateway implements PaymentGateway {
       const responseData = data.data as Record<string, unknown> | undefined;
       const checkoutUrl = String(responseData?.checkoutUrl ?? data.checkoutUrl ?? "");
 
-      if ((responseCode === "0000" || responseCode === "00") && checkoutUrl) {
+      // checkoutDirectUrl is for iframe embedding (onsite checkout)
+      const directUrl = String(responseData?.checkoutDirectUrl ?? "");
+
+      if ((responseCode === "0000" || responseCode === "00") && (checkoutUrl || directUrl)) {
         return {
           success: true,
-          authorizationUrl: checkoutUrl,
+          authorizationUrl: checkoutUrl || directUrl,
+          directCheckoutUrl: directUrl || checkoutUrl,
           reference: params.reference,
         };
       }

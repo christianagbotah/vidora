@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       authorizationUrl: result.authorizationUrl,
+      directCheckoutUrl: result.directCheckoutUrl,
       paymentId: payment.id,
       reference,
     });

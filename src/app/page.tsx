@@ -1121,6 +1121,13 @@ function VidoraApp() {
   const [userTokens, setUserTokens] = useState(0);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; name: string; role: string; tokens: number } | null>(null);
 
+  // ── Payment checkout popup state ──
+  const [paymentPopupOpen, setPaymentPopupOpen] = useState(false);
+  const [paymentPopupUrl, setPaymentPopupUrl] = useState("");
+  const [paymentPopupLoading, setPaymentPopupLoading] = useState(true);
+  const [paymentPopupReference, setPaymentPopupReference] = useState("");
+  const [paymentPollInterval, setPaymentPollInterval] = useState<NodeJS.Timeout | null>(null);
+
   // ── Password strength meter (register + reset modes) ──
   const passwordStrength = useMemo(() => {
     const p = authPassword;
@@ -2763,15 +2770,47 @@ function VidoraApp() {
 
   const handleBuyTokens = async (pkgId: string, amount: number, tokens: number, currency: string) => {
     try {
+      setPaymentPopupLoading(true);
       const res = await fetch("/api/payments/initialize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, tokensPurchased: tokens, currency, packageId: pkgId }),
       });
       const data = await res.json().catch(() => ({ success: false, error: "Invalid server response" }));
-      if (data.success && data.authorizationUrl) {
-        window.open(data.authorizationUrl, "_blank");
-        toast({ title: "Redirecting to payment...", description: "Complete your payment in the new tab." });
+      if (data.success && (data.directCheckoutUrl || data.authorizationUrl)) {
+        const checkoutUrl = data.directCheckoutUrl || data.authorizationUrl;
+        setPaymentPopupUrl(checkoutUrl);
+        setPaymentPopupReference(data.reference);
+        setPaymentPopupOpen(true);
+
+        // Start polling for payment status every 10 seconds
+        // Hubtel docs: if no callback within 5 min, check status manually
+        const poll = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`/api/payments/hubtel/status?reference=${data.reference}`);
+            const statusData = await statusRes.json();
+            if (statusData.verified || statusData.alreadyCompleted) {
+              clearInterval(poll);
+              setPaymentPollInterval(null);
+              setPaymentPopupOpen(false);
+              toast({ title: "Payment successful!", description: `${statusData.tokensPurchased || tokens} tokens have been credited to your account.` });
+              // Refresh tokens
+              const profileRes = await fetch("/api/auth/user");
+              const profileData = await profileRes.json();
+              if (profileData.success) {
+                setUserTokens(profileData.user.tokens);
+              }
+            }
+          } catch { /* polling error, ignore and retry */ }
+        }, 10_000);
+        setPaymentPollInterval(poll);
+
+        // Auto-stop polling after 10 minutes
+        setTimeout(() => {
+          if (paymentPollInterval) clearInterval(paymentPollInterval);
+        }, 600_000);
+
+        toast({ title: "Complete your payment", description: "Use the payment window to complete your purchase." });
       } else {
         toast({
           title: "Payment initialization failed",
@@ -2782,6 +2821,18 @@ function VidoraApp() {
     } catch {
       toast({ title: "Payment failed", description: "Network error. Please check your connection.", variant: "destructive" });
     }
+  };
+
+  const handleClosePaymentPopup = () => {
+    setPaymentPopupOpen(false);
+    setPaymentPopupUrl("");
+    setPaymentPopupLoading(true);
+    if (paymentPollInterval) {
+      clearInterval(paymentPollInterval);
+      setPaymentPollInterval(null);
+    }
+    // Refresh tokens on close in case payment was completed
+    if (session?.user) fetchUserProfile();
   };
 
   const handleAdminLoadData = useCallback(async () => {
@@ -8023,6 +8074,60 @@ function VidoraApp() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setApiRefDialogOpen(false)}>Close</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Payment Checkout Popup (Onsite / Hubtel iframe) ── */}
+      <Dialog open={paymentPopupOpen} onOpenChange={(open) => { if (!open) handleClosePaymentPopup(); }}>
+        <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden">
+          <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-violet-600 to-fuchsia-600">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center">
+                <CreditCard className="h-4 w-4 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white">Complete Your Payment</p>
+                <p className="text-[11px] text-white/70">Secure checkout powered by Hubtel</p>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-white/70 hover:text-white hover:bg-white/20"
+              onClick={handleClosePaymentPopup}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          {paymentPopupLoading && (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+              <p className="text-sm text-muted-foreground">Loading secure checkout...</p>
+            </div>
+          )}
+          <div className="relative" style={{ height: paymentPopupLoading ? 0 : "500px" }}>
+            {paymentPopupUrl && (
+              <iframe
+                src={paymentPopupUrl}
+                className="w-full h-full border-0"
+                title="Hubtel Payment Checkout"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation"
+                allow="payment"
+                onLoad={() => setPaymentPopupLoading(false)}
+              />
+            )}
+          </div>
+          <div className="flex items-center justify-between p-3 border-t bg-muted/30">
+            <p className="text-[11px] text-muted-foreground">
+              {paymentPopupReference && (
+                <span>Ref: <code className="font-mono">{paymentPopupReference}</code></span>
+              )}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[11px] text-muted-foreground">Waiting for payment...</span>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
