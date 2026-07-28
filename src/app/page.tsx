@@ -1038,6 +1038,7 @@ function VidoraApp() {
   const [generatingCharPortraits, setGeneratingCharPortraits] = useState<Set<string>>(new Set());
   const preCharFileInputRef = useRef<HTMLInputElement>(null);
   const [preCharUploadTarget, setPreCharUploadTarget] = useState<string | null>(null); // char name for upload
+  const [showAddCharForm, setShowAddCharForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportQuality, setExportQuality] = useState("standard");
@@ -1721,6 +1722,38 @@ function VidoraApp() {
       return next;
     });
   };
+
+  /** Add a manual character to the parsedCharacters list (for birthday boy, etc.) */
+  const handleAddParsedCharacter = () => {
+    if (!newCharName.trim()) return;
+    const newChar: DetectedCharacter = {
+      name: newCharName.trim(),
+      role: newCharRole || "supporting",
+      description: newCharDesc || null,
+      stylePrompt: null,
+    };
+    setParsedCharacters((prev) => {
+      // Avoid duplicates by name
+      if (prev.some((c) => c.name.toLowerCase() === newChar.name.toLowerCase())) {
+        toast({ title: `${newChar.name} is already in the character list`, variant: "destructive" });
+        return prev;
+      }
+      return [...prev, newChar];
+    });
+    setNewCharName("");
+    setNewCharRole("");
+    setNewCharDesc("");
+    setShowAddCharForm(false);
+    toast({ title: `${newChar.name} added to characters` });
+  };
+
+  /** Remove a character from the parsedCharacters list */
+  const handleRemoveParsedCharacter = (charName: string) => {
+    setParsedCharacters((prev) => prev.filter((c) => c.name !== charName));
+    // Also clean up any pre-generated image
+    handlePreCharRemove(charName);
+  };
+
 
   const handleAssignVoice = async (characterId: string, voiceId: string) => {
     if (!currentProject) return;
@@ -4283,97 +4316,83 @@ function VidoraApp() {
                           )}
                         </div>
                       ))}
-                      {parsedCharacters.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <p className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
-                            <Users className="h-3 w-3 text-emerald-500" />
-                            Detected Characters
-                            <span className="text-xs font-normal text-muted-foreground ml-1">— upload a photo or let AI generate a portrait</span>
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {parsedCharacters.map((c, i) => (
-                              <div
-                                key={i}
-                                className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors"
-                              >
-                                {/* Avatar */}
-                                <div className="relative h-11 w-11 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
-                                  {preCharImages[c.name] ? (
-                                    <>
-                                      <img
-                                        src={preCharImages[c.name]}
-                                        alt={c.name}
-                                        className="h-full w-full object-cover"
-                                      />
-                                      <button
-                                        onClick={() => handlePreCharRemove(c.name)}
-                                        className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors"
-                                        title="Remove image"
-                                      >
-                                        <X className="h-2.5 w-2.5" />
-                                      </button>
-                                    </>
-                                  ) : generatingCharPortraits.has(c.name) ? (
-                                    <Loader2 className="h-4 w-4 text-violet-500 animate-spin" />
-                                  ) : (
-                                    <Users className="h-4 w-4 text-violet-500" />
-                                  )}
-                                </div>
-
-                                {/* Name & role */}
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-xs font-bold truncate">{c.name}</p>
-                                  <Badge variant="outline" className="text-[10px] px-1 py-0 leading-none">{c.role}</Badge>
-                                </div>
-
-                                {/* Action buttons */}
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0"
-                                    onClick={() => { setPreCharUploadTarget(c.name); preCharFileInputRef.current?.click(); }}
-                                    title="Upload photo"
-                                  >
-                                    <UploadCloud className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0"
-                                    onClick={() => handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`)}
-                                    disabled={generatingCharPortraits.has(c.name)}
-                                    title="Generate AI portrait"
-                                  >
-                                    <Wand2 className={`h-3.5 w-3.5 ${generatingCharPortraits.has(c.name) ? "text-violet-400" : ""}`} />
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
               )}
 
               {/* ── CHARACTER IMAGE MANAGEMENT (prominent card) ── */}
-              {/* Standalone card so users always see upload/generate options for
-                  detected characters — not buried inside the scrollable analysis preview. */}
+              {/* Shows whenever characters are detected OR the user manually adds one. */}
               {parsedCharacters.length > 0 && (
                 <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base font-bold flex items-center gap-2">
-                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-fuchsia-500 to-pink-500 flex items-center justify-center text-white">
-                        <Users className="h-3.5 w-3.5" />
-                      </div>
-                      Characters
-                      <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
-                      <span className="text-xs font-normal text-muted-foreground ml-auto">Upload a photo or let AI generate a portrait for each character</span>
-                    </CardTitle>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-fuchsia-500 to-pink-500 flex items-center justify-center text-white">
+                          <Users className="h-3.5 w-3.5" />
+                        </div>
+                        Characters
+                        <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
+                      </CardTitle>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1"
+                        onClick={() => setShowAddCharForm(!showAddCharForm)}
+                      >
+                        <Plus className="h-3 w-3" />
+                        Add
+                      </Button>
+                    </div>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="space-y-3">
+                    {/* Inline add-character form */}
+                    {showAddCharForm && (
+                      <div className="p-3 rounded-lg border border-dashed border-violet-200 bg-violet-50/50 space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <Input
+                            placeholder="Name (e.g. Kwame)"
+                            value={newCharName}
+                            onChange={(e) => setNewCharName(e.target.value)}
+                            className="h-8 text-sm"
+                            onKeyDown={(e) => e.key === "Enter" && handleAddParsedCharacter()}
+                          />
+                          <Select value={newCharRole || "supporting"} onValueChange={setNewCharRole}>
+                            <SelectTrigger className="h-8 text-sm">
+                              <SelectValue placeholder="Role" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="protagonist">Protagonist</SelectItem>
+                              <SelectItem value="supporting">Supporting</SelectItem>
+                              <SelectItem value="narrator">Narrator</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            placeholder="Description (e.g. birthday boy, wearing a red shirt)"
+                            value={newCharDesc}
+                            onChange={(e) => setNewCharDesc(e.target.value)}
+                            className="h-8 text-sm"
+                            onKeyDown={(e) => e.key === "Enter" && handleAddParsedCharacter()}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs px-3"
+                            onClick={handleAddParsedCharacter}
+                            disabled={!newCharName.trim()}
+                          >
+                            <UserPlus className="h-3 w-3 mr-1" />
+                            Add Character
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowAddCharForm(false)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Character cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {parsedCharacters.map((c, i) => (
                         <div
@@ -4409,9 +4428,20 @@ function VidoraApp() {
 
                           {/* Info + buttons stacked */}
                           <div className="min-w-0 flex-1 space-y-1.5">
-                            <div>
-                              <p className="text-sm font-bold truncate leading-tight">{c.name}</p>
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 leading-none mt-0.5 inline-block">{c.role}</Badge>
+                            <div className="flex items-start gap-1">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-bold truncate leading-tight">{c.name}</p>
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 leading-none mt-0.5 inline-block">{c.role}</Badge>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 shrink-0"
+                                onClick={() => handleRemoveParsedCharacter(c.name)}
+                                title="Remove character"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
                             </div>
                             {c.description && (
                               <p className="text-[11px] text-muted-foreground line-clamp-1">{c.description}</p>
