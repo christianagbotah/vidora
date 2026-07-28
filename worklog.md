@@ -1915,3 +1915,27 @@ Stage Summary:
 - All text uses break-words for proper wrapping
 - Detected Characters heading clearly separated with icon
 - Committed as 315e0fd, pushed to main
+
+---
+Task ID: 3
+Agent: main
+Task: Fix preloader styles not working - only plain texts show without styling
+
+Work Log:
+- User reported preloader showing as plain text with no styling
+- Investigated via agent-browser: found ALL preloader-* CSS classes missing from compiled output
+- Discovered Tailwind CSS v4 @tailwindcss/postcss plugin (v4.1.18) was stripping preloader CSS and dark mode overrides from the compiled CSS
+- Verified: hero-gradient, card-glow, btn-gradient, orb-violet WERE present, but preloader-root, preloader-wordmark, preloader-bg, preloader-progress-track, dark .card-glow were ALL missing
+- Root cause: @tailwindcss/postcss processes all CSS in globals.css (which has @import "tailwindcss") and incorrectly strips certain custom CSS class blocks
+- Fix: Extracted preloader CSS (lines 360-565) and dark mode overrides (lines 580-601) into separate preloader.css file
+- Imported preloader.css in layout.tsx (separate from globals.css)
+- Since preloader.css has no @import "tailwindcss", @tailwindcss/postcss passes it through unmodified
+- Verified via agent-browser: all preloader-* classes now present in browser stylesheets
+- Also fixed dark mode overrides (dark .card-glow, dark .glass-card, etc.) which were similarly stripped
+
+Stage Summary:
+- Created src/app/preloader.css with all preloader + dark mode CSS
+- Modified src/app/layout.tsx to import preloader.css
+- Modified src/app/globals.css to remove extracted sections (header-label kept)
+- Committed as aa42d92, pushed to main
+- User should deploy: git pull origin main && bun run build && pm2 restart vidora
