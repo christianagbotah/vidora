@@ -6041,31 +6041,31 @@ function VidoraApp() {
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                               <div className="space-y-1.5">
-                                <Label className="text-sm font-medium">Client ID</Label>
+                                <Label className="text-sm font-medium">API ID <span className="text-xs font-normal text-muted-foreground">(Payment)</span></Label>
                                 <Input
                                   type="text"
                                   value={configForm.hubtel_client_id || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
-                                  placeholder="e.g. ab-cd-ef-12-34-56"
+                                  placeholder="Your Hubtel Payment API ID (username for Basic Auth)"
                                   className="h-9 text-sm"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                  Your Hubtel <span className="font-semibold">Account Client ID</span> (found under Account → API Credentials on Hubtel dashboard).
-                                  This is NOT the Payment API ID.
+                                  Payment API credentials → <span className="font-semibold">API ID</span> (used as Basic Auth username).
+                                  Do NOT use SMS API Client ID.
                                 </p>
                               </div>
                               <div className="space-y-1.5">
-                                <Label className="text-sm font-medium">Client Secret</Label>
+                                <Label className="text-sm font-medium">API Key <span className="text-xs font-normal text-muted-foreground">(Payment)</span></Label>
                                 <Input
                                   type="text"
                                   value={configForm.hubtel_client_secret || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
-                                  placeholder="e.g. xy-12-ab-34-56-78"
+                                  placeholder="Your Hubtel Payment API Key (password for Basic Auth)"
                                   className="h-9 text-sm"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                  Your Hubtel <span className="font-semibold">Account Client Secret</span> (same section as Client ID).
-                                  This is NOT the Payment API Key.
+                                  Payment API credentials → <span className="font-semibold">API Key</span> (used as Basic Auth password).
+                                  Do NOT use SMS API Client Secret.
                                 </p>
                               </div>
                               <div className="space-y-1.5">
