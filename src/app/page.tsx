@@ -1030,6 +1030,12 @@ function VidoraApp() {
   const [newCharDesc, setNewCharDesc] = useState("");
   const [charImageFile, setCharImageFile] = useState<File | null>(null);
   const [charUploadTargetId, setCharUploadTargetId] = useState<string | null>(null);
+  // Pre-project character images (Create page, before project exists)
+  // Keyed by character name → base64 data URL
+  const [preCharImages, setPreCharImages] = useState<Record<string, string>>({});
+  const [generatingCharPortrait, setGeneratingCharPortrait] = useState<string | null>(null); // char name being generated
+  const preCharFileInputRef = useRef<HTMLInputElement>(null);
+  const [preCharUploadTarget, setPreCharUploadTarget] = useState<string | null>(null); // char name for upload
   const [isCreating, setIsCreating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportQuality, setExportQuality] = useState("standard");
@@ -1653,6 +1659,58 @@ function VidoraApp() {
     }
   };
 
+  /* ──────────────────────────────────────────────────────────────
+     PRE-PROJECT CHARACTER IMAGE HANDLERS (Create page)
+     These handle upload & AI portrait generation BEFORE the project
+     has been created. Images are stored as base64 in client state and
+     passed to the server when creating the project.
+  ────────────────────────────────────────────────────────────── */
+
+  /** Read a user-uploaded file as base64 and store it for the character */
+  const handlePreCharUpload = (charName: string, file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setPreCharImages((prev) => ({ ...prev, [charName]: dataUrl }));
+      toast({ title: `${charName}'s image uploaded` });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  /** Call the standalone portrait API and store the result */
+  const handlePreCharGenerate = async (charName: string, description: string) => {
+    setGeneratingCharPortrait(charName);
+    try {
+      const res = await fetch("/api/generate-character-portrait", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: charName, description, style: selectedStyle }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Prepend data URL prefix
+        const dataUrl = `data:image/png;base64,${data.base64}`;
+        setPreCharImages((prev) => ({ ...prev, [charName]: dataUrl }));
+        toast({ title: `${charName}'s AI portrait generated` });
+      } else {
+        toast({ title: "Portrait generation failed", description: getApiError(data), variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Portrait generation failed", variant: "destructive" });
+    } finally {
+      setGeneratingCharPortrait(null);
+    }
+  };
+
+  /** Remove a pre-project character image */
+  const handlePreCharRemove = (charName: string) => {
+    setPreCharImages((prev) => {
+      const next = { ...prev };
+      delete next[charName];
+      return next;
+    });
+  };
+
   const handleAssignVoice = async (characterId: string, voiceId: string) => {
     if (!currentProject) return;
     setCharVoiceAssign((prev) => ({ ...prev, [characterId]: voiceId }));
@@ -1946,6 +2004,8 @@ function VidoraApp() {
             role: c.role || "supporting",
             description: c.description || null,
             stylePrompt: c.stylePrompt || null,
+            // Include pre-project character image if user uploaded/generated one
+            ...(preCharImages[c.name] ? { imageBase64: preCharImages[c.name] } : {}),
           })) : undefined,
         }),
       });
@@ -1990,6 +2050,7 @@ function VidoraApp() {
       setTextPrompt("");
       setEnhancedText("");
       setProjectTitle("");
+      setPreCharImages({});
       toast({ title: "Project created!", description: "Generating videos..." });
 
       // Step 4: Trigger generation after entering studio
@@ -4150,16 +4211,71 @@ function VidoraApp() {
                         </div>
                       ))}
                       {parsedCharacters.length > 0 && (
-                        <div className="mt-2 pt-3 border-t border-slate-100">
+                        <div className="mt-3 pt-3 border-t border-slate-100">
                           <p className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
                             <Users className="h-3 w-3 text-emerald-500" />
                             Detected Characters
+                            <span className="text-xs font-normal text-muted-foreground ml-1">— upload a photo or let AI generate a portrait</span>
                           </p>
-                          <div className="flex flex-wrap gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             {parsedCharacters.map((c, i) => (
-                              <Badge key={i} variant="outline" className="text-xs">
-                                {c.name} ({c.role})
-                              </Badge>
+                              <div
+                                key={i}
+                                className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors"
+                              >
+                                {/* Avatar */}
+                                <div className="relative h-11 w-11 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
+                                  {preCharImages[c.name] ? (
+                                    <>
+                                      <img
+                                        src={preCharImages[c.name]}
+                                        alt={c.name}
+                                        className="h-full w-full object-cover"
+                                      />
+                                      <button
+                                        onClick={() => handlePreCharRemove(c.name)}
+                                        className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors"
+                                        title="Remove image"
+                                      >
+                                        <X className="h-2.5 w-2.5" />
+                                      </button>
+                                    </>
+                                  ) : generatingCharPortrait === c.name ? (
+                                    <Loader2 className="h-4 w-4 text-violet-500 animate-spin" />
+                                  ) : (
+                                    <Users className="h-4 w-4 text-violet-500" />
+                                  )}
+                                </div>
+
+                                {/* Name & role */}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-bold truncate">{c.name}</p>
+                                  <Badge variant="outline" className="text-[10px] px-1 py-0 leading-none">{c.role}</Badge>
+                                </div>
+
+                                {/* Action buttons */}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 w-7 p-0"
+                                    onClick={() => { setPreCharUploadTarget(c.name); preCharFileInputRef.current?.click(); }}
+                                    title="Upload photo"
+                                  >
+                                    <UploadCloud className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 w-7 p-0"
+                                    onClick={() => handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`)}
+                                    disabled={generatingCharPortrait === c.name}
+                                    title="Generate AI portrait"
+                                  >
+                                    <Wand2 className={`h-3.5 w-3.5 ${generatingCharPortrait === c.name ? "text-violet-400" : ""}`} />
+                                  </Button>
+                                </div>
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -4237,6 +4353,23 @@ function VidoraApp() {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Hidden file input for pre-project character image upload */}
+              <input
+                type="file"
+                accept="image/*"
+                ref={preCharFileInputRef}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file && preCharUploadTarget) {
+                    handlePreCharUpload(preCharUploadTarget, file);
+                  }
+                  setPreCharUploadTarget(null);
+                  // Reset input so the same file can be re-selected
+                  e.target.value = "";
+                }}
+                className="hidden"
+              />
 
               {/* Create Button */}
               <div className="flex items-center gap-4 pt-2">

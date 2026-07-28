@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
+import { writeFile, mkdir } from "fs/promises";
+import path from "path";
+import crypto from "crypto";
 
 /**
  * GET /api/projects
@@ -46,6 +49,9 @@ export async function GET() {
  * Creates a new project owned by the authenticated user.
  * The userId is ALWAYS taken from the session (never from the request body)
  * to prevent users from creating projects under someone else's account.
+ *
+ * Supports optional `imageBase64` on each character — when provided,
+ * the image is saved to disk and the resulting URL is stored in the DB.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -63,6 +69,42 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Pre-process character images ──
+    // If a character has imageBase64, save it to disk and compute the URL
+    const outputDir = path.join(process.cwd(), "public", "generated", "characters");
+    const processedCharacters = characters?.length
+      ? await Promise.all(
+          characters.map(async (c: Record<string, string>) => {
+            const result: Record<string, string> = {
+              name: c.name,
+              role: c.role || "supporting",
+              description: c.description || null,
+              stylePrompt: c.stylePrompt || null,
+              imageUrl: c.imageUrl || null,
+            };
+
+            if (c.imageBase64) {
+              try {
+                await mkdir(outputDir, { recursive: true });
+                // Strip data URL prefix if present
+                const raw = c.imageBase64.includes(",")
+                  ? c.imageBase64.split(",")[1]
+                  : c.imageBase64;
+                const buffer = Buffer.from(raw, "base64");
+                const filename = `char_${crypto.randomBytes(4).toString("hex")}_${Date.now()}.png`;
+                await writeFile(path.join(outputDir, filename), buffer);
+                result.imageUrl = `/generated/characters/${filename}`;
+              } catch (err) {
+                console.error(`Failed to save character image for ${c.name}:`, err);
+                // Continue without image — non-fatal
+              }
+            }
+
+            return result;
+          })
+        )
+      : undefined;
+
     const project = await db.videoProject.create({
       data: {
         // ── CRITICAL: bind the project to the authenticated user ──
@@ -73,14 +115,8 @@ export async function POST(req: NextRequest) {
         aspectRatio: aspectRatio || "16:9",
         targetDuration: body.targetDuration || 60,
         projectType: projectType || "custom",
-        characters: characters?.length
-          ? { create: characters.map((c: Record<string, string>) => ({
-              name: c.name,
-              role: c.role || "supporting",
-              description: c.description || null,
-              stylePrompt: c.stylePrompt || null,
-              imageUrl: c.imageUrl || null,
-            })) }
+        characters: processedCharacters?.length
+          ? { create: processedCharacters }
           : undefined,
       },
       include: { scenes: true, characters: true },
