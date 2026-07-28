@@ -88,3 +88,4 @@ enhance-toast.png
 # Auto-commit script log
 /auto-git.log
 ~/.github_token
+prisma/schema.prisma.postgres-backup
