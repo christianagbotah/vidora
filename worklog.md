@@ -2080,3 +2080,28 @@ Stage Summary:
 - Key fix: `hubtel_merchant_account_number` added to CONFIG_SCHEMA in admin config API
 - Save handler mirrors value to both `hubtel_merchant_account_number` and `hubtel_merchant_id`
 - Committed as `30d0c62` and pushed to origin/main
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix duplicate character sections and birthday child detection in script analysis
+
+Work Log:
+- Analyzed the issue: two places showing characters (Script Analysis Preview badge + standalone Characters card), and Giannis (birthday boy) not detected as a character
+- Removed character count from Script Analysis Preview badge — now only shows scene count ("6 scenes")
+- Made Characters card visible when `showAddCharForm` is true even if no characters detected yet
+- Added "Add Characters (birthday child, etc.)" button that appears when scenes exist but no characters card
+- Added `detectHonoree()` function to `/api/split-scenes` with 4 detection patterns: age pattern, title pattern, all-caps pattern, and frequency-based mention counting
+- Added `EXCLUDE_WORDS` set of 100+ common words to filter out false positives
+- Enhanced `buildCharacterDescriptions()` to give honoree protagonist role with rich context (age, gender, birthday child status, nursery school hint)
+- Fixed `detectCharacterNames()` to handle camelCase (SuperKitties), all-caps (JJ), and scan visual descriptions for known brand characters
+- Added full-script known character scanning to catch characters mentioned anywhere (not just in dialogue)
+- Added `displayNameForKey()` helper for proper casing of known character names
+- Skipped team-level entries (PAW Patrol, CoComelon) in favor of individual characters
+- Updated AI fallback system prompt to explicitly instruct detecting non-speaking honorees
+
+Stage Summary:
+- Giannis now detected as protagonist with rich description: "Giannis, a 5-year-old boy, the birthday child, a small boy in nursery school, expressive face, joyful and excited, wearing a birthday outfit or party clothes"
+- All 10 characters correctly detected: Narrator, Miss Rachel, Chase, Marshall, Bluey, Bingo, JJ, Spidey, SuperKitties, Giannis
+- No more duplicate character display — single Characters card with Add button
+- Lint clean, API tested and verified

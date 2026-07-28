@@ -83,6 +83,23 @@ function enrichWithKnownCharacters(characters: DetectedCharacter[]): DetectedCha
   });
 }
 
+// Proper display name for known character keys
+function displayNameForKey(key: string): string {
+  const special: Record<string, string> = {
+    "paw patrol": "PAW Patrol",
+    "spider-man": "Spider-Man",
+    "cocomelon": "CoComelon",
+    "jj": "JJ",
+    "spongebob": "SpongeBob",
+    "daniel tiger": "Daniel Tiger",
+    "super wings": "Super Wings",
+    "mickey mouse": "Mickey Mouse",
+    "minnie mouse": "Minnie Mouse",
+    "peppa pig": "Peppa Pig",
+  };
+  return special[key] || (key.charAt(0).toUpperCase() + key.slice(1));
+}
+
 const CLIP_DURATION = 10;
 
 interface ParsedScene {
@@ -214,12 +231,18 @@ function extractDialogue(text: string): string {
   return dialogueLines.join("\n").trim();
 }
 
-// Detect character names from dialogue attribution
+// Detect character names from dialogue attribution and visual descriptions
 function detectCharacterNames(text: string): string[] {
   const names = new Set<string>();
   const patterns = [
+    // Standard: "CharacterName: dialogue" (e.g., Chase:, Bluey:)
     /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*:/gm,
+    // Narrator
     /^Narrator:/gim,
+    // All-caps or short uppercase names (e.g., JJ:, MR. BEAST:)
+    /^([A-Z]{2,}(?:\s+[A-Z]{2,})?)\s*:/gm,
+    // CamelCase names (e.g., SuperKitties:, CoComelon:)
+    /^([A-Z][a-z]+[A-Z][a-z]+(?:[A-Z][a-z]+)*)\s*:/gm,
   ];
 
   for (const pattern of patterns) {
@@ -231,12 +254,133 @@ function detectCharacterNames(text: string): string[] {
     }
   }
 
-  return [...names].filter((n) => !["Visual", "Scene", "Final", "Remember"].includes(n));
+  // Also scan visual descriptions for known brand characters mentioned by name
+  // (characters who appear but don't have dialogue)
+  // Skip team-level entries that are redundant with individual characters
+  const skipTeamNames = new Set(["paw patrol", "cocomelon"]);
+  const bodyText = text.replace(/^Visual:\s*/gim, " ");
+  for (const [key] of Object.entries(KNOWN_CHARACTERS)) {
+    if (skipTeamNames.has(key)) continue;
+    if (bodyText.toLowerCase().includes(key.toLowerCase())) {
+      names.add(displayNameForKey(key));
+    }
+  }
+
+  return [...names].filter((n) => !["Visual", "Scene", "Final", "Remember", "Everyone", "The"].includes(n));
+}
+
+// Known words to exclude when scanning for proper nouns
+const EXCLUDE_WORDS = new Set([
+  "Visual", "Scene", "Final", "Remember", "Miss", "Rachel", "Narrator", "Everyone",
+  "The", "This", "That", "With", "Happy", "Birthday", "Dear", "Our", "Their",
+  "We", "Have", "Make", "Let", "Get", "Come", "All", "Her", "His", "She", "He",
+  "But", "And", "Not", "For", "You", "Your", "Are", "Was", "Is", "Has", "Had",
+  "Today", "Every", "Super", "Amazing", "Colorful", "Giant", "Glowing", "Magical",
+  "PAW", "Patrol", "SuperKitties", "CoComelon", "Spidey", "Spider", "Bluey",
+  "Bingo", "Chase", "Marshall", "JJ", "Now", "May", "Love", "Ever", "Ready",
+  "Surprise", "Everything", "Dance", "Fireworks", " Presents", "Candles", "Lights",
+  "Bubbles", "Streamers", "Balloons", "Confetti", "Rainbow", "Sky", "Stars",
+  "A", "An", "In", "On", "At", "To", "Of", "By", "As", "Be", "Do", "If", "Or",
+  "From", "With", "Into", "Around", "Through", "During", "After", "Before",
+  "Adventure", "Story", "Video", "Town", "Birds", "Birds", "Pups", "Pup",
+  "Friends", "Friend", "Music", "Musical", "Notes", "Hearts", "Wishes",
+  "Presents", "Gifts", "Cake", "Candles", "Sparkle", "Sparkles", "Swing",
+  "Leap", "Gather", "Sing", "Sings", "Blow", "Lights", "True", "Dreams",
+  "Small", "Boy", "Girl", "Little", "Old", "Years", "Year", "Nursery",
+  "Use", "Just", "Very", "So", "Too", "Up", "Out", "About", "Down",
+  "Most", "Also", "Still", "Over", "Again", "Then", "Here", "There",
+  "What", "When", "Where", "Why", "How", "Who", "Which", "Will", "Would",
+]);
+
+// Detect the honoree (birthday child, celebrant, etc.) from the script
+function detectHonoree(fullPrompt: string): string | null {
+  // Pattern 1: "for [Name] who is X years old"
+  const agePattern = /(?:for|about)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+who\s+(?:is\s+|just\s+(?:a\s+)?(?:small\s+)?(?:boy|girl),?\s*)?(?:\d+|turning|now)\s+(?:years?\s+)?old/i;
+  const ageMatch = fullPrompt.match(agePattern);
+  if (ageMatch && ageMatch[1]) {
+    const name = ageMatch[1].trim();
+    // Don't match generic words
+    if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
+      return name;
+    }
+  }
+
+  // Pattern 2: "Birthday Story for [Name]"
+  const titlePattern = /(?:birthday|celebration|party|adventure)\s+(?:story|video|movie|special)\s+for\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i;
+  const titleMatch = fullPrompt.match(titlePattern);
+  if (titleMatch && titleMatch[1]) {
+    const name = titleMatch[1].trim();
+    if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
+      return name;
+    }
+  }
+
+  // Pattern 3: "HAPPY BIRTHDAY [NAME]" in all caps
+  const capsPattern = /HAPPY\s+BIRTHDAY\s+([A-Z]{2,}(?:\s+[A-Z]{2,})*)/i;
+  const capsMatch = fullPrompt.match(capsPattern);
+  if (capsMatch && capsMatch[1]) {
+    const name = capsMatch[1].trim();
+    if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
+      return name;
+    }
+  }
+
+  // Pattern 4: Count most frequently mentioned capitalized proper nouns
+  // (not at start of a line after a colon, which are speakers)
+  const nameCounts = new Map<string, number>();
+  // Match capitalized words in the middle of sentences (mentioned, not speaking)
+  const mentionPattern = /(?:for|to|about|with|our|super|dear|friend)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g;
+  let mentionMatch;
+  while ((mentionMatch = mentionPattern.exec(fullPrompt)) !== null) {
+    const name = mentionMatch[1].trim();
+    if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name) && !findKnownCharacter(name)) {
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    }
+  }
+
+  // Also check "Happy Birthday, [Name]" and "[Name]'s birthday"
+  const possessivePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'s?\s+birthday/i;
+  const possessiveMatch = fullPrompt.match(possessivePattern);
+  if (possessiveMatch && possessiveMatch[1]) {
+    const name = possessiveMatch[1].trim();
+    if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 5); // High weight for possessive
+    }
+  }
+
+  // Find the most mentioned name
+  let bestName: string | null = null;
+  let bestCount = 0;
+  for (const [name, count] of nameCounts) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestName = name;
+    }
+  }
+
+  // Only return if mentioned at least twice (it's clearly the honoree)
+  if (bestCount >= 2) return bestName;
+
+  return null;
 }
 
 // Detect characters across entire script with AI-enhanced descriptions
 function buildCharacterDescriptions(characters: string[], fullPrompt: string): DetectedCharacter[] {
+  // Ensure the honoree is always included with protagonist role
+  const honoree = detectHonoree(fullPrompt);
+  const allNames = new Set<string>(characters.map(c => c.toLowerCase()));
+  const isBirthdayScript = /birthday/i.test(fullPrompt);
+  const ageMatch = fullPrompt.match(/(\d+)\s+years?\s+old/i);
+  const age = ageMatch ? parseInt(ageMatch[1]) : null;
+  const genderHint = /small\s+boy|boy\s+who|nursery.*boy/i.test(fullPrompt) ? "boy" :
+                     /small\s+girl|girl\s+who|nursery.*girl/i.test(fullPrompt) ? "girl" : null;
+
+  if (honoree && !allNames.has(honoree.toLowerCase())) {
+    characters.push(honoree);
+  }
   return characters.map((name) => {
+    const isHonoree = honoree && name.toLowerCase() === honoree.toLowerCase();
+
     // Check if this is a known brand character FIRST
     const known = findKnownCharacter(name);
     if (known) {
@@ -265,6 +409,16 @@ function buildCharacterDescriptions(characters: string[], fullPrompt: string): D
     if (name.toLowerCase().includes("narrator")) {
       role = "narrator";
       description = `Narrator, off-screen voice, storytelling presence`;
+    } else if (isHonoree) {
+      // The birthday child / celebrant — protagonist with rich context
+      role = "protagonist";
+      const parts: string[] = [name];
+      if (age) parts.push(`a ${age}-year-old ${genderHint || "child"}`);
+      if (isBirthdayScript) parts.push("the birthday child");
+      if (genderHint === "boy") parts.push("a small boy in nursery school");
+      else if (genderHint === "girl") parts.push("a small girl in nursery school");
+      parts.push("expressive face, joyful and excited, wearing a birthday outfit or party clothes");
+      description = parts.join(", ");
     } else if (name.toLowerCase().includes("hero") || name.toLowerCase().includes("spidey") || name.toLowerCase().includes("super")) {
       role = "protagonist";
       description = `Hero character ${name}, brave and adventurous, central to the story`;
@@ -297,6 +451,15 @@ export async function POST(req: NextRequest) {
           scene.characterNames.forEach((n) => allCharacterNames.add(n));
         }
       }
+      // Also scan the FULL script for known brand characters mentioned anywhere
+      // Skip team-level entries (paw patrol) since individual pups are detected separately
+      const skipTeamEntries = new Set(["paw patrol", "cocomelon"]);
+      for (const [key] of Object.entries(KNOWN_CHARACTERS)) {
+        if (skipTeamEntries.has(key)) continue;
+        if (prompt.toLowerCase().includes(key.toLowerCase())) {
+          allCharacterNames.add(displayNameForKey(key));
+        }
+      }
       const characterList = buildCharacterDescriptions([...allCharacterNames], prompt);
 
       console.log(`Extracted ${predefinedScenes.length} scenes and ${characterList.length} characters from script`);
@@ -317,8 +480,14 @@ export async function POST(req: NextRequest) {
       "",
       "Your job is to:",
       "1. Break the concept into EXACTLY " + desiredSceneCount + " individual scenes for AI video generation",
-      "2. Identify all characters mentioned in the script",
+      "2. Identify ALL characters mentioned or referenced in the script — including those who don't speak",
       "3. For each scene, provide visual description (NO dialogue) AND extracted dialogue",
+      "",
+      "IMPORTANT CHARACTER RULES:",
+      "- Detect characters who speak AND characters who are only MENTIONED by name (e.g., a birthday child mentioned in 'Happy Birthday Emma!')",
+      "- If the script is about a birthday, celebration, or dedication — the honoree (birthday child, celebrant) MUST be listed as a character with role 'protagonist'",
+      "- Look for patterns like 'for [Name]', '[Name]'s birthday', 'Happy Birthday [Name]', 'Dear [Name]' to identify the honoree",
+      "- Describe the honoree's visual appearance (age, gender, clothing) based on context clues in the script",
       "",
       "Rules:",
       "- Each scene PROMPT must be a self-contained VISUAL description (NO dialogue, NO text, NO on-screen text)",
@@ -371,6 +540,26 @@ export async function POST(req: NextRequest) {
         description: (c.description || "") as string,
       })).filter((c: DetectedCharacter) => c.name.length > 0)
     );
+
+    // Safety net: ensure honoree is detected even if AI missed it
+    const aiCharNames = new Set(characters.map(c => c.name.toLowerCase()));
+    const fallbackHonoree = detectHonoree(prompt);
+    if (fallbackHonoree && !aiCharNames.has(fallbackHonoree.toLowerCase())) {
+      const isBirthdayScript = /birthday/i.test(prompt);
+      const ageM = prompt.match(/(\d+)\s+years?\s+old/i);
+      const age = ageM ? parseInt(ageM[1]) : null;
+      const gender = /small\s+boy|boy\s+who|nursery.*boy/i.test(prompt) ? "boy" :
+                     /small\s+girl|girl\s+who|nursery.*girl/i.test(prompt) ? "girl" : "child";
+      const descParts: string[] = [fallbackHonoree];
+      if (age) descParts.push(`a ${age}-year-old ${gender}`);
+      if (isBirthdayScript) descParts.push("the birthday child");
+      descParts.push("expressive face, joyful, wearing party clothes");
+      characters.unshift({
+        name: fallbackHonoree,
+        role: "protagonist",
+        description: descParts.join(", "),
+      });
+    }
 
     // Pad if AI returned fewer scenes
     while (scenes.length < desiredSceneCount && scenes.length > 0) {

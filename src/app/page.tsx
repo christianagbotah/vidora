@@ -4295,7 +4295,7 @@ function VidoraApp() {
                       </div>
                       Script Analysis Preview
                       <Badge className="ml-auto text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
-                        {parsedScenes.length} scenes, {parsedCharacters.length} characters
+                        {parsedScenes.length} scene{parsedScenes.length !== 1 ? "s" : ""}
                       </Badge>
                     </CardTitle>
                   </CardHeader>
@@ -4321,9 +4321,25 @@ function VidoraApp() {
                 </Card>
               )}
 
+              {/* ── ADD CHARACTER BUTTON (when card is hidden) ── */}
+              {parsedCharacters.length === 0 && !showAddCharForm && parsedScenes.length > 0 && (
+                <div className="flex items-center gap-2 px-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs gap-1.5 border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 hover:border-violet-400"
+                    onClick={() => setShowAddCharForm(true)}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Add Characters (birthday child, etc.)
+                  </Button>
+                  <span className="text-xs text-muted-foreground">No characters detected — add manually if needed</span>
+                </div>
+              )}
+
               {/* ── CHARACTER IMAGE MANAGEMENT (prominent card) ── */}
               {/* Shows whenever characters are detected OR the user manually adds one. */}
-              {parsedCharacters.length > 0 && (
+              {(parsedCharacters.length > 0 || showAddCharForm) && (
                 <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
@@ -4332,7 +4348,9 @@ function VidoraApp() {
                           <Users className="h-3.5 w-3.5" />
                         </div>
                         Characters
-                        <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
+                        {parsedCharacters.length > 0 && (
+                          <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
+                        )}
                       </CardTitle>
                       <Button
                         size="sm"
