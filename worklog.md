@@ -1892,3 +1892,26 @@ Stage Summary:
 - Supports: Mobile Money (MTN, Telecel, AT), Bank Card, Wallet (Hubtel, G-Money), GhQR, Cash/Cheque
 - Files modified: src/lib/payments/index.ts, src/app/api/payments/webhook/route.ts, src/app/api/payments/initialize/route.ts, src/app/page.tsx, .env.example
 - Files created: src/app/api/payments/hubtel/status/route.ts
+
+---
+Task ID: 2
+Agent: main
+Task: Fix Script Analysis Preview card layout - heading labels interfering with text
+
+Work Log:
+- Identified the "Script Analysis Preview" card in create view (lines 4089-4133 of page.tsx)
+- Root causes found: (1) line-clamp-2 clipping scene prompts causing overlap, (2) scene title in flex row without min-w-0/truncate causing overflow, (3) card-glow overflow:hidden conflicting with CardContent scroll
+- Fixed: Removed line-clamp-2, added break-words to all text elements
+- Fixed: Added min-w-0 + shrink-0 to flex row, truncate on scene title span
+- Fixed: Moved scrollable container inside CardContent (max-h-[50vh] overflow-y-auto) to avoid card-glow overflow conflict
+- Fixed: Added visualNote display with camera icon for scene visual descriptions
+- Fixed: Moved "Detected Characters" section inside scrollable area with proper heading icon styling
+- Reverted incorrect overflow-auto max-h-[85vh] fix from storyboard scene cards (applied in wrong place previously)
+- Lint passes clean, committed and pushed
+
+Stage Summary:
+- Script Analysis Preview card now properly scrolls with contained text
+- Scene titles truncate instead of overflowing
+- All text uses break-words for proper wrapping
+- Detected Characters heading clearly separated with icon
+- Committed as 315e0fd, pushed to main
