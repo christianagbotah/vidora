@@ -42,6 +42,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader,
   DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
+import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
@@ -8479,6 +8480,10 @@ function VidoraApp() {
       {/* ── Payment Checkout Popup (Onsite / Hubtel iframe) ── */}
       <Dialog open={paymentPopupOpen} onOpenChange={(open) => { if (!open) handleClosePaymentPopup(); }}>
         <DialogContent className="sm:max-w-[520px] p-0 gap-0 overflow-hidden">
+          <VisuallyHidden>
+            <DialogTitle>Complete Your Payment</DialogTitle>
+            <DialogDescription>Secure checkout powered by Hubtel</DialogDescription>
+          </VisuallyHidden>
           <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-violet-600 to-fuchsia-600">
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center">
