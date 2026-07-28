@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "./preloader.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Preloader, ViewTransitionOverlay } from "@/components/Preloader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
