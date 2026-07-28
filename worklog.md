@@ -2062,3 +2062,21 @@ Work Log:
 
 Stage Summary:
 - Admin config fields (Hubtel API ID/Key, AI settings, etc.) now persist user input without auto-resetting
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix Hubtel merchant account number not saving on local server
+
+Work Log:
+- Investigated the admin config form and API route
+- Identified root cause: CONFIG_SCHEMA in `/api/admin/config/route.ts` only had `hubtel_merchant_id`, but the form used `hubtel_merchant_account_number` as the field key
+- The PUT handler's `if (!(key in CONFIG_SCHEMA)) continue;` silently skipped `hubtel_merchant_account_number`
+- After save, the reload merged empty values back, causing the "auto-reset" behavior
+- Added `hubtel_merchant_account_number` to CONFIG_SCHEMA
+- Updated `handleSaveGatewayConfig` to mirror value to `hubtel_merchant_id` for backward compatibility
+- Ran lint (clean), committed, and pushed
+
+Stage Summary:
+- Key fix: `hubtel_merchant_account_number` added to CONFIG_SCHEMA in admin config API
+- Save handler mirrors value to both `hubtel_merchant_account_number` and `hubtel_merchant_id`
+- Committed as `30d0c62` and pushed to origin/main
