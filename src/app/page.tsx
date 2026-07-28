@@ -6043,24 +6043,30 @@ function VidoraApp() {
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Client ID</Label>
                                 <Input
-                                  type="password"
+                                  type="text"
                                   value={configForm.hubtel_client_id || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_id", e.target.value)}
-                                  placeholder="Hubtel Online Checkout Client ID"
+                                  placeholder="e.g. ab-cd-ef-12-34-56"
                                   className="h-9 text-sm"
                                 />
-                                <p className="text-xs text-muted-foreground">Used for Basic Auth (with Client Secret)</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Your Hubtel <span className="font-semibold">Account Client ID</span> (found under Account → API Credentials on Hubtel dashboard).
+                                  This is NOT the Payment API ID.
+                                </p>
                               </div>
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Client Secret</Label>
                                 <Input
-                                  type="password"
+                                  type="text"
                                   value={configForm.hubtel_client_secret || ""}
                                   onChange={(e) => updateConfigField("hubtel_client_secret", e.target.value)}
-                                  placeholder="Hubtel Online Checkout Client Secret"
+                                  placeholder="e.g. xy-12-ab-34-56-78"
                                   className="h-9 text-sm"
                                 />
-                                <p className="text-xs text-muted-foreground">Used for Basic Auth (with Client ID)</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Your Hubtel <span className="font-semibold">Account Client Secret</span> (same section as Client ID).
+                                  This is NOT the Payment API Key.
+                                </p>
                               </div>
                               <div className="space-y-1.5">
                                 <Label className="text-sm font-medium">Merchant Account Number</Label>

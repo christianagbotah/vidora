@@ -193,6 +193,15 @@ export class HubtelGateway implements PaymentGateway {
 
       const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
       const totalAmount = Number(params.amount.toFixed(2));
+
+      console.log(`[Hubtel] Initiating checkout:`, {
+        clientId: `${clientId.slice(0, 6)}...`,
+        clientSecret: `${clientSecret.slice(0, 6)}...`,
+        merchantAccountNumber,
+        totalAmount,
+        reference: params.reference,
+        authPrefix: auth.slice(0, 10) + "...",
+      });
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
 
       // Hubtel Online Checkout (2026) — initiate a hosted checkout
