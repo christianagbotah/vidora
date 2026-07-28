@@ -1960,3 +1960,24 @@ Stage Summary:
 - Modified: src/app/page.tsx (added restore effect, clearPersistedNav on signout)
 - Committed as 5c4b67d, pushed to main
 - Deploy: git pull origin main && bun run build && pm2 restart vidora
+
+---
+Task ID: 5
+Agent: main
+Task: Fix Free Preview modal — add fixed close button, fix overlapping layers, add retry on error
+
+Work Log:
+- Identified modal had overflow-y-auto on entire DialogContent, causing footer to scroll away
+- Restructured to 3-zone flex layout: fixed header (shrink-0), scrollable body (flex-1 overflow-y-auto), fixed footer (shrink-0 bg-white)
+- Fixed overlapping by removing overflow-y-auto from DialogContent, using gap-0 p-0
+- Moved quota Badge from inline with title to below DialogHeader (was causing overflow/overlap)
+- Added previewImageError state for error tracking
+- Updated handleGeneratePreviewImage to set/clear error state on success/failure
+- Added error card UI: AlertCircle icon, error message, Try Again (RetryCw) and Dismiss buttons
+- Try Again calls handleGeneratePreviewImage which clears error and retries
+- Loading condition now also checks !previewImageError to avoid conflicting UI
+
+Stage Summary:
+- Modified: src/app/page.tsx (modal restructure + error state)
+- Committed as b46ddd6, pushed to main
+- Deploy: git pull origin main && bun run build && pm2 restart vidora
