@@ -2005,3 +2005,23 @@ Stage Summary:
 - Modified: src/app/page.tsx (buyTokensModalOpen state, Buy Tokens dialog, Create Video action, image layout)
 - Committed as 69042be, pushed to main
 - Deploy: git pull origin main && bun run build && pm2 restart vidora
+
+---
+Task ID: 1-b through 1-f
+Agent: main
+Task: Add character image management (upload + AI generate) to Create/Generation page
+
+Work Log:
+- Created `/api/generate-character-portrait/route.ts` — standalone endpoint that generates AI character portraits without requiring a project ID. Takes { name, description, role, style } and returns base64 image.
+- Updated `POST /api/projects` in `/api/projects/route.ts` to accept `imageBase64` on character data. When provided, saves to disk as PNG in `public/generated/characters/` and stores the URL.
+- Added state to page.tsx: `preCharImages` (Record<string, string>), `generatingCharPortrait`, `preCharFileInputRef`, `preCharUploadTarget`
+- Added handlers: `handlePreCharUpload` (reads file as base64), `handlePreCharGenerate` (calls standalone API), `handlePreCharRemove` (clears image)
+- Replaced simple character badges with rich character cards in the Create view's "Detected Characters" section — each card has: circular avatar (shows image or placeholder with loading spinner), name, role badge, upload button, AI generate button, and remove overlay
+- Updated `handleCreateAndGenerate` to include `imageBase64` for each character from `preCharImages`, and clear `preCharImages` after project creation
+- Added hidden file input for pre-project character uploads in Create view
+- Verified via agent-browser: script analysis works, character cards with Upload Photo and Generate AI Portrait buttons appear correctly
+
+Stage Summary:
+- Users can now upload character images or generate AI portraits directly on the Create page (before project creation)
+- Character images are stored client-side as base64 and transferred to the server during project creation
+- Committed as fa8294a, pushed to main
