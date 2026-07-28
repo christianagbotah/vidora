@@ -1188,6 +1188,11 @@ function VidoraApp() {
   const [headerScrolled, setHeaderScrolled] = useState(false);
   // ── Contact dialog (opened from footer) ──
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactSubject, setContactSubject] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
+  const [isSendingContact, setIsSendingContact] = useState(false);
   // ── Docs & API Reference dialogs (opened from footer) ──
   const [docsDialogOpen, setDocsDialogOpen] = useState(false);
   const [apiRefDialogOpen, setApiRefDialogOpen] = useState(false);
@@ -2092,6 +2097,49 @@ function VidoraApp() {
     if (inputMode === "script") return scriptText;
     if (enhancedText) return enhancedText;
     return textPrompt;
+  };
+
+  /* ──────────────────────────────────────────────────────────────
+     CONTACT FORM HANDLER
+     Saves the user's message to the database so admin can review it.
+     ────────────────────────────────────────────────────────────── */
+  const handleSendContact = async () => {
+    if (!contactName.trim() || !contactEmail.trim() || !contactMessage.trim()) {
+      toast({ title: "Please fill in all fields", variant: "destructive" });
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(contactEmail)) {
+      toast({ title: "Please enter a valid email", variant: "destructive" });
+      return;
+    }
+    setIsSendingContact(true);
+    try {
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: contactName,
+          email: contactEmail,
+          subject: contactSubject || "General Inquiry",
+          message: contactMessage,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Message sent! ✓", description: "We'll get back to you soon." });
+        setContactName("");
+        setContactEmail("");
+        setContactSubject("");
+        setContactMessage("");
+        setContactDialogOpen(false);
+      } else {
+        toast({ title: "Failed to send", description: getApiError(data), variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to send message", variant: "destructive" });
+    } finally {
+      setIsSendingContact(false);
+    }
   };
 
   /* ──────────────────────────────────────────────────────────────
@@ -8165,7 +8213,7 @@ function VidoraApp() {
 
       {/* ── Contact Dialog (opened from footer) ── */}
       <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
@@ -8174,66 +8222,91 @@ function VidoraApp() {
               Get in Touch
             </DialogTitle>
             <DialogDescription>
-              We'd love to hear from you. Reach out with any questions, feedback, or partnership ideas.
+              Send us a message and we'll get back to you, or reach us directly via the channels below.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+
+          {/* Contact form */}
+          <div className="space-y-3 py-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Your Name</Label>
+                <Input
+                  placeholder="Jane Doe"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Email</Label>
+                <Input
+                  type="email"
+                  placeholder="jane@example.com"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Subject</Label>
+              <Input
+                placeholder="What's this about?"
+                value={contactSubject}
+                onChange={(e) => setContactSubject(e.target.value)}
+                className="h-9 text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium">Message</Label>
+              <Textarea
+                placeholder="Write your message here..."
+                value={contactMessage}
+                onChange={(e) => setContactMessage(e.target.value)}
+                className="min-h-[120px] text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Quick contact channels */}
+          <div className="flex flex-wrap gap-2 pt-1">
             <a
               href="mailto:vidora@lightworldtech.com"
-              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-colors group"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-violet-300 hover:bg-violet-50 transition-colors text-xs"
             >
-              <div className="h-10 w-10 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 group-hover:bg-violet-200 transition-colors shrink-0">
-                <MailIcon className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">Email Us</p>
-                <p className="text-xs text-muted-foreground truncate">vidora@lightworldtech.com</p>
-              </div>
+              <MailIcon className="h-3.5 w-3.5 text-violet-600" />
+              <span className="font-medium">Email</span>
             </a>
             <a
               href="https://wa.me/233243618186"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors group"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 transition-colors text-xs"
             >
-              <div className="h-10 w-10 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-200 transition-colors shrink-0">
-                <MessageCircle className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">WhatsApp</p>
-                <p className="text-xs text-muted-foreground truncate">0243618186</p>
-              </div>
+              <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+              <span className="font-medium">WhatsApp</span>
             </a>
-            <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
-              <div className="h-10 w-10 rounded-lg bg-fuchsia-100 flex items-center justify-center text-fuchsia-600 shrink-0">
-                <Globe className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">Website</p>
-                <p className="text-xs text-muted-foreground truncate">vidora.lightworldtech.com</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
-              <Bot className="h-5 w-5 text-violet-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-muted-foreground">
-                Need a quick answer? Try our <strong className="text-violet-600">AI Assistant</strong> —
-                click the chat bubble in the bottom-right corner. It's available 24/7 and can help with
-                most questions instantly.
-              </p>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-xs">
+              <Bot className="h-3.5 w-3.5 text-violet-500" />
+              <span className="font-medium">Try the AI Assistant →</span>
             </div>
           </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setContactDialogOpen(false)}>
-              Close
+              Cancel
             </Button>
             <Button
               className="btn-gradient"
-              onClick={() => {
-                setContactDialogOpen(false);
-                window.location.href = "mailto:vidora@lightworldtech.com";
-              }}
+              onClick={handleSendContact}
+              disabled={isSendingContact}
             >
-              <MailIcon className="h-4 w-4 mr-1.5" /> Send Email
+              {isSendingContact ? (
+                <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Sending...</>
+              ) : (
+                <><Send className="h-4 w-4 mr-1.5" />Send Message</>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

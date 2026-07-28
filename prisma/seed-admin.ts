@@ -3,9 +3,40 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
+/**
+ * Seed / update the admin user.
+ *
+ * Usage:
+ *   bun run prisma:seed-admin <email> <password>
+ *
+ * For security, there is NO default password. If arguments are missing
+ * the script will:
+ *   - fall back to ADMIN_EMAIL / ADMIN_PASSWORD env vars, OR
+ *   - exit with an error explaining how to use it.
+ *
+ * Existing admins are updated in place (preserves user id, payments,
+ * projects, token transactions).
+ */
 async function main() {
-  const email = process.argv[2] || "vidora@lightworldtech.com";
-  const password = process.argv[3] || "@@Myjesus4me2016$$";
+  const email = process.argv[2] || process.env.ADMIN_EMAIL;
+  const password = process.argv[3] || process.env.ADMIN_PASSWORD;
+
+  if (!email || !password) {
+    console.error("❌ Admin email and password are required.");
+    console.error("");
+    console.error("Usage:");
+    console.error("  bun run prisma:seed-admin <email> <password>");
+    console.error("");
+    console.error("Or set ADMIN_EMAIL and ADMIN_PASSWORD env vars.");
+    console.error("");
+    console.error("Password requirements: min 10 chars, mix of letters, numbers, symbols.");
+    process.exit(1);
+  }
+
+  if (password.length < 10) {
+    console.error("❌ Password must be at least 10 characters long.");
+    process.exit(1);
+  }
 
   // Check if admin exists by the NEW email
   const existing = await prisma.user.findUnique({ where: { email } });
@@ -42,7 +73,6 @@ async function main() {
     });
     console.log(`✅ Admin updated (migrated from ${oldAdmin.email})`);
     console.log(`   New Email: ${updated.email}`);
-    console.log(`   New Password: ${password}`);
     console.log(`   Role: ${updated.role}`);
     console.log(`   Tokens: ${updated.tokens}`);
     console.log("");
@@ -64,7 +94,6 @@ async function main() {
 
   console.log("✅ Admin user created!");
   console.log(`   Email: ${admin.email}`);
-  console.log(`   Password: ${password}`);
   console.log(`   Role: ${admin.role}`);
   console.log(`   Tokens: ${admin.tokens}`);
   console.log("");
