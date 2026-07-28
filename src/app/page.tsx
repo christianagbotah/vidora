@@ -4100,23 +4100,21 @@ function VidoraApp() {
                       </Badge>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <ScrollArea className="max-h-64">
-                      <div className="space-y-3 pr-4">
-                        {parsedScenes.map((s, i) => (
-                          <div key={i} className="p-3 rounded-lg border border-slate-100 bg-slate-50/50">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Badge className="text-xs bg-violet-100 text-violet-700 border-violet-200">Scene {i + 1}</Badge>
-                              {s.title && <span className="text-xs font-bold">{s.title}</span>}
-                            </div>
-                            <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
-                            {s.dialogue && (
-                              <p className="text-xs text-violet-500 mt-1 italic">{s.dialogue}</p>
-                            )}
+                  <CardContent className="max-h-[70vh] overflow-y-auto">
+                    <div className="space-y-3">
+                      {parsedScenes.map((s, i) => (
+                        <div key={i} className="p-3 rounded-lg border border-slate-100 bg-slate-50/50">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge className="text-xs bg-violet-100 text-violet-700 border-violet-200">Scene {i + 1}</Badge>
+                            {s.title && <span className="text-xs font-bold">{s.title}</span>}
                           </div>
-                        ))}
-                      </div>
-                    </ScrollArea>
+                          <p className="text-sm text-muted-foreground line-clamp-2">{s.prompt}</p>
+                          {s.dialogue && (
+                            <p className="text-xs text-violet-500 mt-1 italic">{s.dialogue}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                     {parsedCharacters.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-slate-100">
                         <p className="text-xs font-bold mb-2">Detected Characters:</p>
