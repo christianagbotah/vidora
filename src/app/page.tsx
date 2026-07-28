@@ -4993,7 +4993,7 @@ function VidoraApp() {
               <div className="text-center">
                 <p className="text-xs text-muted-foreground">
                   <CreditCard className="h-3 w-3 inline mr-1" />
-                  Pay with MTN MoMo, Vodafone Cash, Visa, Mastercard via Paystack
+                  Pay with MTN MoMo, Vodafone Cash, Visa, Mastercard
                 </p>
               </div>
 
