@@ -4966,7 +4966,12 @@ function VidoraApp() {
                     )}
                     <CardHeader className="text-center pb-2 pt-5">
                       <CardTitle className="text-lg font-bold">{pkg.name as string}</CardTitle>
-                      <CardDescription className="text-xs">{pkg.tokens} tokens</CardDescription>
+                      <CardDescription className="text-xs">
+                        {pkg.tokens} tokens
+                        {pkg.bonusPct && Number(pkg.bonusPct) > 0 && (
+                          <sup className="ml-1 text-[10px] font-bold text-emerald-500">+{Math.round(pkg.tokens * Number(pkg.bonusPct) / 100)}</sup>
+                        )}
+                      </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="text-center">
