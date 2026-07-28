@@ -155,17 +155,27 @@ export class HubtelGateway implements PaymentGateway {
     const clientIdRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_id" } });
     const clientSecretRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_secret" } });
     const accountNumberRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_account_number" } });
-    return {
-      clientId: clientIdRow?.value || process.env.HUBTEL_CLIENT_ID || "",
-      clientSecret: clientSecretRow?.value || process.env.HUBTEL_CLIENT_SECRET || "",
-      merchantAccountNumber:
-        accountNumberRow?.value ||
-        process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ||
-        // Backwards-compatible: fall back to old hubtel_merchant_id if set
-        (await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_id" } }))?.value ||
-        process.env.HUBTEL_MERCHANT_ID ||
-        "",
-    };
+    const oldAccountRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_id" } });
+
+    const clientId = (clientIdRow?.value || "").trim() || process.env.HUBTEL_CLIENT_ID || "";
+    const clientSecret = (clientSecretRow?.value || "").trim() || process.env.HUBTEL_CLIENT_SECRET || "";
+    const merchantAccountNumber =
+      (accountNumberRow?.value || "").trim() ||
+      process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ||
+      (oldAccountRow?.value || "").trim() ||
+      process.env.HUBTEL_MERCHANT_ID ||
+      "";
+
+    console.log(`[Hubtel] Credential sources:`, {
+      clientIdSource: clientIdRow?.value ? "DB(hubtel_client_id)" : process.env.HUBTEL_CLIENT_ID ? "ENV(HUBTEL_CLIENT_ID)" : "NONE",
+      clientSecretSource: clientSecretRow?.value ? "DB(hubtel_client_secret)" : process.env.HUBTEL_CLIENT_SECRET ? "ENV(HUBTEL_CLIENT_SECRET)" : "NONE",
+      merchantAccountSource: accountNumberRow?.value ? "DB(hubtel_merchant_account_number)" : oldAccountRow?.value ? "DB(hubtel_merchant_id)" : process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ? "ENV" : "NONE",
+      clientIdPreview: clientId ? `${clientId.slice(0, 8)}...(${clientId.length}chars)` : "EMPTY",
+      clientSecretPreview: clientSecret ? `${clientSecret.slice(0, 8)}...(${clientSecret.length}chars)` : "EMPTY",
+      merchantAccountNumber,
+    });
+
+    return { clientId, clientSecret, merchantAccountNumber };
   }
 
   async initializePayment(params: {
@@ -239,6 +249,10 @@ export class HubtelGateway implements PaymentGateway {
 
       // Handle non-JSON responses gracefully (Hubtel may return HTML on bad auth)
       const responseText = await res.text();
+      console.log(`[Hubtel] Response: HTTP ${res.status}`, {
+        requestUrl: "https://payproxyapi.hubtel.com/items/initiate",
+        responseBody: responseText.substring(0, 500),
+      });
       let data: Record<string, unknown>;
       try {
         data = JSON.parse(responseText);
