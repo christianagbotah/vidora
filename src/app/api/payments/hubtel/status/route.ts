@@ -2,7 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { HubtelGateway } from "@/lib/payments";
 import { creditPurchase } from "@/lib/tokens";
-import { TOKEN_PACKAGES, getEffectiveTokens } from "@/lib/pricing";
+
+/**
+ * Extract bonusTokens from payment metadata (stored at creation time).
+ */
+function getBonusTokens(payment: { metadata: string | null }): number {
+  try {
+    if (payment.metadata) {
+      const meta = JSON.parse(payment.metadata);
+      return typeof meta.bonusTokens === "number" ? meta.bonusTokens : 0;
+    }
+  } catch { /* ignore */ }
+  return 0;
+}
 
 /**
  * Hubtel Transaction Status Check (Mandatory per Hubtel docs)
@@ -12,11 +24,6 @@ import { TOKEN_PACKAGES, getEffectiveTokens } from "@/lib/pricing";
  * final status.
  *
  * Endpoint: GET /api/payments/hubtel/status?reference=xxx
- *
- * This route:
- * 1. Calls Hubtel's status API: GET https://api-txnstatus.hubtel.com/transactions/{AccountNumber}/status
- * 2. If "Paid" → credits tokens (idempotent — skips if already completed)
- * 3. Returns the Hubtel status details to the caller
  */
 export async function GET(req: NextRequest) {
   try {
@@ -41,11 +48,13 @@ export async function GET(req: NextRequest) {
     }
 
     if (payment.status === "completed") {
+      const bonusTokens = getBonusTokens(payment);
       return NextResponse.json({
         success: true,
         alreadyCompleted: true,
         paymentId: payment.id,
-        tokensPurchased: payment.tokensPurchased,
+        tokensPurchased: payment.tokensPurchased + bonusTokens,
+        bonusTokens,
         message: "Payment already completed and tokens credited.",
       });
     }
@@ -55,34 +64,27 @@ export async function GET(req: NextRequest) {
     const result = await gateway.verifyPayment(reference);
 
     if (result.success && result.verified) {
+      const bonusTokens = getBonusTokens(payment);
+
       // Payment confirmed — credit tokens
       await db.payment.update({
         where: { id: payment.id },
         data: { status: "completed" },
       });
 
-      // Credit tokens with bonus
-      let baseTokens = payment.tokensPurchased;
-      let bonusTokens = 0;
-      const pkg = TOKEN_PACKAGES.find((p) => p.tokens === payment.tokensPurchased);
-      if (pkg) {
-        baseTokens = pkg.tokens;
-        bonusTokens = getEffectiveTokens(pkg) - pkg.tokens;
-      }
-
       const creditResult = await creditPurchase({
         userId: payment.userId,
-        baseTokens,
+        baseTokens: payment.tokensPurchased,
         bonusTokens,
         paymentId: payment.id,
-        description: `Purchased ${baseTokens} tokens via Hubtel (status check)`,
+        description: `Purchased ${payment.tokensPurchased} tokens via Hubtel (status check)`,
       });
 
       return NextResponse.json({
         success: true,
         verified: true,
         paymentId: payment.id,
-        tokensPurchased: baseTokens + bonusTokens,
+        tokensPurchased: payment.tokensPurchased + bonusTokens,
         bonusTokens,
         newBalance: creditResult.newBalance,
         hubtelAmount: result.amount,

@@ -1,5 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { creditPurchase } from "@/lib/tokens";
+
+/**
+ * Extract bonusTokens from payment metadata (stored at creation time).
+ * Falls back to 0 if not found.
+ */
+function getBonusTokens(payment: { metadata: string | null }): number {
+  try {
+    if (payment.metadata) {
+      const meta = JSON.parse(payment.metadata);
+      return typeof meta.bonusTokens === "number" ? meta.bonusTokens : 0;
+    }
+  } catch { /* ignore parse errors */ }
+  return 0;
+}
 
 // Webhook handler for all payment gateways
 // - Paystack:  x-paystack-signature header
@@ -48,41 +63,23 @@ export async function POST(req: NextRequest) {
       if (event === "charge.success" && reference) {
         const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
         if (payment && payment.status !== "completed") {
+          const bonusTokens = getBonusTokens(payment);
           await db.payment.update({ where: { id: payment.id }, data: { status: "completed" } });
-          await db.user.update({
-            where: { id: payment.userId },
-            data: { tokens: { increment: payment.tokensPurchased } },
+          await creditPurchase({
+            userId: payment.userId,
+            baseTokens: payment.tokensPurchased,
+            bonusTokens,
+            paymentId: payment.id,
+            description: `Purchased ${payment.tokensPurchased} tokens via Paystack (webhook)`,
           });
-          await db.tokenTransaction.create({
-            data: {
-              userId: payment.userId,
-              type: "purchase",
-              amount: payment.tokensPurchased,
-              description: `Purchased ${payment.tokensPurchased} tokens via Paystack (webhook)`,
-              referenceId: payment.id,
-            },
-          });
-          console.log(`[Webhook] Paystack: credited ${payment.tokensPurchased} tokens to ${payment.userId}`);
+          console.log(
+            `[Webhook] Paystack: credited ${payment.tokensPurchased} + ${bonusTokens} bonus tokens to ${payment.userId}`
+          );
         }
       }
     }
 
     // ─── Hubtel Online Checkout Callback (2026) ────────────
-    // Format:
-    // {
-    //   ResponseCode: "0000",
-    //   Status: "Success",
-    //   Data: {
-    //     CheckoutId: "...",
-    //     SalesInvoiceId: "...",
-    //     ClientReference: "...",      ← our payment reference
-    //     Status: "Success" | "Failed",
-    //     Amount: 0.5,
-    //     CustomerPhoneNumber: "233...",
-    //     PaymentDetails: { MobileMoneyNumber, PaymentType, Channel },
-    //     Description: "..."
-    //   }
-    // }
     else if (gateway === "hubtel" && parsedBody.Data) {
       const hubtelData = parsedBody.Data as Record<string, unknown>;
       reference = (hubtelData.ClientReference || "") as string;
@@ -106,12 +103,15 @@ export async function POST(req: NextRequest) {
           // Only process if not already completed
           if (payment.status !== "completed") {
             if (responseCode === "0000" && callbackStatus === "success") {
-              // Payment successful — credit tokens
+              const bonusTokens = getBonusTokens(payment);
+
+              // Payment successful — credit tokens with bonus
               await db.payment.update({
                 where: { id: payment.id },
                 data: {
                   status: "completed",
                   metadata: JSON.stringify({
+                    ...getBonusTokens(payment),
                     hubtelCheckoutId: checkoutId,
                     hubtelSalesInvoiceId: hubtelData.SalesInvoiceId || "",
                     customerPhone,
@@ -119,29 +119,22 @@ export async function POST(req: NextRequest) {
                     channel,
                     mobileNumber,
                     description,
+                    bonusTokens,
                     callbackRaw: { ResponseCode: responseCode, Status: hubtelData.Status, Amount: amount },
                   }),
                 },
               });
 
-              await db.user.update({
-                where: { id: payment.userId },
-                data: { tokens: { increment: payment.tokensPurchased } },
-              });
-
-              await db.tokenTransaction.create({
-                data: {
-                  userId: payment.userId,
-                  type: "purchase",
-                  amount: payment.tokensPurchased,
-                  description: `Purchased ${payment.tokensPurchased} tokens via Hubtel ${paymentType ? `(${paymentType}/${channel})` : "(webhook)"}`,
-                  referenceId: payment.id,
-                  operationType: "purchase",
-                },
+              await creditPurchase({
+                userId: payment.userId,
+                baseTokens: payment.tokensPurchased,
+                bonusTokens,
+                paymentId: payment.id,
+                description: `Purchased ${payment.tokensPurchased} tokens via Hubtel ${paymentType ? `(${paymentType}/${channel})` : "(webhook)"}`,
               });
 
               console.log(
-                `[Webhook] Hubtel: credited ${payment.tokensPurchased} tokens to ${payment.userId}` +
+                `[Webhook] Hubtel: credited ${payment.tokensPurchased} + ${bonusTokens} bonus tokens to ${payment.userId}` +
                   (paymentType ? ` [${paymentType}/${channel}]` : "")
               );
             } else {

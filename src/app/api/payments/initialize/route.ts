@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getActiveGateway } from "@/lib/payments";
 import { v4 as uuid } from "uuid";
+import { getActivePackages } from "@/lib/token-packages";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest) {
 
     const userId = (session.user as Record<string, unknown>).id as string;
     const body = await req.json();
-    const { amount, tokensPurchased, currency, gateway: gatewayOverride } = body;
+    const { amount, tokensPurchased, currency, gateway: gatewayOverride, packageId } = body;
 
     if (!amount || !tokensPurchased) {
       return NextResponse.json(
@@ -22,6 +23,18 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Calculate bonus tokens from the DB package at purchase time
+    let bonusTokens = 0;
+    try {
+      const packages = await getActivePackages();
+      const pkg = packageId
+        ? packages.find((p) => p.id === packageId || p.slug === packageId)
+        : packages.find((p) => p.tokens === tokensPurchased);
+      if (pkg) {
+        bonusTokens = Math.round((pkg.tokens * pkg.bonusPct) / 100);
+      }
+    } catch { /* fallback: 0 bonus */ }
 
     // Determine gateway
     let gatewayName = gatewayOverride;
@@ -33,7 +46,7 @@ export async function POST(req: NextRequest) {
     const reference = `VID-${uuid().slice(0, 8)}-${Date.now()}`;
     const callbackUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/payments/verify`;
 
-    // Create payment record
+    // Create payment record with bonus stored in metadata
     const payment = await db.payment.create({
       data: {
         userId,
@@ -43,6 +56,7 @@ export async function POST(req: NextRequest) {
         tokensPurchased,
         gatewayRef: reference,
         status: "pending",
+        metadata: JSON.stringify({ bonusTokens, packageId: packageId || null }),
       },
     });
 
