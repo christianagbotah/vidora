@@ -1939,3 +1939,24 @@ Stage Summary:
 - Modified src/app/globals.css to remove extracted sections (header-label kept)
 - Committed as aa42d92, pushed to main
 - User should deploy: git pull origin main && bun run build && pm2 restart vidora
+
+---
+Task ID: 4
+Agent: main
+Task: Fix page reload losing current view — user gets sent back to home
+
+Work Log:
+- Diagnosed: currentView stored in Zustand without persistence, resets to "home" on reload
+- Added Zustand persist middleware to useAppStore (zustand/middleware)
+- Persists currentView and persistedProjectId to localStorage key "vidora-nav"
+- Used partialize to only persist nav state, excluding transient flags (isGenerating, etc.)
+- setCurrentProject now auto-updates persistedProjectId (null clears it)
+- Added restore effect in page.tsx: on mount, if studio view + persistedProjectId + no currentProject, re-fetches project from API
+- On sign-out, calls clearPersistedNav() to reset to home and clear project ID
+- Verified via agent-browser: navigated to create view, reloaded, still on create view
+
+Stage Summary:
+- Modified: src/store/useAppStore.ts (added persist middleware)
+- Modified: src/app/page.tsx (added restore effect, clearPersistedNav on signout)
+- Committed as 5c4b67d, pushed to main
+- Deploy: git pull origin main && bun run build && pm2 restart vidora
