@@ -1062,6 +1062,7 @@ function VidoraApp() {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
   const [isGeneratingPreviewImage, setIsGeneratingPreviewImage] = useState(false);
+  const [previewImageError, setPreviewImageError] = useState<string | null>(null);
   const [previewQuota, setPreviewQuota] = useState<{ storyboard: { used: number; limit: number }; image: { used: number; limit: number } } | null>(null);
 
   /* ── Demo Mode State ── */
@@ -2400,6 +2401,7 @@ function VidoraApp() {
 
     setIsGeneratingPreviewImage(true);
     setPreviewImageUrl(null);
+    setPreviewImageError(null);
     setPreviewModalOpen(true);
     try {
       const res = await fetch("/api/preview/image", {
@@ -2413,12 +2415,16 @@ function VidoraApp() {
         setPreviewQuota(data.previewQuota ? { image: data.previewQuota, storyboard: previewQuota?.storyboard ?? { used: 0, limit: 10 } } : previewQuota);
         toast({ title: "Style preview ready!", description: "Watermarked preview — buy tokens for the full HD video." });
       } else {
-        toast({ title: "Preview failed", description: getApiError(data), variant: "destructive" });
+        const msg = getApiError(data, "Failed to generate preview image. Please try again.");
+        setPreviewImageError(msg);
+        toast({ title: "Preview failed", description: msg, variant: "destructive" });
       }
       // Always refresh quota (backend may have refunded on server-side failure)
       fetchPreviewUsage();
     } catch {
-      toast({ title: "Preview failed", description: "Network error. Please try again.", variant: "destructive" });
+      const msg = "Network error. Please check your connection and try again.";
+      setPreviewImageError(msg);
+      toast({ title: "Preview failed", description: msg, variant: "destructive" });
     } finally {
       setIsGeneratingPreviewImage(false);
     }
@@ -7552,25 +7558,29 @@ function VidoraApp() {
         if (!open && (isGeneratingStoryboard || isGeneratingPreviewImage)) return;
         setPreviewModalOpen(open);
       }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-xl">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
-                <Eye className="h-4 w-4" />
-              </div>
-              Free Preview
-              {previewQuota && (
-                <Badge variant="outline" className="text-xs ml-1">
-                  {previewQuota.storyboard.used}/{previewQuota.storyboard.limit} stories · {previewQuota.image.used}/{previewQuota.image.limit} images today
-                </Badge>
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              Your video at a glance — storyboard plan and a watermarked style preview. Buy tokens to generate the full HD, multi-scene video.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col overflow-hidden gap-0 p-0">
+          {/* ── Header (fixed, no scroll) ── */}
+          <div className="px-6 pt-6 pb-4 border-b shrink-0">
+            <DialogHeader className="space-y-1">
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
+                  <Eye className="h-4 w-4" />
+                </div>
+                Free Preview
+              </DialogTitle>
+              <DialogDescription>
+                Your video at a glance — storyboard plan and a watermarked style preview. Buy tokens to generate the full HD, multi-scene video.
+              </DialogDescription>
+            </DialogHeader>
+            {previewQuota && (
+              <Badge variant="outline" className="text-xs mt-2">
+                {previewQuota.storyboard.used}/{previewQuota.storyboard.limit} stories · {previewQuota.image.used}/{previewQuota.image.limit} images today
+              </Badge>
+            )}
+          </div>
 
-          <div className="space-y-4 py-2">
+          {/* ── Body (scrollable) ── */}
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             {/* Loading: Storyboard */}
             {isGeneratingStoryboard && !previewStoryboard && (
               <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -7637,14 +7647,46 @@ function VidoraApp() {
               </div>
             )}
 
-            {/* Style preview image */}
-            {isGeneratingPreviewImage && !previewImageUrl && (
+            {/* Style preview: loading */}
+            {isGeneratingPreviewImage && !previewImageUrl && !previewImageError && (
               <div className="flex flex-col items-center justify-center py-10 text-center rounded-xl bg-slate-50 border border-dashed border-slate-200">
                 <Loader2 className="h-8 w-8 animate-spin text-violet-500 mb-2" />
                 <p className="text-sm font-semibold text-slate-700">Generating your style preview...</p>
                 <p className="text-xs text-muted-foreground mt-1">Creating a watermarked image of Scene 1. This takes ~15-30 seconds.</p>
               </div>
             )}
+
+            {/* Style preview: error — with retry + cancel */}
+            {previewImageError && !isGeneratingPreviewImage && !previewImageUrl && (
+              <div className="rounded-xl bg-red-50 border border-red-200 p-4 flex flex-col items-center gap-3 text-center">
+                <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertCircle className="h-5 w-5 text-red-500" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-red-800">Preview generation failed</p>
+                  <p className="text-xs text-red-600 mt-1 max-w-md">{previewImageError}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                    variant="outline"
+                    onClick={handleGeneratePreviewImage}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 mr-1.5" />Try Again
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewImageError(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Style preview image */}
             {previewImageUrl && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
@@ -7664,7 +7706,7 @@ function VidoraApp() {
             {/* CTA: buy tokens to unlock full video */}
             <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 p-4 flex flex-col sm:flex-row items-center gap-3">
               <div className="flex-1 text-center sm:text-left">
-                <p className="font-bold text-amber-800 flex items-center gap-1.5"><Coins className="h-4 w-4" />Ready to create the real thing?</p>
+                <p className="font-bold text-amber-800 flex items-center gap-1.5 justify-center sm:justify-start"><Coins className="h-4 w-4" />Ready to create the real thing?</p>
                 <p className="text-xs text-amber-700 mt-0.5">Buy tokens to generate all scenes in full HD — no watermark, fully downloadable.</p>
               </div>
               <Button
@@ -7676,7 +7718,8 @@ function VidoraApp() {
             </div>
           </div>
 
-          <DialogFooter className="gap-2">
+          {/* ── Footer (fixed, no scroll) ── */}
+          <div className="px-6 py-4 border-t bg-white shrink-0 flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" onClick={() => setPreviewModalOpen(false)}>Close</Button>
             <Button
               variant="outline"
@@ -7685,7 +7728,7 @@ function VidoraApp() {
             >
               <Sparkles className="h-4 w-4 mr-1.5" />Create Full Video
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
