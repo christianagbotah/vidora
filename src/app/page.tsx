@@ -290,7 +290,7 @@ function SortableSceneCard({
             <GripVertical className="h-4 w-4 text-slate-300" />
           </div>
           {/* Content — portrait thumbnail + script column on sm+ */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 overflow-auto max-h-[85vh]">
             <div className="flex flex-col sm:flex-row sm:gap-3 p-4">
               {/* ── PORTRAIT THUMBNAIL COLUMN (narrow) ── */}
               <div className="sm:w-20 md:w-24 shrink-0 order-1 sm:order-1">
