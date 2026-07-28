@@ -2025,3 +2025,25 @@ Stage Summary:
 - Users can now upload character images or generate AI portraits directly on the Create page (before project creation)
 - Character images are stored client-side as base64 and transferred to the server during project creation
 - Committed as fa8294a, pushed to main
+
+---
+Task ID: 1-5 (audit fixes)
+Agent: main
+Task: Fix all outstanding issues found in code audit
+
+Work Log:
+- Created missing /api/projects/[id]/characters/upload route (CRITICAL — Studio upload was 404ing). Accepts multipart form with image + characterId, saves to disk, updates character record.
+- Added ContactMessage model to both prisma/schema.prisma (postgres) and prisma/schema.prisma.local (sqlite). Ran local-db-push.sh to sync.
+- Created /api/contact route: POST (public, validates + stores message) and GET (admin-only, lists messages).
+- Replaced contact info-only dialog with real form: name, email, subject, message fields + Send Message button. Form submits to /api/contact, shows toast, clears on success.
+- Removed dead src/components/LoadingSkeletons.tsx (never imported anywhere).
+- Rewrote prisma/seed-admin.ts: removed hardcoded default password. Now requires email+password as CLI args or ADMIN_EMAIL/ADMIN_PASSWORD env vars. Added min 10-char password validation.
+- Verified via agent-browser: contact form submits successfully (POST /api/contact 201, INSERT into ContactMessage confirmed in dev log).
+- Verified character upload route exists (returns 404 for fake project ID from requireProjectAccess, not from missing route file).
+- Lint passes clean.
+
+Stage Summary:
+- All 5 audit issues resolved and pushed (commit 883e67a)
+- Critical Studio character upload now functional
+- Contact form now stores real messages for admin review
+- No more plaintext admin password in repo
