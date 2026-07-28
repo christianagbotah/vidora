@@ -1981,3 +1981,27 @@ Stage Summary:
 - Modified: src/app/page.tsx (modal restructure + error state)
 - Committed as b46ddd6, pushed to main
 - Deploy: git pull origin main && bun run build && pm2 restart vidora
+
+---
+Task ID: 6
+Agent: main
+Task: Fix Free Preview modal — Buy Tokens stays on page, Create Full Video works, preview image visible
+
+Work Log:
+- Issue 1: Buy Tokens button navigated to buy-tokens view, killing storyboard generation
+  - Added buyTokensModalOpen state
+  - Created in-context Dialog with token package grid (same 3-zone flex layout)
+  - Buy Tokens CTA and download gate now open modal instead of navigating away
+- Issue 2: Create Full Video button just closed the modal (same as Cancel)
+  - Changed to btn-gradient primary action button
+  - Now calls handleCreateAndGenerate() after closing modal
+- Issue 3: Preview Visual Style image rendered behind text, unrecognizable
+  - Moved image ABOVE text label/description in the layout
+  - Added max-h-[50vh] object-contain for bounded, visible display
+  - Added shadow-sm to container for visual separation
+  - Increased spacing with space-y-3
+
+Stage Summary:
+- Modified: src/app/page.tsx (buyTokensModalOpen state, Buy Tokens dialog, Create Video action, image layout)
+- Committed as 69042be, pushed to main
+- Deploy: git pull origin main && bun run build && pm2 restart vidora
