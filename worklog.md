@@ -2105,3 +2105,24 @@ Stage Summary:
 - All 10 characters correctly detected: Narrator, Miss Rachel, Chase, Marshall, Bluey, Bingo, JJ, Spidey, SuperKitties, Giannis
 - No more duplicate character display — single Characters card with Add button
 - Lint clean, API tested and verified
+
+---
+Task ID: 3
+Agent: Main Agent
+Task: Fix portrait generation failures when generating multiple characters simultaneously
+
+Work Log:
+- Investigated root cause: all portrait API requests fired simultaneously (10+ concurrent requests to z.ai)
+- z.ai rate-limits (HTTP 429) concurrent requests, causing some to fail after exhausting retries
+- Added concurrency limiter: portrait queue with max 2 parallel requests at a time
+- Created `portraitQueueRef` and `portraitActiveCountRef` refs for queue management
+- Split `handlePreCharGenerate` into: `generateOnePortrait` (single API call), `processPortraitQueue` (dequeuer), `handlePreCharGenerate` (entry point that enqueues)
+- Each portrait completion triggers `processPortraitQueue` to start the next queued item
+- Added "Generate All" button that queues all characters without images
+- Improved error toasts to include character name ("Chase's portrait failed" instead of generic "Portrait generation failed")
+
+Stage Summary:
+- Portrait generation now limited to 2 concurrent requests, queued sequentially
+- "Generate All" button for one-click batch generation
+- Error toasts now show which character failed
+- Users clicking multiple AI Generate buttons will see 2 generating at a time, rest queued

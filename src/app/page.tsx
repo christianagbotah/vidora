@@ -1036,6 +1036,10 @@ function VidoraApp() {
   const [preCharImages, setPreCharImages] = useState<Record<string, string>>({});
   // Track multiple characters generating in parallel (Set of char names)
   const [generatingCharPortraits, setGeneratingCharPortraits] = useState<Set<string>>(new Set());
+  // Concurrency limiter: max 2 portrait generations at a time to avoid z.ai rate limiting
+  const portraitQueueRef = useRef<{ name: string; description: string }[]>([]);
+  const portraitActiveCountRef = useRef(0);
+  const MAX_PARALLEL_PORTRAITS = 2;
   const preCharFileInputRef = useRef<HTMLInputElement>(null);
   const [preCharUploadTarget, setPreCharUploadTarget] = useState<string | null>(null); // char name for upload
   const [showAddCharForm, setShowAddCharForm] = useState(false);
@@ -1685,8 +1689,8 @@ function VidoraApp() {
     reader.readAsDataURL(file);
   };
 
-  /** Call the standalone portrait API and store the result */
-  const handlePreCharGenerate = async (charName: string, description: string) => {
+  /** Internal: generate a single portrait API call */
+  const generateOnePortrait = async (charName: string, description: string) => {
     setGeneratingCharPortraits((prev) => new Set(prev).add(charName));
     try {
       const res = await fetch("/api/generate-character-portrait", {
@@ -1701,10 +1705,10 @@ function VidoraApp() {
         setPreCharImages((prev) => ({ ...prev, [charName]: dataUrl }));
         toast({ title: `${charName}'s AI portrait generated` });
       } else {
-        toast({ title: "Portrait generation failed", description: getApiError(data), variant: "destructive" });
+        toast({ title: `${charName}'s portrait failed`, description: getApiError(data), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Portrait generation failed", variant: "destructive" });
+      toast({ title: `${charName}'s portrait failed`, description: "Network error — please try again", variant: "destructive" });
     } finally {
       setGeneratingCharPortraits((prev) => {
         const next = new Set(prev);
@@ -1713,6 +1717,29 @@ function VidoraApp() {
       });
     }
   };
+
+  /** Process the portrait queue — called after each portrait completes */
+  const processPortraitQueue = useCallback(() => {
+    while (
+      portraitActiveCountRef.current < MAX_PARALLEL_PORTRAITS &&
+      portraitQueueRef.current.length > 0
+    ) {
+      const item = portraitQueueRef.current.shift()!;
+      portraitActiveCountRef.current++;
+      generateOnePortrait(item.name, item.description).finally(() => {
+        portraitActiveCountRef.current--;
+        processPortraitQueue();
+      });
+    }
+  }, []);
+
+  /** Call the standalone portrait API (queued with concurrency limit) */
+  const handlePreCharGenerate = useCallback((charName: string, description: string) => {
+    // Don't queue if already generating or already has an image
+    if (preCharImages[charName] || generatingCharPortraits.has(charName)) return;
+    portraitQueueRef.current.push({ name: charName, description });
+    processPortraitQueue();
+  }, [generatingCharPortraits, preCharImages, processPortraitQueue]);
 
   /** Remove a pre-project character image */
   const handlePreCharRemove = (charName: string) => {
@@ -4352,15 +4379,34 @@ function VidoraApp() {
                           <Badge variant="outline" className="text-xs ml-1">{parsedCharacters.length}</Badge>
                         )}
                       </CardTitle>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1"
-                        onClick={() => setShowAddCharForm(!showAddCharForm)}
-                      >
-                        <Plus className="h-3 w-3" />
-                        Add
-                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        {parsedCharacters.some((c) => !preCharImages[c.name] && !generatingCharPortraits.has(c.name)) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1 border-violet-300 text-violet-600 hover:bg-violet-50"
+                            onClick={() => {
+                              parsedCharacters.forEach((c) => {
+                                if (!preCharImages[c.name] && !generatingCharPortraits.has(c.name)) {
+                                  handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`);
+                                }
+                              });
+                            }}
+                          >
+                            <Wand2 className="h-3 w-3" />
+                            Generate All
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => setShowAddCharForm(!showAddCharForm)}
+                        >
+                          <Plus className="h-3 w-3" />
+                          Add
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3">
