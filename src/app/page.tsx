@@ -2810,14 +2810,29 @@ function VidoraApp() {
         password: authPassword,
         redirect: false,
       });
-      if (res?.error) {
+
+      // NextAuth signIn returns:
+      //   { ok: true, url } on success
+      //   { error: "CredentialsSignin", url } on credential failure
+      //   null when the callback threw an error / network issue
+      if (!res) {
+        setAuthError("Login failed — could not reach server. Check your connection and try again.");
+      } else if (res.error) {
         setAuthError("Invalid email or password");
       } else {
-        setAuthDialogOpen(false);
-        toast({ title: "Welcome back!" });
+        // Verify the session was actually created before showing success
+        const sessionCheck = await fetch("/api/auth/session").then((r) => r.json());
+        if (sessionCheck?.user?.email) {
+          setAuthDialogOpen(false);
+          toast({ title: "Welcome back!" });
+          await fetchUserProfile();
+        } else {
+          setAuthError("Login appeared to succeed but session was not created. Please try again.");
+        }
       }
-    } catch {
-      setAuthError("Login failed. Please try again.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setAuthError(`Login failed: ${msg}`);
     } finally {
       setAuthLoading(false);
     }

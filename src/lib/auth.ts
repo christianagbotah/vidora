@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 
 export const authOptions: NextAuthOptions = {
+  // Required for proxied/reverse-proxy deployments (Caddy, Nginx)
+  trustHost: true,
   providers: [
     CredentialsProvider({
       name: "credentials",
