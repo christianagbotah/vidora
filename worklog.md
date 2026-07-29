@@ -2204,3 +2204,24 @@ Stage Summary:
 - POST returns instantly, poll requests take <40ms each
 - Zero chance of gateway timeout since each request completes in <1s
 - Removed maxDuration from 16 routes to avoid platform compat issues
+
+---
+Task ID: fix-signin-no-session
+Agent: main
+Task: Fix Sign In showing 'Welcome back' but not logging user in
+
+Work Log:
+- Traced login flow: handleLogin → signIn("credentials", redirect:false) → check res?.error → close dialog + toast
+- Found root cause #1: handleLogin only checked res?.error, didn't verify session was created. NextAuth signIn() can return without error field when callback silently fails (proxy/network issue)
+- Found root cause #2: NextAuth trustHost not enabled. The NEXTAUTH_URL warning in logs confirmed proxy misconfiguration. In reverse-proxy deployments (Caddy), the Host header may differ from origin, causing session cookie issues
+- Fixed handleLogin: added 3-way check (null → network error, error → invalid credentials, success → verify session via /api/auth/session)
+- Added explicit fetchUserProfile() call after successful login so UI updates immediately
+- Added trustHost: true to NextAuth authOptions for reverse-proxy compatibility
+- Improved error messages: now shows actual error instead of generic "Login failed"
+- Tested with Agent Browser: login → credentials 200 → session verified → profile loaded → Dashboard/Admin/SignOut visible
+- Committed and pushed: 5b2dbe6
+
+Stage Summary:
+- Root cause: signIn() can succeed at HTTP level but not create a session (proxy/cookie issue)
+- Fix: Verify session after signIn, added trustHost for proxy compatibility
+- Login now fully validates: credentials → session → user profile before showing success
