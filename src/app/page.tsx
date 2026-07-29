@@ -1693,7 +1693,7 @@ function VidoraApp() {
     reader.readAsDataURL(file);
   };
 
-  /** Internal: generate a single portrait API call */
+  /** Internal: generate a single portrait (fire-and-forget + polling) */
   const generateOnePortrait = async (charName: string, description: string) => {
     // Move from pending → generating
     setPendingCharPortraits((prev) => {
@@ -1703,35 +1703,59 @@ function VidoraApp() {
     });
     setGeneratingCharPortraits((prev) => new Set(prev).add(charName));
     try {
-      const res = await fetch("/api/generate-character-portrait", {
+      // 1. POST — starts generation, returns taskId immediately (< 1s)
+      const startRes = await fetch("/api/generate-character-portrait", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: charName, description, style: selectedStyle }),
       });
-      // Check HTTP status first — non-JSON errors (502, 504, etc.) would fail res.json()
-      if (!res.ok) {
-        let errMsg = `Server error (${res.status})`;
+      if (!startRes.ok) {
+        let errMsg = `Server error (${startRes.status})`;
         try {
-          const data = await res.json();
+          const data = await startRes.json();
           errMsg = getApiError(data, errMsg);
         } catch {
-          errMsg = `Server returned ${res.status} ${res.statusText}. Please try again.`;
+          errMsg = `Server returned ${startRes.status} ${startRes.statusText}. Please try again.`;
         }
         toast({ title: `${charName}'s portrait failed`, description: errMsg, variant: "destructive" });
         return;
       }
-      const data = await res.json();
-      if (data.success) {
-        // Prepend data URL prefix
-        const dataUrl = `data:image/png;base64,${data.base64}`;
-        setPreCharImages((prev) => ({ ...prev, [charName]: dataUrl }));
-        toast({ title: `${charName}'s AI portrait generated` });
-      } else {
-        toast({ title: `${charName}'s portrait failed`, description: getApiError(data), variant: "destructive" });
+      const startData = await startRes.json();
+      if (!startData.taskId) {
+        toast({ title: `${charName}'s portrait failed`, description: "No task ID returned", variant: "destructive" });
+        return;
       }
+
+      // 2. Poll for result every 3 seconds (avoids gateway timeouts)
+      const POLL_INTERVAL = 3000;
+      const MAX_POLLS = 70; // 3s × 70 = 210s max wait
+      for (let i = 0; i < MAX_POLLS; i++) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        try {
+          const pollRes = await fetch(`/api/generate-character-portrait/status?taskId=${startData.taskId}`);
+          const pollData = await pollRes.json();
+
+          if (pollData.status === "complete" && pollData.base64) {
+            const dataUrl = `data:image/png;base64,${pollData.base64}`;
+            setPreCharImages((prev) => ({ ...prev, [charName]: dataUrl }));
+            toast({ title: `${charName}'s AI portrait generated` });
+            return;
+          }
+          if (pollData.status === "failed") {
+            toast({ title: `${charName}'s portrait failed`, description: pollData.error || "Generation failed", variant: "destructive" });
+            return;
+          }
+          // Still "generating" — continue polling
+        } catch (err) {
+          console.warn(`[portrait] Poll error for ${charName}:`, err);
+          // Don't fail on a single poll error — retry next iteration
+        }
+      }
+      // Exceeded max polls
+      toast({ title: `${charName}'s portrait timed out`, description: "Generation is taking too long. Please try again.", variant: "destructive" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      console.error(`[portrait] ${charName} network error:`, msg);
+      console.error(`[portrait] ${charName} error:`, msg);
       toast({
         title: `${charName}'s portrait failed`,
         description: `Connection error: ${msg}. Check your internet and try again.`,

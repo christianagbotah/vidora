@@ -5,7 +5,6 @@ import { zai, cleanLLMOutput } from "@/lib/zai";
 import { userFriendlyZaiMessage, isAdminSession } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 const KNOWN_CHARACTERS: Record<string, { description: string; stylePrompt: string }> = {
   // PAW Patrol

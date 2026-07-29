@@ -5,7 +5,6 @@ import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 /**
  * POST /api/scenes/[id]/subtitles

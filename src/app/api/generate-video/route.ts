@@ -10,7 +10,6 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
 
 const VIDEO_SIZE_MAP: Record<string, string> = {
   "16:9": "1920x1080",

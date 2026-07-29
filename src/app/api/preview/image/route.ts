@@ -11,7 +11,6 @@ import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
 
 /**
  * POST /api/preview/image

@@ -14,7 +14,6 @@ import {
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 const execFileAsync = promisify(execFile);
 

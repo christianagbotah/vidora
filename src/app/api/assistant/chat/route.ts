@@ -3,7 +3,6 @@ import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 /**
  * POST /api/assistant/chat

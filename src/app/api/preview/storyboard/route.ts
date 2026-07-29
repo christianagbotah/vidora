@@ -8,7 +8,6 @@ import { db } from "@/lib/db";
 import { PRICING } from "@/lib/pricing";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 /**
  * POST /api/preview/storyboard

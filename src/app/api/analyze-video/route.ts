@@ -5,7 +5,6 @@ import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   let tempPath: string | null = null;

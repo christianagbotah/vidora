@@ -6,7 +6,6 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 /**
  * AI Scene Continuity Checker — Analyzes all scenes in a project for visual consistency,
