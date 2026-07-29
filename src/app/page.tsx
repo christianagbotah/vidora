@@ -2805,29 +2805,50 @@ function VidoraApp() {
     setAuthLoading(true);
     setAuthError("");
     try {
-      const res = await signIn("credentials", {
-        email: authEmail,
-        password: authPassword,
-        redirect: false,
+      // Direct fetch to NextAuth callback — more reliable than signIn()
+      // because we control the entire flow and can see exactly what happened.
+      const csrfRes = await fetch("/api/auth/csrf", { credentials: "include" });
+      const csrfData = await csrfRes.json();
+      if (!csrfData?.csrfToken) {
+        setAuthError("Could not get security token. Please refresh the page and try again.");
+        return;
+      }
+
+      const credRes = await fetch("/api/auth/callback/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          email: authEmail,
+          password: authPassword,
+          csrfToken: csrfData.csrfToken,
+        }),
+        credentials: "include",
+        redirect: "manual",
       });
 
-      // NextAuth signIn returns:
-      //   { ok: true, url } on success
-      //   { error: "CredentialsSignin", url } on credential failure
-      //   null when the callback threw an error / network issue
-      if (!res) {
-        setAuthError("Login failed — could not reach server. Check your connection and try again.");
-      } else if (res.error) {
+      // NextAuth returns:
+      //   302 to callbackUrl on success (session cookie set)
+      //   302 to /api/auth/error?error=CredentialsSignin on bad credentials
+      //   302 to /api/auth/signin?error=... on other failures
+      const redirectUrl = credRes.headers.get("location") || "";
+
+      if (redirectUrl.includes("error=CredentialsSignin") || redirectUrl.includes("/auth/error")) {
         setAuthError("Invalid email or password");
       } else {
-        // Verify the session was actually created before showing success
-        const sessionCheck = await fetch("/api/auth/session").then((r) => r.json());
+        // Verify the session was actually created
+        const sessionCheck = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json());
         if (sessionCheck?.user?.email) {
           setAuthDialogOpen(false);
           toast({ title: "Welcome back!" });
+          // Force a session refresh via NextAuth's internal mechanism
+          await signIn("credentials", {
+            email: authEmail,
+            password: authPassword,
+            redirect: false,
+          }).catch(() => {});
           await fetchUserProfile();
         } else {
-          setAuthError("Login appeared to succeed but session was not created. Please try again.");
+          setAuthError("Login succeeded but session was not saved. This is usually caused by missing NEXTAUTH_URL on the server. Please contact support.");
         }
       }
     } catch (err) {
