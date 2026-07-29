@@ -11,6 +11,9 @@ import crypto from "crypto";
  * - Regular users: see only THEIR projects
  * - Admins: see ALL projects (for oversight/monitoring)
  */
+
+export const runtime = "nodejs";
+
 export async function GET() {
   try {
     const authResult = await requireAuth();
@@ -125,8 +128,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, project }, { status: 201 });
   } catch (error) {
     console.error("Failed to create project:", error);
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { success: false, error: "Failed to create project" },
+      { success: false, error: "Failed to create project", adminDetail: message },
       { status: 500 }
     );
   }

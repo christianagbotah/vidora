@@ -2080,10 +2080,34 @@ function VidoraApp() {
           })) : undefined,
         }),
       });
-      const projData = await projRes.json();
+
+      if (!projRes.ok && projRes.status !== 201) {
+        // Try to get error message from response body
+        let errorDetail = `Server returned status ${projRes.status}`;
+        try {
+          const errBody = await projRes.json();
+          errorDetail = errBody.error || errBody.message || errorDetail;
+        } catch { /* response wasn't JSON */ }
+        toast({ title: "Failed to create project", description: errorDetail, variant: "destructive" });
+        return;
+      }
+
+      let projData;
+      try {
+        projData = await projRes.json();
+      } catch {
+        toast({ title: "Failed to create project", description: "Invalid response from server", variant: "destructive" });
+        return;
+      }
 
       if (!projData.success) {
         toast({ title: "Failed to create project", description: projData.error, variant: "destructive" });
+        return;
+      }
+
+      // If the API didn't return a project, surface the issue
+      if (!projData.project) {
+        toast({ title: "Failed to create project", description: "No project data returned. Please try again.", variant: "destructive" });
         return;
       }
 
@@ -2132,8 +2156,14 @@ function VidoraApp() {
           body: JSON.stringify({ projectId: project.id }),
         });
       }, 2000);
-    } catch {
-      toast({ title: "Error creating project", variant: "destructive" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("Error creating project:", msg);
+      toast({
+        title: "Error creating project",
+        description: msg.length > 100 ? msg.slice(0, 100) + "..." : msg,
+        variant: "destructive",
+      });
     } finally {
       setIsCreating(false);
     }
