@@ -1708,6 +1708,18 @@ function VidoraApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: charName, description, style: selectedStyle }),
       });
+      // Check HTTP status first — non-JSON errors (502, 504, etc.) would fail res.json()
+      if (!res.ok) {
+        let errMsg = `Server error (${res.status})`;
+        try {
+          const data = await res.json();
+          errMsg = getApiError(data, errMsg);
+        } catch {
+          errMsg = `Server returned ${res.status} ${res.statusText}. Please try again.`;
+        }
+        toast({ title: `${charName}'s portrait failed`, description: errMsg, variant: "destructive" });
+        return;
+      }
       const data = await res.json();
       if (data.success) {
         // Prepend data URL prefix
@@ -1717,8 +1729,14 @@ function VidoraApp() {
       } else {
         toast({ title: `${charName}'s portrait failed`, description: getApiError(data), variant: "destructive" });
       }
-    } catch {
-      toast({ title: `${charName}'s portrait failed`, description: "Network error — please try again", variant: "destructive" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      console.error(`[portrait] ${charName} network error:`, msg);
+      toast({
+        title: `${charName}'s portrait failed`,
+        description: `Connection error: ${msg}. Check your internet and try again.`,
+        variant: "destructive",
+      });
     } finally {
       setGeneratingCharPortraits((prev) => {
         const next = new Set(prev);

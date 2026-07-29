@@ -4,6 +4,9 @@ import { authOptions } from "@/lib/auth";
 import { zai, cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 export async function POST(req: NextRequest) {
   try {
     const { prompt, style } = await req.json();

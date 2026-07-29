@@ -4,6 +4,9 @@ import { authOptions } from "@/lib/auth";
 import { zai, cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 /**
  * AI Director Mode — Enhance scene prompts with camera movements, lighting, mood, and cinematography.
  * This is what makes Vidora unique: AI-powered director-level control over every scene.

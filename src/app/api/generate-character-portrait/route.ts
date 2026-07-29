@@ -3,6 +3,9 @@ import { requireAuth } from "@/lib/project-auth";
 import { generateImage } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 180;
+
 /**
  * POST /api/generate-character-portrait
  *
@@ -56,10 +59,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, base64 });
   } catch (error) {
-    console.error("Failed to generate character portrait:", error);
+    console.error("[character-portrait] Failed to generate portrait:", error);
     return zaiErrorResponse(error, {
       session: authResult.ok ? authResult.session : null,
       logLabel: "character-portrait-standalone",
     });
   }
+
 }

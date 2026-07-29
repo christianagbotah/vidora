@@ -6,6 +6,9 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
+export const runtime = "nodejs";
+export const maxDuration = 180;
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; characterId: string }> }

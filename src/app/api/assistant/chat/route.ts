@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 /**
  * POST /api/assistant/chat
  * Public AI assistant for site visitors and users.

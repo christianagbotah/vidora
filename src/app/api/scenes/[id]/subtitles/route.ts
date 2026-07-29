@@ -4,6 +4,9 @@ import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 /**
  * POST /api/scenes/[id]/subtitles
  * Generates subtitles (SRT format) for a scene's narration audio using Z.ai ASR.
