@@ -2179,3 +2179,28 @@ Stage Summary:
 - Fixed 17 route files with appropriate maxDuration values
 - Improved error handling to show actual errors instead of generic "Network error"
 - Pushed to origin/main
+
+---
+Task ID: fix-portrait-502
+Agent: main
+Task: Fix 502 Bad Gateway on portrait generation after deployment
+
+Work Log:
+- Diagnosed root cause: portrait API route waited 30-120s for ZAI image generation before responding → deployment gateway timed out → 502 Bad Gateway
+- Also found maxDuration (Vercel-only export) was added to 16 routes in previous commit, potentially causing compatibility issues
+- Implemented fire-and-forget + polling pattern:
+  - Created task-store.ts: in-memory Map with 10min auto-cleanup, shared between POST and status routes
+  - Modified POST /api/generate-character-portrait: returns { taskId } instantly (<1s), generation runs in background
+  - Created GET /api/generate-character-portrait/status/route.ts: polls for result by taskId
+  - Updated frontend generateOnePortrait: POST → poll every 3s (max 70 polls = 210s) → display result
+- Removed maxDuration from all 16 routes (Vercel-only, unnecessary on Z.ai/self-hosted)
+- Tested with Agent Browser: POST returned taskId in <400ms, status endpoint returned "generating" at 13-40ms per poll, "complete" with 151KB base64 after ~100s
+- All dev logs show clean 200 responses, no errors
+- Committed and pushed: 26dd342
+
+Stage Summary:
+- Root cause: Gateway timeout on slow AI calls (30-120s generation time)
+- Fix: Fire-and-forget POST + lightweight GET polling pattern
+- POST returns instantly, poll requests take <40ms each
+- Zero chance of gateway timeout since each request completes in <1s
+- Removed maxDuration from 16 routes to avoid platform compat issues
