@@ -2156,3 +2156,26 @@ Stage Summary:
 - No errors in dev.log
 - Full lifecycle verified: idle → pending → generating → complete with proper UI states throughout
 - No fixes needed
+
+---
+Task ID: fix-network-error-portrait
+Agent: main
+Task: Fix "network failed" error during character portrait generation
+
+Work Log:
+- Investigated the portrait generation flow: frontend → API route → z-ai-web-dev-sdk
+- Found root cause: ALL 17 API routes using z-ai-web-dev-sdk were missing `export const runtime = "nodejs"`
+- Without explicit runtime declaration, Next.js may use Edge runtime in production which cannot execute Node.js SDK calls
+- This causes the SDK to fail → route crashes → proxy returns non-JSON error → frontend catch block shows generic "Network error"
+- Also found frontend catch block was too generic — swallowed all errors as "Network error — please try again"
+- Added `export const runtime = "nodejs"` + appropriate `maxDuration` to all 17 ZAI routes
+- Improved frontend error handling in generateOnePortrait: check res.ok first, parse error JSON, show actual error
+- Ran lint — passed clean
+- Verified fix with Agent Browser: portrait API returns 200 with valid base64 image
+- Committed and pushed: fa5503f
+
+Stage Summary:
+- Root cause: Missing `runtime = "nodejs"` on all ZAI-dependent API routes
+- Fixed 17 route files with appropriate maxDuration values
+- Improved error handling to show actual errors instead of generic "Network error"
+- Pushed to origin/main
