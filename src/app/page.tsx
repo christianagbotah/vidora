@@ -1036,6 +1036,10 @@ function VidoraApp() {
   const [preCharImages, setPreCharImages] = useState<Record<string, string>>({});
   // Track multiple characters generating in parallel (Set of char names)
   const [generatingCharPortraits, setGeneratingCharPortraits] = useState<Set<string>>(new Set());
+  // Track characters waiting in queue (not yet actively generating)
+  const [pendingCharPortraits, setPendingCharPortraits] = useState<Set<string>>(new Set());
+  // Whether any portrait generation is in progress (active or queued)
+  const isPortraitGenerationActive = generatingCharPortraits.size > 0 || pendingCharPortraits.size > 0;
   // Concurrency limiter: max 2 portrait generations at a time to avoid z.ai rate limiting
   const portraitQueueRef = useRef<{ name: string; description: string }[]>([]);
   const portraitActiveCountRef = useRef(0);
@@ -1691,6 +1695,12 @@ function VidoraApp() {
 
   /** Internal: generate a single portrait API call */
   const generateOnePortrait = async (charName: string, description: string) => {
+    // Move from pending → generating
+    setPendingCharPortraits((prev) => {
+      const next = new Set(prev);
+      next.delete(charName);
+      return next;
+    });
     setGeneratingCharPortraits((prev) => new Set(prev).add(charName));
     try {
       const res = await fetch("/api/generate-character-portrait", {
@@ -1731,28 +1741,34 @@ function VidoraApp() {
         processPortraitQueue();
       });
     }
+    // If queue is empty and no active, clear pending set
+    if (portraitQueueRef.current.length === 0 && portraitActiveCountRef.current === 0) {
+      setPendingCharPortraits(new Set());
+    }
   }, []);
 
   /** Call the standalone portrait API (queued with concurrency limit) */
   const handlePreCharGenerate = useCallback((charName: string, description: string) => {
-    // Don't queue if already generating or already has an image
-    if (preCharImages[charName] || generatingCharPortraits.has(charName)) return;
+    // Don't queue if already generating, already pending, or already has an image
+    if (preCharImages[charName] || generatingCharPortraits.has(charName) || pendingCharPortraits.has(charName)) return;
     portraitQueueRef.current.push({ name: charName, description });
+    setPendingCharPortraits((prev) => new Set(prev).add(charName));
     processPortraitQueue();
-  }, [generatingCharPortraits, preCharImages, processPortraitQueue]);
+  }, [generatingCharPortraits, preCharImages, pendingCharPortraits, processPortraitQueue]);
 
-  /** Remove a pre-project character image */
-  const handlePreCharRemove = (charName: string) => {
+  /** Remove a pre-project character image (disabled during generation) */
+  const handlePreCharRemove = useCallback((charName: string) => {
+    if (isPortraitGenerationActive) return;
     setPreCharImages((prev) => {
       const next = { ...prev };
       delete next[charName];
       return next;
     });
-  };
+  }, [isPortraitGenerationActive]);
 
-  /** Add a manual character to the parsedCharacters list (for birthday boy, etc.) */
-  const handleAddParsedCharacter = () => {
-    if (!newCharName.trim()) return;
+  /** Add a manual character to the parsedCharacters list (for birthday boy, etc.) — disabled during generation */
+  const handleAddParsedCharacter = useCallback(() => {
+    if (isPortraitGenerationActive || !newCharName.trim()) return;
     const newChar: DetectedCharacter = {
       name: newCharName.trim(),
       role: newCharRole || "supporting",
@@ -1772,7 +1788,7 @@ function VidoraApp() {
     setNewCharDesc("");
     setShowAddCharForm(false);
     toast({ title: `${newChar.name} added to characters` });
-  };
+  }, [isPortraitGenerationActive, newCharName, newCharRole, newCharDesc]);
 
   /** Remove a character from the parsedCharacters list */
   const handleRemoveParsedCharacter = (charName: string) => {
@@ -4410,28 +4426,40 @@ function VidoraApp() {
                         )}
                       </CardTitle>
                       <div className="flex items-center gap-1.5">
-                        {parsedCharacters.some((c) => !preCharImages[c.name] && !generatingCharPortraits.has(c.name)) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1 border-violet-300 text-violet-600 hover:bg-violet-50"
-                            onClick={() => {
-                              parsedCharacters.forEach((c) => {
-                                if (!preCharImages[c.name] && !generatingCharPortraits.has(c.name)) {
-                                  handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`);
-                                }
-                              });
-                            }}
-                          >
-                            <Wand2 className="h-3 w-3" />
-                            Generate All
-                          </Button>
-                        )}
+                        <Button
+                          size="sm"
+                          variant={isPortraitGenerationActive ? "default" : "outline"}
+                          className={`h-7 text-xs gap-1 ${isPortraitGenerationActive ? "bg-violet-500 text-white hover:bg-violet-600" : "border-violet-300 text-violet-600 hover:bg-violet-50"}`}
+                          disabled={
+                            isPortraitGenerationActive ||
+                            !parsedCharacters.some((c) => !preCharImages[c.name] && !generatingCharPortraits.has(c.name) && !pendingCharPortraits.has(c.name))
+                          }
+                          onClick={() => {
+                            parsedCharacters.forEach((c) => {
+                              if (!preCharImages[c.name] && !generatingCharPortraits.has(c.name) && !pendingCharPortraits.has(c.name)) {
+                                handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`);
+                              }
+                            });
+                          }}
+                        >
+                          {isPortraitGenerationActive ? (
+                            <>
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Generating{pendingCharPortraits.size > 0 ? ` (${generatingCharPortraits.size}/${pendingCharPortraits.size + generatingCharPortraits.size})` : "…"}
+                            </>
+                          ) : (
+                            <>
+                              <Wand2 className="h-3 w-3" />
+                              Generate All
+                            </>
+                          )}
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs gap-1"
                           onClick={() => setShowAddCharForm(!showAddCharForm)}
+                          disabled={isPortraitGenerationActive}
                         >
                           <Plus className="h-3 w-3" />
                           Add
@@ -4474,7 +4502,7 @@ function VidoraApp() {
                             size="sm"
                             className="h-7 text-xs px-3"
                             onClick={handleAddParsedCharacter}
-                            disabled={!newCharName.trim()}
+                            disabled={!newCharName.trim() || isPortraitGenerationActive}
                           >
                             <UserPlus className="h-3 w-3 mr-1" />
                             Add Character
@@ -4491,7 +4519,15 @@ function VidoraApp() {
                       {parsedCharacters.map((c, i) => (
                         <div
                           key={i}
-                          className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors"
+                          className={`flex items-start gap-3 p-3 rounded-xl border transition-colors ${
+                            generatingCharPortraits.has(c.name)
+                              ? "border-violet-300 bg-violet-50/50"
+                              : pendingCharPortraits.has(c.name)
+                                ? "border-amber-200 bg-amber-50/30"
+                                : preCharImages[c.name]
+                                  ? "border-emerald-200 bg-emerald-50/30"
+                                  : "border-slate-100 bg-slate-50/50 hover:border-violet-200"
+                          }`}
                         >
                           {/* Avatar */}
                           <div className="relative h-14 w-14 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
@@ -4515,6 +4551,11 @@ function VidoraApp() {
                                 <Loader2 className="h-5 w-5 text-violet-500 animate-spin" />
                                 <span className="text-[8px] text-violet-500 font-medium">Generating</span>
                               </div>
+                            ) : pendingCharPortraits.has(c.name) ? (
+                              <div className="flex flex-col items-center gap-1">
+                                <Clock className="h-5 w-5 text-amber-400" />
+                                <span className="text-[8px] text-amber-500 font-medium">Pending</span>
+                              </div>
                             ) : (
                               <Users className="h-6 w-6 text-violet-500" />
                             )}
@@ -4532,6 +4573,7 @@ function VidoraApp() {
                                 variant="ghost"
                                 className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500 shrink-0"
                                 onClick={() => handleRemoveParsedCharacter(c.name)}
+                                disabled={isPortraitGenerationActive}
                                 title="Remove character"
                               >
                                 <Trash2 className="h-3 w-3" />
@@ -4546,7 +4588,7 @@ function VidoraApp() {
                                 variant="outline"
                                 className="h-7 px-2.5 text-[11px] gap-1"
                                 onClick={() => { setPreCharUploadTarget(c.name); preCharFileInputRef.current?.click(); }}
-                                disabled={generatingCharPortraits.has(c.name)}
+                                disabled={isPortraitGenerationActive}
                                 title="Upload photo"
                               >
                                 <UploadCloud className="h-3 w-3" />
@@ -4554,10 +4596,10 @@ function VidoraApp() {
                               </Button>
                               <Button
                                 size="sm"
-                                variant="outline"
-                                className="h-7 px-2.5 text-[11px] gap-1"
+                                variant={pendingCharPortraits.has(c.name) ? "secondary" : "outline"}
+                                className={`h-7 px-2.5 text-[11px] gap-1 ${pendingCharPortraits.has(c.name) ? "bg-amber-50 text-amber-600 border-amber-200" : ""}`}
                                 onClick={() => handlePreCharGenerate(c.name, c.description || `Character named ${c.name}`)}
-                                disabled={generatingCharPortraits.has(c.name)}
+                                disabled={isPortraitGenerationActive}
                                 title="Generate AI portrait"
                               >
                                 {generatingCharPortraits.has(c.name) ? (
@@ -4565,7 +4607,7 @@ function VidoraApp() {
                                 ) : (
                                   <Wand2 className="h-3 w-3" />
                                 )}
-                                AI Generate
+                                {generatingCharPortraits.has(c.name) ? "Generating…" : pendingCharPortraits.has(c.name) ? "Pending…" : "AI Generate"}
                               </Button>
                             </div>
                           </div>
