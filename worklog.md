@@ -2126,3 +2126,33 @@ Stage Summary:
 - "Generate All" button for one-click batch generation
 - Error toasts now show which character failed
 - Users clicking multiple AI Generate buttons will see 2 generating at a time, rest queued
+
+---
+Task ID: verify-portrait-ux
+Agent: main
+Task: Verify "Generate All" portrait generation UX implementation
+
+Work Log:
+- Read and reviewed the portrait generation queue implementation in src/app/page.tsx (lines 1035-1774)
+- Verified state management: `generatingCharPortraits` (Set), `pendingCharPortraits` (Set), `isPortraitGenerationActive` derived boolean
+- Verified queue flow: handlePreCharGenerate → enqueue → processPortraitQueue → generateOnePortrait → finally → dequeue next
+- Verified UI rendering (lines 4425-4616): 4 visual states (idle, pending, generating, complete) with correct colors (violet, amber, emerald)
+- Verified all button disabling during generation: Generate All, Add, Remove character, Upload, AI Generate per character
+- Started dev server on port 3000
+- Logged in via direct NextAuth API call (shell escaping issue with $$ in password)
+- Navigated to Script to Video, wrote a birthday script, analyzed it → 6 characters detected
+- Clicked "Generate All" and verified real-time UX:
+  - "Generate All" → "Generating (2/6)" [disabled] ✅
+  - First 2 chars → "Generating…" [disabled] ✅
+  - Remaining 4 chars → "Pending…" [disabled] ✅
+  - All Remove/Upload buttons [disabled] ✅
+- Waited and verified queue advancement: "Generating (2/5)" after first completion
+- Waited for all 6 portraits to complete — all returned 200, no errors
+- Verified final state: all buttons re-enabled, Generate All disabled (nothing to generate)
+
+Stage Summary:
+- Implementation is COMPLETE and working correctly
+- All 6 portrait API calls succeeded (200 status)
+- No errors in dev.log
+- Full lifecycle verified: idle → pending → generating → complete with proper UI states throughout
+- No fixes needed
