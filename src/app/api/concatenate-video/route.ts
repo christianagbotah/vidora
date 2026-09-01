@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { execFile, exec } from "child_process";
 import { promisify } from "util";
 
+const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
-    await execAsync("which ffmpeg");
+    await execFileAsync("which", ["ffmpeg"]);
     return true;
   } catch {
     return false;
@@ -19,6 +21,15 @@ async function checkFfmpeg(): Promise<boolean> {
 
 export async function POST(req: NextRequest) {
   try {
+    const { projectId } = await req.json();
+    if (!projectId) {
+      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+    }
+
+    // Auth check — require project ownership
+    const authResult = await requireProjectAccess(projectId, true);
+    if (!authResult.ok) return authResult.response;
+
     // Validate ffmpeg is available
     const hasFfmpeg = await checkFfmpeg();
     if (!hasFfmpeg) {
@@ -26,11 +37,6 @@ export async function POST(req: NextRequest) {
         { success: false, error: "ffmpeg is not installed on the server. Please install ffmpeg (e.g. sudo apt install ffmpeg) to merge videos." },
         { status: 500 }
       );
-    }
-
-    const { projectId } = await req.json();
-    if (!projectId) {
-      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
     }
 
     const project = await db.videoProject.findUnique({
@@ -100,11 +106,12 @@ export async function POST(req: NextRequest) {
 
       const outputPath = path.join(workDir, "final.mp4");
 
-      // Try concat demuxer first (no re-encode)
+      // Use execFile for the concat demuxer (no shell quoting needed)
       let concatSucceeded = false;
       try {
-        await execAsync(
-          'ffmpeg -y -f concat -safe 0 -i "' + concatListPath + '" -c copy "' + outputPath + '"',
+        await execFileAsync(
+          "ffmpeg",
+          ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", outputPath],
           { timeout: 120000 }
         );
         concatSucceeded = existsSync(outputPath);
@@ -115,14 +122,14 @@ export async function POST(req: NextRequest) {
       if (!concatSucceeded) {
         console.log("Concat demuxer failed (likely different codecs), re-encoding with libx264...");
         try {
-          await execAsync(
-            'ffmpeg -y -f concat -safe 0 -i "' + concatListPath + '" -c:v libx264 -preset fast -crf 23 -r 24 -pix_fmt yuv420p -c:a aac -movflags +faststart "' + outputPath + '"',
+          await execFileAsync(
+            "ffmpeg",
+            ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", outputPath],
             { timeout: 600000 }
           );
-        } catch (recodeErr) {
-          const recodeMsg = recodeErr instanceof Error ? recodeErr.message : String(recodeErr);
-          console.error("Re-encode concat also failed:", recodeMsg);
-          throw new Error("ffmpeg could not merge the video clips. The clips may have incompatible formats. Details: " + recodeMsg.slice(0, 200));
+        } catch (_recodeErr) {
+          console.error("Re-encode concat also failed:", _recodeErr);
+          throw new Error("ffmpeg could not merge the video clips. The clips may have incompatible formats.");
         }
         if (!existsSync(outputPath)) {
           throw new Error("ffmpeg concat failed");
@@ -162,7 +169,7 @@ export async function POST(req: NextRequest) {
       try { await rm(workDir, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
       const msg = err instanceof Error ? err.message : "Unknown error";
       await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
-      return NextResponse.json({ success: false, error: "Failed to concatenate videos: " + msg }, { status: 500 });
+      return NextResponse.json({ success: false, error: "Failed to concatenate videos" }, { status: 500 });
     }
   } catch (error) {
     console.error("Concatenate error:", error);

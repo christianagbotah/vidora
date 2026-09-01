@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // Watermarking failed — refund quota (server-side processing error)
     await refundPreviewQuota(userId, "image");
-    const message = err instanceof Error ? err.message : "Watermarking failed.";
+    const message = "Watermarking failed.";
     return NextResponse.json(
       { success: false, error: `Failed to process preview image: ${message}`, previewQuota: quota },
       { status: 500 }

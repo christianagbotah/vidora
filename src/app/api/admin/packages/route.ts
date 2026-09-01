@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     const pkg = await createPackage(input);
     return NextResponse.json({ success: true, package: pkg });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to create package";
+    const message = "Failed to create package";
     // Prisma unique-constraint violation on slug → friendly message
     if (String(err).includes("Unique constraint")) {
       return NextResponse.json(

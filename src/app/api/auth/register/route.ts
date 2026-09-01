@@ -2,9 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { Prisma } from "@prisma/client";
+import { registerLimiter } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
+    // Rate limit: 3 registrations per hour
+    const { limited } = registerLimiter(req);
+    if (limited) {
+      return NextResponse.json(
+        { success: false, error: "Too many registration attempts. Please try again later." },
+        { status: 429 }
+      );
+    }
+
     const { email, name, password } = await req.json();
 
     // ── Field presence validation ──

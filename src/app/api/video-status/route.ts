@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireSceneAccess } from "@/lib/project-auth";
 
 /**
  * DB-only scene status check.
@@ -16,6 +17,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Auth check
+    const authResult = await requireSceneAccess(sceneId, false);
+    if (!authResult.ok) return authResult.response;
 
     const scene = await db.videoScene.findUnique({ where: { id: sceneId } });
 

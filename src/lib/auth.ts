@@ -65,5 +65,49 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
   },
-  secret: process.env.NEXTAUTH_SECRET || "vidora-secret-change-in-production-2024",
+  // Force cookie settings that work in proxied environments
+  cookies: {
+    sessionToken: {
+      name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        secure: process.env.NEXTAUTH_URL?.startsWith("https") ?? false,
+      },
+    },
+    callbackUrl: {
+      name: "next-auth.callback-url",
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+      },
+    },
+    csrfToken: {
+      name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.csrf-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+      },
+    },
+  },
+  secret: (() => {
+    const s = process.env.NEXTAUTH_SECRET;
+    if (!s) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "[auth] NEXTAUTH_SECRET not set — using dev-only fallback. " +
+          "NEVER use this fallback in production."
+        );
+        return "vidora-dev-secret-do-not-use-in-production";
+      }
+      throw new Error(
+        "FATAL: NEXTAUTH_SECRET environment variable is required in production. " +
+        "Generate one with: openssl rand -base64 32"
+      );
+    }
+    return s;
+  })(),
 };

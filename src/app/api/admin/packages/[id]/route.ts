@@ -39,7 +39,7 @@ export async function PUT(
     return NextResponse.json({ success: true, package: pkg });
   } catch (err) {
     console.error("Admin update package error:", err);
-    const message = err instanceof Error ? err.message : "Failed to update package";
+    const message = "Failed to update package";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

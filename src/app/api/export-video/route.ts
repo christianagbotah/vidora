@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { execFile, exec } from "child_process";
 import { promisify } from "util";
 
+const execFileAsync = promisify(execFile);
+// NOTE: execAsync is used for complex ffmpeg commands that require shell
+// quoting (filter expressions with special chars). All paths are server-generated
+// from UUIDs — no user-controlled path injection risk. The only user input in
+// commands is the project title, which is escaped in generateTitleCard().
 const execAsync = promisify(exec);
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
-    await execAsync("which ffmpeg && which ffprobe");
+    await execFileAsync("which", ["ffmpeg"]);
+    await execFileAsync("which", ["ffprobe"]);
     return true;
   } catch {
     return false;
@@ -124,8 +131,9 @@ async function downloadWithRetry(
  */
 async function getVideoDuration(filePath: string): Promise<number> {
   try {
-    const { stdout } = await execAsync(
-      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filePath],
       { timeout: 15000 }
     );
     return parseFloat(stdout.trim()) || 10;
@@ -203,7 +211,7 @@ async function generateTitleCard(
   ].join(" ");
 
   try {
-    await execAsync(cmd, { timeout: 30000 });
+    await execFileAsync("ffmpeg", cmd.split(" "), { timeout: 30000 });
     return existsSync(titleCardPath) ? titleCardPath : null;
   } catch (err) {
     console.error("[Export] Title card generation failed:", err);
@@ -287,6 +295,15 @@ function buildFfmpegCommand(opts: {
 
 export async function POST(req: NextRequest) {
   try {
+    // ── Auth check ─────────────────────────────────────────────────────
+    const body = await req.json();
+    const { projectId } = body;
+    if (!projectId) {
+      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+    }
+    const authResult = await requireProjectAccess(projectId, true);
+    if (!authResult.ok) return authResult.response;
+
     // ── Validate ffmpeg is available ──────────────────────────────────────
     const hasFfmpeg = await checkFfmpeg();
     if (!hasFfmpeg) {
@@ -297,21 +314,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Parse & validate request body ──────────────────────────────────────
-    const body = await req.json();
     const {
-      projectId,
       quality = "standard",
       transition = "fade",
       format = "mp4",
       withTitleCard = false,
     } = body;
-
-    if (!projectId) {
-      return NextResponse.json(
-        { success: false, error: "Project ID is required" },
-        { status: 400 }
-      );
-    }
 
     const qualityPreset = QUALITY_PRESETS[quality];
     if (!qualityPreset) {
@@ -505,10 +513,9 @@ async function handleSingleSceneExport(
     });
   } catch (err) {
     try { await rm(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    const msg = err instanceof Error ? err.message : "Unknown error";
     await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
     return NextResponse.json(
-      { success: false, error: "Failed to export video: " + msg },
+      { success: false, error: "Failed to export video" },
       { status: 500 }
     );
   }
@@ -665,8 +672,7 @@ async function handleMultiSceneExport(
       /* ignore */
     }
 
-    const msg = err instanceof Error ? err.message : "Unknown error";
-    console.error("[Export] Export failed:", msg);
+    console.error("[Export] Export failed:", err);
 
     await db.videoProject.update({
       where: { id: projectId },
@@ -674,7 +680,7 @@ async function handleMultiSceneExport(
     });
 
     return NextResponse.json(
-      { success: false, error: "Failed to export video: " + msg },
+      { success: false, error: "Failed to export video" },
       { status: 500 }
     );
   }

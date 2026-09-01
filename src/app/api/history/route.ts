@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireAuth } from "@/lib/project-auth";
 
 export async function GET() {
   try {
+    const authResult = await requireAuth();
+    if (!authResult.ok) return authResult.response;
+
     const history = await db.generationHistory.findMany({
       orderBy: { createdAt: "desc" },
       take: 20,

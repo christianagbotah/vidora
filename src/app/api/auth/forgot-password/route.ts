@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { db } from "@/lib/db";
+import { passwordResetLimiter } from "@/lib/rate-limit";
 
 /**
  * POST /api/auth/forgot-password
@@ -17,6 +18,14 @@ import { db } from "@/lib/db";
  */
 export async function POST(req: NextRequest) {
   try {
+    const { limited } = passwordResetLimiter(req);
+    if (limited) {
+      return NextResponse.json(
+        { success: false, error: "Too many password reset attempts. Please try again later." },
+        { status: 429 }
+      );
+    }
+
     const { email } = await req.json();
     if (!email || typeof email !== "string") {
       return NextResponse.json(

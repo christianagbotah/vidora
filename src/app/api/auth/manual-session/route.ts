@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { encode } from "next-auth/jwt";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
+import { loginLimiter } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,15 @@ export const runtime = "nodejs";
  */
 export async function POST(req: NextRequest) {
   try {
+    // Rate limit: 5 login attempts per minute
+    const { limited } = loginLimiter(req);
+    if (limited) {
+      return NextResponse.json(
+        { error: "Too many login attempts. Please wait a minute and try again." },
+        { status: 429 }
+      );
+    }
+
     const { email, password } = await req.json();
 
     if (!email || !password) {
@@ -55,10 +65,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Create a NextAuth-compatible JWT
-    const secret =
-      process.env.NEXTAUTH_SECRET || "vidora-secret-change-in-production-2024";
+    // 4. Get secret (same logic as auth.ts)
+    const secret = (() => {
+      const s = process.env.NEXTAUTH_SECRET;
+      if (!s) {
+        if (process.env.NODE_ENV === "development") {
+          return "vidora-dev-secret-do-not-use-in-production";
+        }
+        throw new Error("NEXTAUTH_SECRET is required in production");
+      }
+      return s;
+    })();
 
+    // 5. Create a NextAuth-compatible JWT
     const token = await encode({
       token: {
         id: user.id,
@@ -66,20 +85,18 @@ export async function POST(req: NextRequest) {
         name: user.name,
         role: user.role,
         tokens: user.tokens,
-        // next-auth/jwt also stores iat/exp automatically
       },
       secret,
     });
 
-    // 5. Determine cookie attributes from the proxy headers
-    //    Caddy (and most reverse proxies) set X-Forwarded-Proto.
+    // 6. Determine cookie attributes from the proxy headers
     const forwardedProto = req.headers.get("x-forwarded-proto") || "http";
     const isSecure = forwardedProto === "https";
     const cookieName = isSecure
       ? "__Secure-next-auth.session-token"
       : "next-auth.session-token";
 
-    // 6. Build response with the session cookie
+    // 7. Build response with the session cookie
     const response = NextResponse.json({
       success: true,
       user: { email: user.email, name: user.name },
@@ -93,7 +110,7 @@ export async function POST(req: NextRequest) {
       maxAge: 30 * 24 * 60 * 60, // 30 days
     });
 
-    // 7. Also clear any stale __Host- or __Secure- variant that might conflict
+    // 8. Clear stale variant that might conflict
     const altName = isSecure
       ? "next-auth.session-token"
       : "__Secure-next-auth.session-token";
