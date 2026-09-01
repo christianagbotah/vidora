@@ -65,33 +65,5 @@ export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
   },
-  // Force cookie settings that work in proxied environments
-  cookies: {
-    sessionToken: {
-      name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.session-token`,
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        secure: process.env.NEXTAUTH_URL?.startsWith("https") ?? false,
-      },
-    },
-    callbackUrl: {
-      name: "next-auth.callback-url",
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-      },
-    },
-    csrfToken: {
-      name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.csrf-token`,
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-      },
-    },
-  },
   secret: process.env.NEXTAUTH_SECRET || "vidora-secret-change-in-production-2024",
 };

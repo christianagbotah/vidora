@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useToast } from "@/hooks/use-toast";
-import { signIn, signOut, useSession, SessionProvider } from "next-auth/react";
+import { signOut, useSession, SessionProvider } from "next-auth/react";
 import type {
   VideoProject, VideoScene, ClassicScene, InputMode,
   Character, ParsedSceneResult, DetectedCharacter, ContinuityIssue,
@@ -2805,55 +2805,61 @@ function VidoraApp() {
     setAuthLoading(true);
     setAuthError("");
     try {
-      // Direct fetch to NextAuth callback — more reliable than signIn()
-      // because we control the entire flow and can see exactly what happened.
-      const csrfRes = await fetch("/api/auth/csrf", { credentials: "include" });
-      const csrfData = await csrfRes.json();
-      if (!csrfData?.csrfToken) {
-        setAuthError("Could not get security token. Please refresh the page and try again.");
+      // Use our manual-session endpoint which returns 200 OK (not 302 redirect).
+      // NextAuth's default /callback/credentials returns a 302 with Set-Cookie,
+      // but browsers don't reliably process Set-Cookie on opaqueredirect responses
+      // when using fetch() with redirect:"manual".  This endpoint creates the
+      // same NextAuth-compatible JWT and sets the cookie on a 200 response.
+      const res = await fetch("/api/auth/manual-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+        credentials: "include",
+      });
+
+      const data = await res.json();
+
+      if (res.status === 401 || data?.error?.includes("Invalid")) {
+        setAuthError("Invalid email or password");
+        return;
+      }
+      if (res.status === 403) {
+        setAuthError("Account is deactivated. Please contact support.");
+        return;
+      }
+      if (!res.ok || !data?.success) {
+        setAuthError(data?.error || "Login failed. Please try again.");
         return;
       }
 
-      const credRes = await fetch("/api/auth/callback/credentials", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          email: authEmail,
-          password: authPassword,
-          csrfToken: csrfData.csrfToken,
-        }),
+      // Verify the session is readable by NextAuth
+      const sessionCheck = await fetch("/api/auth/session", {
         credentials: "include",
-        redirect: "manual",
-      });
+      }).then((r) => r.json());
 
-      // NextAuth returns:
-      //   302 to callbackUrl on success (session cookie set)
-      //   302 to /api/auth/error?error=CredentialsSignin on bad credentials
-      //   302 to /api/auth/signin?error=... on other failures
-      const redirectUrl = credRes.headers.get("location") || "";
-
-      if (redirectUrl.includes("error=CredentialsSignin") || redirectUrl.includes("/auth/error")) {
-        setAuthError("Invalid email or password");
+      if (sessionCheck?.user?.email) {
+        setAuthDialogOpen(false);
+        toast({ title: "Welcome back!" });
+        await fetchUserProfile();
       } else {
-        // Verify the session was actually created
-        const sessionCheck = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json());
-        if (sessionCheck?.user?.email) {
+        // Cookie may need one more tick to be available
+        await new Promise((r) => setTimeout(r, 300));
+        const retry = await fetch("/api/auth/session", {
+          credentials: "include",
+        }).then((r) => r.json());
+        if (retry?.user?.email) {
           setAuthDialogOpen(false);
           toast({ title: "Welcome back!" });
-          // Force a session refresh via NextAuth's internal mechanism
-          await signIn("credentials", {
-            email: authEmail,
-            password: authPassword,
-            redirect: false,
-          }).catch(() => {});
           await fetchUserProfile();
         } else {
-          setAuthError("Login succeeded but session was not saved. This is usually caused by missing NEXTAUTH_URL on the server. Please contact support.");
+          setAuthError(
+            "Login failed — session could not be saved. Please try clearing your browser cookies and retrying."
+          );
         }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setAuthError(`Login failed: ${msg}`);
+      setAuthError(`Could not connect to server: ${msg}`);
     } finally {
       setAuthLoading(false);
     }
@@ -2925,15 +2931,16 @@ function VidoraApp() {
           title: "Account created successfully!",
           description: "Please sign in with your new credentials.",
         });
-        // Attempt auto-login (non-blocking)
+        // Attempt auto-login using manual-session (same reason as handleLogin)
         try {
-          await signIn("credentials", {
-            email: authEmail,
-            password: authPassword,
-            redirect: false,
+          await fetch("/api/auth/manual-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: authEmail, password: authPassword }),
+            credentials: "include",
           });
         } catch {
-          // Auto-login may fail in dialog context — user can sign in manually
+          // Auto-login may fail — user can sign in manually
         }
       } else {
         setAuthError(data.error || "Registration failed. Please try again.");
