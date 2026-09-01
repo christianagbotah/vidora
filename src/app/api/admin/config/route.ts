@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/admin";
+import { resetZaiClient } from "@/lib/zai";
 
 // System config keys and their descriptions
 const CONFIG_SCHEMA: Record<string, string> = {
@@ -20,19 +21,9 @@ const CONFIG_SCHEMA: Record<string, string> = {
   download_token_cost: "Number of tokens required per video download",
   site_name: "Site name displayed to users",
   admin_email: "Admin contact email",
-  // AI Providers
-  ai_video_provider: "Video generation provider (replicate, luma, runway)",
-  ai_video_api_key: "Video generation API key",
-  ai_video_model: "Video generation model (e.g. stable-video-diffusion-xt)",
-  ai_image_provider: "Image generation provider (replicate, stability, together)",
-  ai_image_api_key: "Image generation API key",
-  ai_image_model: "Image generation model (e.g. flux-pro, sdxl-turbo)",
-  ai_tts_provider: "Text-to-speech provider (elevenlabs, openai, google)",
-  ai_tts_api_key: "Text-to-speech API key",
-  ai_tts_model: "TTS model (e.g. eleven_multilingual_v2, tts-1)",
-  ai_llm_provider: "LLM provider (openai, anthropic, together)",
-  ai_llm_api_key: "LLM API key (for AI Director & continuity checker)",
-  ai_llm_model: "LLM model (e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b)",
+  // Z.ai SDK (the actual AI backend used by Vidora)
+  zai_base_url: "Z.ai API base URL (e.g. https://api.z.ai/api/paas/v4)",
+  zai_api_key: "Z.ai API key (from your z.ai dashboard)",
 };
 
 export async function GET() {
@@ -94,6 +85,12 @@ export async function PUT(req: NextRequest) {
         results[key] = strValue;
       }
     });
+
+    // If ZAI credentials changed, invalidate the cached client so next
+    // call picks up the new values from the database.
+    if ("zai_base_url" in results || "zai_api_key" in results) {
+      resetZaiClient();
+    }
 
     return NextResponse.json({ success: true, updated: results });
   } catch (error) {

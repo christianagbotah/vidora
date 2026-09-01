@@ -1207,6 +1207,8 @@ function VidoraApp() {
   const [configForm, setConfigForm] = useState<Record<string, string>>({});
   const [adminLoading, setAdminLoading] = useState(false);
   const [savingConfigKey, setSavingConfigKey] = useState<string | null>(null);
+  const [showZaiApiKey, setShowZaiApiKey] = useState(false);
+  const [zaiTestStatus, setZaiTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // ── Sticky header: transparent at top, solid (with shadow) after scroll ──
   const [headerScrolled, setHeaderScrolled] = useState(false);
@@ -3451,64 +3453,6 @@ function VidoraApp() {
       toast({ title: "Failed to set active gateway", variant: "destructive" });
     } finally {
       setSavingConfigKey(null);
-    }
-  };
-
-  // Save AI provider config
-  const handleSaveAIConfig = async (provider: string, fields: string[]) => {
-    setSavingConfigKey(provider);
-    try {
-      const updates: Record<string, string> = {};
-      fields.forEach((f) => { updates[f] = configForm[f] || ""; });
-      const res = await fetch("/api/admin/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configs: updates }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast({ title: `${provider} configuration saved` });
-        const cfgRes = await fetch("/api/admin/config");
-        const cfgData = await cfgRes.json();
-        if (cfgData.success) {
-          setAdminConfigs(cfgData.configs);
-          const merged: Record<string, string> = { ...configForm };
-          Object.entries(cfgData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
-            merged[k] = v.value || "";
-          });
-          setConfigForm(merged);
-        }
-      }
-    } catch {
-      toast({ title: "Failed to save config", variant: "destructive" });
-    } finally {
-      setSavingConfigKey(null);
-    }
-  };
-
-  // Backward-compatible generic save (used by AI provider radio buttons)
-  const handleAdminSaveConfig = async (configs: Record<string, string>) => {
-    try {
-      const res = await fetch("/api/admin/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configs }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast({ title: "Configuration saved" });
-        // Merge into local state — no full reload
-        setAdminConfigs((prev) => {
-          const next = { ...prev };
-          Object.entries(configs).forEach(([k, v]) => {
-            next[k] = { value: v, description: next[k]?.description || "" };
-          });
-          return next;
-        });
-        setConfigForm((prev) => ({ ...prev, ...configs }));
-      }
-    } catch {
-      toast({ title: "Failed to save config", variant: "destructive" });
     }
   };
 
@@ -6802,201 +6746,146 @@ function VidoraApp() {
                   </Card>
 
 
-                  {/* AI Provider Configuration */}
+                  {/* Z.ai SDK Configuration */}
                   <Card className="border-0 shadow-lg shadow-black/5">
                     <CardHeader className="pb-3">
                       <CardTitle className="text-base font-bold flex items-center gap-2">
-                        <Sparkles className="h-4 w-4 text-violet-500" />
-                        AI Provider Configuration
-                        <Badge variant="outline" className="text-xs ml-1 bg-amber-50 text-amber-600 border-amber-200">VPS Only</Badge>
+                        <Zap className="h-4 w-4 text-violet-500" />
+                        Z.ai SDK Configuration
+                        <Badge variant="outline" className="text-xs ml-1 bg-emerald-50 text-emerald-600 border-emerald-200">Live</Badge>
                       </CardTitle>
                       <CardDescription className="text-xs">
-                        Configure AI service providers for video, image, TTS, and LLM generation. These are used when deployed on a live VPS server.
+                        Enter your Z.ai API credentials to power video, image, TTS, and LLM generation. Changes take effect immediately.
                       </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-5">
-                      {/* Video Generation */}
-                      <div className="space-y-2">
+                    <CardContent className="space-y-4">
+                      {/* Base URL */}
+                      <div className="space-y-1.5">
                         <Label className="text-sm font-semibold flex items-center gap-1.5">
-                          <Video className="h-3.5 w-3.5 text-violet-500" />Video Generation
+                          <Globe className="h-3.5 w-3.5 text-violet-500" />Base URL
                         </Label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {["replicate", "luma", "runway"].map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => handleAdminSaveConfig({ ai_video_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                configForm.ai_video_provider === p
-                                  ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md"
-                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                              }`}
-                            >{p}</button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">API Key</Label>
-                            <Input
-                              type="password"
-                              value={configForm.ai_video_api_key || ""}
-                              onChange={(e) => updateConfigField("ai_video_api_key", e.target.value)}
-                              placeholder="Enter video provider API key"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">Model</Label>
-                            <Input
-                              type="text"
-                              value={configForm.ai_video_model || ""}
-                              onChange={(e) => updateConfigField("ai_video_model", e.target.value)}
-                              placeholder="e.g. stable-video-diffusion-xt"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                        </div>
+                        <Input
+                          type="text"
+                          value={configForm.zai_base_url || ""}
+                          onChange={(e) => updateConfigField("zai_base_url", e.target.value)}
+                          placeholder="https://api.z.ai/api/paas/v4"
+                          className="h-9 text-sm font-mono"
+                        />
+                        <p className="text-[11px] text-muted-foreground">The API endpoint for the Z.ai SDK. Leave empty to use env vars or .z-ai-config.</p>
                       </div>
 
-                      <Separator />
-
-                      {/* Image Generation */}
-                      <div className="space-y-2">
+                      {/* API Key */}
+                      <div className="space-y-1.5">
                         <Label className="text-sm font-semibold flex items-center gap-1.5">
-                          <ImageIcon className="h-3.5 w-3.5 text-fuchsia-500" />Image Generation
+                          <KeyRound className="h-3.5 w-3.5 text-violet-500" />API Key
                         </Label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {["replicate", "stability", "together"].map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => handleAdminSaveConfig({ ai_image_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                configForm.ai_image_provider === p
-                                  ? "bg-gradient-to-r from-fuchsia-500 to-pink-500 text-white shadow-md"
-                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                              }`}
-                            >{p}</button>
-                          ))}
+                        <div className="relative">
+                          <Input
+                            type={showZaiApiKey ? "text" : "password"}
+                            value={configForm.zai_api_key || ""}
+                            onChange={(e) => updateConfigField("zai_api_key", e.target.value)}
+                            placeholder="Enter your Z.ai API key"
+                            className="h-9 text-sm font-mono pr-10"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowZaiApiKey(!showZaiApiKey)}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {showZaiApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">API Key</Label>
-                            <Input
-                              type="password"
-                              value={configForm.ai_image_api_key || ""}
-                              onChange={(e) => updateConfigField("ai_image_api_key", e.target.value)}
-                              placeholder="Enter image provider API key"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">Model</Label>
-                            <Input
-                              type="text"
-                              value={configForm.ai_image_model || ""}
-                              onChange={(e) => updateConfigField("ai_image_model", e.target.value)}
-                              placeholder="e.g. flux-pro, sdxl-turbo"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                        </div>
+                        <p className="text-[11px] text-muted-foreground">Found on your Z.ai dashboard. Stored encrypted in the database.</p>
                       </div>
 
-                      <Separator />
-
-                      {/* Text-to-Speech */}
-                      <div className="space-y-2">
-                        <Label className="text-sm font-semibold flex items-center gap-1.5">
-                          <Volume2 className="h-3.5 w-3.5 text-emerald-500" />Text-to-Speech (TTS)
-                        </Label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {["elevenlabs", "openai", "google"].map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => handleAdminSaveConfig({ ai_tts_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                configForm.ai_tts_provider === p
-                                  ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md"
-                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                              }`}
-                            >{p}</button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">API Key</Label>
-                            <Input
-                              type="password"
-                              value={configForm.ai_tts_api_key || ""}
-                              onChange={(e) => updateConfigField("ai_tts_api_key", e.target.value)}
-                              placeholder="Enter TTS provider API key"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">Model</Label>
-                            <Input
-                              type="text"
-                              value={configForm.ai_tts_model || ""}
-                              onChange={(e) => updateConfigField("ai_tts_model", e.target.value)}
-                              placeholder="e.g. eleven_multilingual_v2, tts-1"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                        </div>
+                      {/* Config source indicator */}
+                      <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
+                        <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">
+                          Priority: {"Database (this form)"}
+                          <span className="mx-1 text-slate-300">→</span>
+                          {"Env vars"}
+                          <span className="mx-1 text-slate-300">→</span>
+                          {".z-ai-config file"}
+                        </span>
                       </div>
 
-                      <Separator />
+                      {/* Action buttons */}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Button
+                          onClick={async () => {
+                            setSavingConfigKey("zai-sdk");
+                            try {
+                              const res = await fetch("/api/admin/config", {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ configs: {
+                                  zai_base_url: configForm.zai_base_url || "",
+                                  zai_api_key: configForm.zai_api_key || "",
+                                }}),
+                              });
+                              const data = await res.json();
+                              if (data.success) {
+                                toast({ title: "Z.ai credentials saved", description: "The SDK client has been refreshed with the new credentials." });
+                                const cfgRes = await fetch("/api/admin/config");
+                                const cfgData = await cfgRes.json();
+                                if (cfgData.success) {
+                                  setAdminConfigs(cfgData.configs);
+                                  setConfigForm((prev: Record<string, string>) => {
+                                    const merged = { ...prev };
+                                    Object.entries(cfgData.configs as Record<string, { value: string; description: string }>).forEach(([k, v]) => {
+                                      merged[k] = v.value || "";
+                                    });
+                                    return merged;
+                                  });
+                                }
+                              } else {
+                                toast({ title: "Failed to save", description: data.error || "Please try again.", variant: "destructive" });
+                              }
+                            } catch {
+                              toast({ title: "Failed to save", variant: "destructive" });
+                            } finally {
+                              setSavingConfigKey(null);
+                            }
+                          }}
+                          disabled={savingConfigKey === "zai-sdk"}
+                          className="btn-gradient"
+                        >
+                          {savingConfigKey === "zai-sdk" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Save className="h-4 w-4 mr-1.5" />}
+                          {savingConfigKey === "zai-sdk" ? "Saving..." : "Save Credentials"}
+                        </Button>
 
-                      {/* LLM (AI Director & Continuity) */}
-                      <div className="space-y-2">
-                        <Label className="text-sm font-semibold flex items-center gap-1.5">
-                          <Wand2 className="h-3.5 w-3.5 text-amber-500" />LLM (AI Director & Continuity)
-                        </Label>
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {["openai", "anthropic", "together"].map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => handleAdminSaveConfig({ ai_llm_provider: p })}
-                              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize ${
-                                configForm.ai_llm_provider === p
-                                  ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
-                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                              }`}
-                            >{p}</button>
-                          ))}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">API Key</Label>
-                            <Input
-                              type="password"
-                              value={configForm.ai_llm_api_key || ""}
-                              onChange={(e) => updateConfigField("ai_llm_api_key", e.target.value)}
-                              placeholder="Enter LLM API key"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-sm text-muted-foreground">Model</Label>
-                            <Input
-                              type="text"
-                              value={configForm.ai_llm_model || ""}
-                              onChange={(e) => updateConfigField("ai_llm_model", e.target.value)}
-                              placeholder="e.g. gpt-4o, claude-3.5-sonnet, llama-3.1-70b"
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={async () => {
+                            setZaiTestStatus("testing");
+                            try {
+                              const res = await fetch("/api/admin/config/test-connection", { method: "POST" });
+                              const data = await res.json();
+                              if (data.success) {
+                                setZaiTestStatus("success");
+                                toast({ title: "Connection successful!", description: data.reply ? `AI replied: "${data.reply}"` : "Z.ai SDK is reachable." });
+                              } else {
+                                setZaiTestStatus("error");
+                                toast({ title: "Connection failed", description: data.error || "Check your credentials and try again.", variant: "destructive" });
+                              }
+                            } catch {
+                              setZaiTestStatus("error");
+                              toast({ title: "Connection failed", description: "Could not reach the server.", variant: "destructive" });
+                            }
+                          }}
+                          disabled={zaiTestStatus === "testing"}
+                        >
+                          {zaiTestStatus === "testing" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> :
+                           zaiTestStatus === "success" ? <CheckCircle className="h-4 w-4 mr-1.5 text-emerald-500" /> :
+                           zaiTestStatus === "error" ? <AlertCircle className="h-4 w-4 mr-1.5 text-red-500" /> :
+                           <Zap className="h-4 w-4 mr-1.5" />}
+                          {zaiTestStatus === "testing" ? "Testing..." :
+                           zaiTestStatus === "success" ? "Connected!" :
+                           zaiTestStatus === "error" ? "Failed" :
+                           "Test Connection"}
+                        </Button>
                       </div>
-
-                      <Button
-                        onClick={() => handleSaveAIConfig("ai-providers", ["ai_video_api_key", "ai_video_model", "ai_image_api_key", "ai_image_model", "ai_tts_api_key", "ai_tts_model", "ai_llm_api_key", "ai_llm_model"])}
-                        disabled={savingConfigKey === "ai-providers"}
-                        className="btn-gradient"
-                      >
-                        {savingConfigKey === "ai-providers" ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <KeyRound className="h-4 w-4 mr-1.5" />}
-                        {savingConfigKey === "ai-providers" ? "Saving..." : "Save AI Configuration"}
-                      </Button>
                     </CardContent>
                   </Card>
 

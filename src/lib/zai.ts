@@ -292,49 +292,72 @@ let clientPromise: Promise<ZAIInstance> | null = null;
  * Get the cached singleton ZAI client.
  *
  * CONFIG RESOLUTION ORDER:
- *   1. ZAI_BASE_URL + ZAI_API_KEY env vars (preferred for production)
- *   2. .z-ai-config file via ZAI.create() (dev fallback)
- *
- * WHY ENV VARS:
- *   The SDK's file-based config lookup checks CWD → ~ → /etc/ for
- *   `.z-ai-config`. On some hosts (e.g. cloud sandboxes), `/etc/.z-ai-config`
- *   may exist and point to an *internal* endpoint (internal-api.z.ai) that
- *   resolves to private, unroutable IPs (172.25.x.x). This causes
- *   ConnectTimeoutError in production even though `curl api.z.ai` works.
- *   Env vars bypass the file lookup entirely.
+ *   1. SystemConfig DB (zai_base_url + zai_api_key) — set via Admin Portal
+ *   2. ZAI_BASE_URL + ZAI_API_KEY env vars — server environment
+ *   3. .z-ai-config file via ZAI.create() — dev sandbox fallback
  */
 export function getClient(): Promise<ZAIInstance> {
   if (globalForZAI.__zaiClient) return Promise.resolve(globalForZAI.__zaiClient);
   if (!clientPromise) {
-    clientPromise = (async () => {
-      const envBaseUrl = process.env.ZAI_BASE_URL;
-      const envApiKey = process.env.ZAI_API_KEY;
-      if (envBaseUrl && envApiKey) {
-        // Bypass ZAI.create()'s file-based loadConfig() and construct
-        // directly. The SDK marks the constructor as private in its
-        // .d.ts to nudge users toward ZAI.create(), but at runtime it
-        // is a regular constructor that accepts a ZAIConfig object.
-        type ZAIConstructor = new (config: {
-          baseUrl: string;
-          apiKey: string;
-          chatId?: string;
-          userId?: string;
-          token?: string;
-        }) => ZAIInstance;
-        const instance = new (ZAI as unknown as ZAIConstructor)({
-          baseUrl: envBaseUrl,
-          apiKey: envApiKey,
-        });
-        globalForZAI.__zaiClient = instance;
-        return instance;
-      }
-      // Dev fallback: let the SDK read .z-ai-config from disk
-      const instance = await ZAI.create();
-      globalForZAI.__zaiClient = instance;
-      return instance;
-    })();
+    clientPromise = buildClient();
   }
   return clientPromise;
+}
+
+async function buildClient(): Promise<ZAIInstance> {
+  // 1. Check database first (admin portal config)
+  try {
+    const { db } = await import("@/lib/db");
+    const [baseUrlRow, apiKeyRow] = await Promise.all([
+      db.systemConfig.findUnique({ where: { key: "zai_base_url" } }),
+      db.systemConfig.findUnique({ where: { key: "zai_api_key" } }),
+    ]);
+    const dbBaseUrl = baseUrlRow?.value;
+    const dbApiKey = apiKeyRow?.value;
+    if (dbBaseUrl && dbApiKey) {
+      return constructClient(dbBaseUrl, dbApiKey);
+    }
+  } catch {
+    // DB not available (e.g. during build) — fall through to env vars
+  }
+
+  // 2. Environment variables
+  const envBaseUrl = process.env.ZAI_BASE_URL;
+  const envApiKey = process.env.ZAI_API_KEY;
+  if (envBaseUrl && envApiKey) {
+    return constructClient(envBaseUrl, envApiKey);
+  }
+
+  // 3. Dev fallback: let the SDK read .z-ai-config from disk
+  const instance = await ZAI.create();
+  globalForZAI.__zaiClient = instance;
+  return instance;
+}
+
+function constructClient(baseUrl: string, apiKey: string): ZAIInstance {
+  type ZAIConstructor = new (config: {
+    baseUrl: string;
+    apiKey: string;
+    chatId?: string;
+    userId?: string;
+    token?: string;
+  }) => ZAIInstance;
+  const instance = new (ZAI as unknown as ZAIConstructor)({
+    baseUrl,
+    apiKey,
+  });
+  globalForZAI.__zaiClient = instance;
+  return instance;
+}
+
+/**
+ * Invalidate the cached singleton. Called by the admin config route after
+ * ZAI credentials are updated, so the next API call creates a fresh client
+ * with the new values from the database.
+ */
+export function resetZaiClient(): void {
+  globalForZAI.__zaiClient = undefined;
+  clientPromise = null;
 }
 
 // ─── Response body error detection ──────────────────────────────────────────
