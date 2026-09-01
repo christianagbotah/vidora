@@ -2271,3 +2271,23 @@ Stage Summary:
 Task ID: 1
 Agent: main
 Status: completed
+---
+Task ID: admin-zai-config
+Agent: main
+Task: Add Z.ai SDK credentials configuration to Admin Portal
+
+Work Log:
+- Replaced dead AI Provider Configuration UI (replicate/luma/runway radio buttons) with live Z.ai SDK Configuration card
+- Added zai_base_url and zai_api_key to CONFIG_SCHEMA in admin config route
+- Updated zai.ts getClient() with 3-tier priority: DB (SystemConfig) → env vars → .z-ai-config file
+- Added resetZaiClient() export to invalidate cached client when admin saves new credentials
+- Created /api/admin/config/test-connection endpoint (sends glm-4-flash ping to verify connectivity)
+- Admin config PUT route now calls resetZaiClient() when zai keys change (no server restart needed)
+- UI includes: Base URL input, masked API Key with eye toggle, Save Credentials button, Test Connection button, priority indicator
+- Removed unused handleSaveAIConfig and handleAdminSaveConfig functions
+- Verified in browser: card renders correctly in admin panel with all fields and buttons
+
+Stage Summary:
+- Z.ai SDK credentials can now be entered and tested directly in the Admin Portal
+- Changes take effect immediately (no server restart)
+- Committed as 08590fb and pushed to GitHub
