@@ -56,6 +56,7 @@ export interface VideoScene {
   duration: number;
   transition: string;
   status: string;
+  errorMessage?: string | null;
   createdAt: string;
   updatedAt: string;
   translations?: SceneTranslation[];

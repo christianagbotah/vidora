@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -430,12 +431,24 @@ function SortableSceneCard({
                           </Button>
                         )}
                         {scene.status === "failed" && (
-                          <Button
-                            size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                            onClick={() => onRetry(scene)}
-                          >
-                            <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                              onClick={() => onRetry(scene)}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
+                            </Button>
+                            {scene.errorMessage && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <AlertCircle className="h-3.5 w-3.5 text-red-400 cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom" className="max-w-xs">
+                                  <p className="text-xs">{scene.errorMessage}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
                         )}
                         {scene.dialogue && !scene.narrationUrl && (
                           <div className="flex items-center gap-1">
@@ -1399,6 +1412,8 @@ function VidoraApp() {
   }, [currentView]);
 
   // Auto-trigger generation on entering studio if there are pending scenes
+  // NOTE: we intentionally do NOT auto-retry scenes that failed due to rate
+  // limits. Those need a manual retry by the user after the cooldown period.
   useEffect(() => {
     if (currentView === "studio" && currentProject && safeScenes.length > 0) {
       const hasPending = safeScenes.some(
@@ -1500,7 +1515,7 @@ function VidoraApp() {
                 return true; // done
               }
               if (statusData.status === "failed") {
-                toast({ title: "Generation failed", description: "The video could not be generated.", variant: "destructive" });
+                toast({ title: "Generation failed", description: statusData.errorMessage || "The video could not be generated.", variant: "destructive" });
                 return true; // stop polling
               }
               return false; // still processing

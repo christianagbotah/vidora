@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
+import { zai, ZAIError } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
@@ -30,6 +30,12 @@ const THUMB_SIZE_MAP: Record<string, string> = {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * How long to wait (ms) after a rate-limit error before trying the next scene.
+ * The ZAI video API rate limit window is typically 2-5 minutes.
+ */
+const RATE_LIMIT_COOLDOWN_MS = 120_000; // 2 minutes
 
 async function createSceneTask(
   scene: {
@@ -64,13 +70,18 @@ async function createSceneTask(
   // Determine reference image URL
   let referenceImage: string | undefined;
   if (scene.referenceImageUrl) {
-    referenceImage = scene.referenceImageUrl;
+    // Skip base64 data URLs — too large for the API
+    if (!scene.referenceImageUrl.startsWith("data:")) {
+      referenceImage = scene.referenceImageUrl;
+    }
   } else if (scene.characterIds) {
     try {
       const charIds: string[] = JSON.parse(scene.characterIds);
       if (charIds.length > 0) {
         const firstChar = await db.character.findUnique({ where: { id: charIds[0] } });
-        if (firstChar?.imageUrl) referenceImage = firstChar.imageUrl;
+        if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
+          referenceImage = firstChar.imageUrl;
+        }
       }
     } catch { /* ignore parse errors */ }
   }
@@ -83,10 +94,13 @@ async function createSceneTask(
     quality: "quality",
     withAudio: false,
     ...(referenceImage ? { imageUrl: referenceImage } : {}),
-    retry: { label: `Scene ${scene.sceneNumber} video task`, timeoutMs: 120_000, maxRetries: 4 },
+    retry: { label: `Scene ${scene.sceneNumber} video task`, timeoutMs: 120_000, maxRetries: 2 },
   });
 
-  await db.videoScene.update({ where: { id: scene.id }, data: { taskId, status: "generating" } });
+  await db.videoScene.update({
+    where: { id: scene.id },
+    data: { taskId, status: "generating", errorMessage: null },
+  });
   console.log(`Scene ${scene.sceneNumber}: video task ${taskId} created`);
   return taskId;
 }
@@ -103,21 +117,42 @@ async function pollTaskUntilDone(
   });
 
   if (result.status === "success" && result.videoUrl) {
-    await db.videoScene.update({ where: { id: sceneId }, data: { videoUrl: result.videoUrl, status: "completed" } });
-    console.log(`Scene ${sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
+    await db.videoScene.update({
+      where: { id: sceneId },
+      data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
+    });
+    console.log(`Scene ${scene.sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
     return result.videoUrl;
   }
 
   if (result.status === "timeout") {
     // Timeout — leave in "generating" state so the frontend can keep polling
-    console.warn(`Scene ${sceneNumber}: polling timed out, scene left in "generating" state for client polling`);
+    console.warn(`Scene ${scene.sceneNumber}: polling timed out, scene left in "generating" state for client polling`);
     return null;
   }
 
   // Failed
-  console.error(`Scene ${sceneNumber}: task failed. ${result.error ?? ""}`);
-  await db.videoScene.update({ where: { id: sceneId }, data: { status: "failed" } });
+  const errorMsg = result.error || "Video generation task failed on the server";
+  console.error(`Scene ${scene.sceneNumber}: task failed. ${errorMsg}`);
+  await db.videoScene.update({
+    where: { id: sceneId },
+    data: { status: "failed", errorMessage: errorMsg },
+  });
   return null;
+}
+
+/**
+ * Extract a user-friendly error message from a ZAIError or generic error.
+ */
+function getErrorInfo(err: unknown): { message: string; isRateLimit: boolean } {
+  if (err instanceof ZAIError) {
+    const isRateLimit = err.kind === "rate_limit";
+    const message = isRateLimit
+      ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
+      : err.message;
+    return { message, isRateLimit };
+  }
+  return { message: err instanceof Error ? err.message : String(err), isRateLimit: false };
 }
 
 export async function POST(req: NextRequest) {
@@ -152,9 +187,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
     }
 
-    // Process pending scenes only (also retry scenes stuck in "generating" with no taskId)
+    // Process pending scenes only (also retry scenes stuck in "generating" with no taskId,
+    // and scenes that failed due to rate limits — they can be retried)
     const scenesToProcess = project.scenes.filter(
-      (s) => !s.videoUrl && (s.status === "pending" || (s.status === "generating" && !s.taskId))
+      (s) => !s.videoUrl && (
+        s.status === "pending" ||
+        (s.status === "generating" && !s.taskId) ||
+        (s.status === "failed" && s.errorMessage?.toLowerCase().includes("rate"))
+      )
     );
 
     if (scenesToProcess.length === 0) {
@@ -177,8 +217,6 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Token Check ──
-    // Calculate the token cost for this generation batch.
-    // Each scene = 1 video clip + 1 thumbnail image.
     const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
     const totalTokensNeeded = scenesToProcess.length * tokensPerScene;
 
@@ -193,12 +231,11 @@ export async function POST(req: NextRequest) {
           tokensAvailable: tokenCheck.balance,
           costBreakdown,
         },
-        { status: 402 } // 402 Payment Required
+        { status: 402 }
       );
     }
 
     // ── Deduct Tokens ──
-    // Deduct all tokens upfront. If generation fails, we refund per failed scene.
     const deduction = await deductTokensForOperation({
       userId,
       operation: "video_gen",
@@ -222,16 +259,16 @@ export async function POST(req: NextRequest) {
 
     // Mark scenes as generating immediately
     for (const scene of scenesToProcess) {
-      await db.videoScene.update({ where: { id: scene.id }, data: { status: "generating" } });
+      await db.videoScene.update({ where: { id: scene.id }, data: { status: "generating", errorMessage: null } });
     }
 
     // Return immediately — all work happens in background
-    // CRITICAL: wrap the entire IIFE in try/catch to prevent unhandled promise rejections
     (async () => {
       try {
         const taskIds: { sceneId: string; sceneNumber: number; taskId: string }[] = [];
+        let hitRateLimit = false;
 
-        // Phase 1: Create video tasks sequentially to avoid rate limits
+        // Phase 1: Create video tasks sequentially
         for (let i = 0; i < scenesToProcess.length; i++) {
           const scene = scenesToProcess[i];
           try {
@@ -240,10 +277,34 @@ export async function POST(req: NextRequest) {
               taskIds.push({ sceneId: scene.id, sceneNumber: scene.sceneNumber, taskId });
             }
           } catch (err) {
-            console.error(`Scene ${scene.sceneNumber}: failed to create task`, err);
-            await db.videoScene.update({ where: { id: scene.id }, data: { status: "failed" } }).catch(() => {});
+            const { message, isRateLimit } = getErrorInfo(err);
+            console.error(`Scene ${scene.sceneNumber}: failed to create task`, message);
+            await db.videoScene.update({
+              where: { id: scene.id },
+              data: { status: "failed", errorMessage: message },
+            }).catch(() => {});
+
+            if (isRateLimit) {
+              hitRateLimit = true;
+              // Stop trying more scenes — they'll all hit the same limit.
+              // Mark remaining pending scenes as failed with rate limit message.
+              for (let j = i + 1; j < scenesToProcess.length; j++) {
+                const remaining = scenesToProcess[j];
+                await db.videoScene.update({
+                  where: { id: remaining.id },
+                  data: { status: "failed", errorMessage: message },
+                }).catch(() => {});
+              }
+              break;
+            }
           }
-          if (i < scenesToProcess.length - 1) await sleep(8000);
+          // Wait between scenes to avoid rate limits.
+          // After a successful task creation, wait a short delay.
+          // The actual video processing happens async, so we just need
+          // to avoid hammering the task creation endpoint.
+          if (i < scenesToProcess.length - 1 && !hitRateLimit) {
+            await sleep(15_000); // 15 seconds between scene task creations
+          }
         }
 
         // Phase 2: Poll for completion sequentially
@@ -252,10 +313,14 @@ export async function POST(req: NextRequest) {
           try {
             await pollTaskUntilDone(entry.taskId, entry.sceneId, entry.sceneNumber);
           } catch (err) {
-            console.error(`Scene ${entry.sceneNumber}: polling crashed`, err);
-            await db.videoScene.update({ where: { id: entry.sceneId }, data: { status: "failed" } }).catch(() => {});
+            const { message } = getErrorInfo(err);
+            console.error(`Scene ${entry.sceneNumber}: polling crashed`, message);
+            await db.videoScene.update({
+              where: { id: entry.sceneId },
+              data: { status: "failed", errorMessage: message },
+            }).catch(() => {});
           }
-          await sleep(3000);
+          await sleep(3_000);
         }
 
         // Phase 3: Update project status
@@ -271,8 +336,6 @@ export async function POST(req: NextRequest) {
           console.log(`Project ${projectId}: done with ${completed} completed, ${failed} failed, ${pending} pending`);
 
           // ── Refund tokens for failed scenes ──
-          // We charged upfront for all scenes; refund the ones that failed
-          // so the user doesn't pay for failed generations.
           if (failed > 0) {
             const refundAmount = failed * tokensPerScene;
             await refundTokens({
@@ -286,16 +349,13 @@ export async function POST(req: NextRequest) {
           }
         }
       } catch (fatalErr) {
-        // Top-level catch ensures no unhandled promise rejection crashes the process
         console.error(`Project ${projectId}: background generation crashed`, fatalErr);
         await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } }).catch(() => {});
         await db.videoScene.updateMany({
           where: { projectId, status: "generating" },
-          data: { status: "failed" },
+          data: { status: "failed", errorMessage: "An unexpected error occurred during generation." },
         }).catch(() => {});
 
-        // ── Full refund on fatal crash ──
-        // Since we deducted tokens upfront, refund the full amount
         await refundTokens({
           userId,
           amount: totalTokensNeeded,
@@ -316,8 +376,6 @@ export async function POST(req: NextRequest) {
       remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    // session is in scope from the try block via closure — but since this is the
-    // outer catch, fetch it again to be safe (cheap, cached).
     const sess = await getServerSession(authOptions).catch(() => null);
     return zaiErrorResponse(error, {
       session: sess,

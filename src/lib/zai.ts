@@ -52,9 +52,13 @@ export class ZAIError extends Error {
     this.kind = kind;
     this.status = opts?.status;
     this.cause = opts?.cause;
-    // Rate-limit, network, timeout, and 5xx server errors are worth retrying.
+    // Network, timeout, and 5xx server errors are worth retrying.
+    // Rate-limit errors are NOT retryable here because the cooldown window
+    // (often minutes for video gen) far exceeds exponential backoff delays.
+    // Callers who want to retry rate limits should do so with their own
+    // longer delay strategy.
     this.retryable =
-      kind === "rate_limit" || kind === "network" || kind === "timeout" || kind === "server";
+      kind === "network" || kind === "timeout" || kind === "server";
   }
 }
 
@@ -368,6 +372,12 @@ function assertNoBodyError(body: unknown, label: string): void {
   }
   // Also handle flat error string
   if (typeof obj.error === "string" && obj.error) {
+    const msgLower = obj.error.toLowerCase();
+    // Classify "too many requests" as rate_limit so callers can handle it
+    // differently (longer backoff, no immediate retry, user-friendly message)
+    if (msgLower.includes("too many requests") || msgLower.includes("rate limit")) {
+      throw new ZAIError(`${obj.error} (during ${label})`, "rate_limit", { cause: body });
+    }
     throw new ZAIError(`${obj.error} (during ${label})`, "server", { cause: body });
   }
 }
@@ -531,7 +541,13 @@ export interface VideoOptions {
   retry?: RetryOptions;
 }
 
-/** Kick off a video generation task. Returns the task ID for polling. */
+/** Kick off a video generation task. Returns the task ID for polling.
+ *
+ * Video generation is expensive and has long rate-limit cooldowns (minutes),
+ * so we do NOT retry rate_limit errors — they'd just burn through the
+ * retry window. Instead, we fail immediately so the caller can decide
+ * whether to wait and retry later.
+ */
 export async function generateVideo(opts: VideoOptions): Promise<string> {
   const zai = await getClient();
   const body: CreateVideoGenerationBody = {
@@ -543,29 +559,40 @@ export async function generateVideo(opts: VideoOptions): Promise<string> {
     ...(opts.imageUrl ? { image_url: opts.imageUrl } : {}),
   };
 
-  const res = await withRetry(
-    (signal) =>
-      Promise.race([
-        zai.video.generations.create(body),
-        new Promise<never>((_, reject) => {
-          signal.addEventListener("abort", () => reject(new ZAIError("Video generation timed out", "timeout")), {
-            once: true,
-          });
-        }),
-      ]),
-    { label: "ZAI video generation", timeoutMs: 120_000, maxRetries: 4, ...opts.retry }
-  );
+  const maxRetries = opts.retry?.maxRetries ?? 4;
 
-  assertNoBodyError(res, "video generation");
-
-  const taskId = res?.id;
-  if (!taskId) {
-    throw new ZAIError(
-      `ZAI video generation did not return a task ID (status: ${res?.task_status ?? "unknown"})`,
-      "server"
+  try {
+    const res = await withRetry(
+      (signal) =>
+        Promise.race([
+          zai.video.generations.create(body),
+          new Promise<never>((_, reject) => {
+            signal.addEventListener("abort", () => reject(new ZAIError("Video generation timed out", "timeout")), {
+              once: true,
+            });
+          }),
+        ]),
+      { label: "ZAI video generation", timeoutMs: 120_000, maxRetries, ...opts.retry }
     );
+
+    assertNoBodyError(res, "video generation");
+
+    const taskId = res?.id;
+    if (!taskId) {
+      throw new ZAIError(
+        `ZAI video generation did not return a task ID (status: ${res?.task_status ?? "unknown"})`,
+        "server"
+      );
+    }
+    return taskId;
+  } catch (err) {
+    // If the last error is a rate_limit, re-throw without wrapping so
+    // the caller gets the clean ZAIError with kind=rate_limit.
+    if (err instanceof ZAIError && err.kind === "rate_limit") {
+      throw err;
+    }
+    throw err;
   }
-  return taskId;
 }
 
 export interface PollVideoOptions {

@@ -117,6 +117,7 @@ model VideoScene {
   duration       Int      @default(10)
   transition     String   @default("fade")
   status         String   @default("pending")
+  errorMessage   String?                        // why generation failed (rate_limit, server, etc.)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now())
   translations   SceneTranslation[]

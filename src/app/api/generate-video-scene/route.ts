@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
+import { zai, ZAIError } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { writeFile, mkdir } from "fs/promises";
@@ -38,9 +38,8 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Ownership check ──
-    // Verify the user owns (or admin can view) the project before generating
     if (projectId) {
-      const authResult = await requireProjectAccess(projectId, true); // write access
+      const authResult = await requireProjectAccess(projectId, true);
       if (!authResult.ok) return authResult.response;
     }
 
@@ -59,16 +58,20 @@ export async function POST(req: NextRequest) {
       if (project) {
         aspectRatio = project.aspectRatio;
 
-        // Get reference image from the scene or first character
         const scene = project.scenes[0];
         if (scene?.referenceImageUrl) {
-          referenceImage = scene.referenceImageUrl;
+          // Skip base64 data URLs — too large for the API
+          if (!scene.referenceImageUrl.startsWith("data:")) {
+            referenceImage = scene.referenceImageUrl;
+          }
         } else if (scene?.characterIds) {
           try {
             const charIds: string[] = JSON.parse(scene.characterIds);
             if (charIds.length > 0) {
               const firstChar = project.characters.find((c) => c.id === charIds[0]);
-              if (firstChar?.imageUrl) referenceImage = firstChar.imageUrl;
+              if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
+                referenceImage = firstChar.imageUrl;
+              }
             }
           } catch { /* ignore parse errors */ }
         }
@@ -103,26 +106,44 @@ export async function POST(req: NextRequest) {
       imageUrl = sceneData.imageUrl;
     }
 
-    // Step 2: Create video generation task via centralized wrapper
-    const taskId = await zai.generateVideo({
-      prompt,
-      size: videoSize,
-      duration: duration || 10,
-      quality: "quality",
-      withAudio: false,
-      ...(referenceImage ? { imageUrl: referenceImage } : {}),
-      retry: { label: "Video generation task", timeoutMs: 120_000, maxRetries: 4 },
-    });
+    // Step 2: Create video generation task
+    let taskId: string;
+    try {
+      taskId = await zai.generateVideo({
+        prompt,
+        size: videoSize,
+        duration: duration || 10,
+        quality: "quality",
+        withAudio: false,
+        ...(referenceImage ? { imageUrl: referenceImage } : {}),
+        retry: { label: "Video generation task", timeoutMs: 120_000, maxRetries: 2 },
+      });
+    } catch (err) {
+      const isRateLimit = err instanceof ZAIError && err.kind === "rate_limit";
+      const errorMsg = isRateLimit
+        ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
+        : err instanceof Error ? err.message : String(err);
+
+      await db.videoScene.update({
+        where: { id: sceneId },
+        data: { status: "failed", errorMessage: errorMsg },
+      });
+
+      return NextResponse.json({
+        success: false,
+        error: errorMsg,
+        isRateLimit,
+      });
+    }
 
     console.log(`Video generation task created: ${taskId}`);
 
-    // Update scene status
     await db.videoScene.update({
       where: { id: sceneId },
-      data: { taskId, status: "generating" },
+      data: { taskId, status: "generating", errorMessage: null },
     });
 
-    // Step 3: Poll for video result via centralized wrapper
+    // Step 3: Poll for video result
     const result = await zai.pollVideoTask({
       taskId,
       maxAttempts: 80,
@@ -132,7 +153,7 @@ export async function POST(req: NextRequest) {
     if (result.status === "success" && result.videoUrl) {
       await db.videoScene.update({
         where: { id: sceneId },
-        data: { videoUrl: result.videoUrl, status: "completed" },
+        data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
       });
       console.log(`Video ready: ${result.videoUrl.slice(0, 80)}...`);
       return NextResponse.json({
@@ -144,7 +165,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (result.status === "timeout") {
-      // Timeout — keep as generating so frontend can still poll via video-status
       console.warn(`Video generation timed out for task: ${taskId}`);
       return NextResponse.json({
         success: true,
@@ -156,13 +176,14 @@ export async function POST(req: NextRequest) {
     }
 
     // Failed
+    const errorMsg = result.error || "Video generation failed on the server";
     await db.videoScene.update({
       where: { id: sceneId },
-      data: { status: "failed" },
+      data: { status: "failed", errorMessage: errorMsg },
     });
     return NextResponse.json({
       success: false,
-      error: result.error || "Video generation failed on the server",
+      error: errorMsg,
     });
   } catch (error) {
     const session = await getServerSession(authOptions).catch(() => null);

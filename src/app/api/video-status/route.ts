@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
       videoUrl: scene.videoUrl,
       imageUrl: scene.imageUrl,
       taskId: scene.taskId,
+      errorMessage: scene.errorMessage,
     });
   } catch (error) {
     console.error("Failed to check video status:", error);
