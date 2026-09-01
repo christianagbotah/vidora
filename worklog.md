@@ -2225,3 +2225,24 @@ Stage Summary:
 - Root cause: signIn() can succeed at HTTP level but not create a session (proxy/cookie issue)
 - Fix: Verify session after signIn, added trustHost for proxy compatibility
 - Login now fully validates: credentials → session → user profile before showing success
+---
+Task ID: session-fix-3
+Agent: main
+Task: Fix login session cookie not persisting on production (Caddy proxy)
+
+Work Log:
+- Diagnosed root cause: NextAuth /callback/credentials returns 302 with Set-Cookie, but fetch(redirect:"manual") produces opaqueredirect response where browsers skip Set-Cookie processing
+- Created /api/auth/manual-session/route.ts endpoint that returns 200 OK with session cookie (not 302 redirect)
+- Uses next-auth/jwt encode() for NextAuth-compatible JWT
+- Determines secure flag from X-Forwarded-Proto header (set by Caddy)
+- Simplified auth.ts by removing custom cookies config
+- Updated handleLogin to use manual-session endpoint with retry
+- Updated handleRegister auto-login to use same endpoint
+- Verified end-to-end with curl (200 + Set-Cookie + session read) and agent-browser (login → dashboard)
+- Fixed eslint.config.mjs to ignore permission-denied directories
+- Fixed Turbopack crash caused by root-owned agent-browser temp files
+
+Stage Summary:
+- Login now works behind reverse proxies (Caddy, Nginx) by bypassing 302 redirect cookie issue
+- Session cookie properly set via 200 OK response
+- Committed as 251ef54
