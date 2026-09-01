@@ -2246,3 +2246,24 @@ Stage Summary:
 - Login now works behind reverse proxies (Caddy, Nginx) by bypassing 302 redirect cookie issue
 - Session cookie properly set via 200 OK response
 - Committed as 251ef54
+---
+Task ID: security-hardening
+Agent: main
+Task: Fix all production-readiness issues (CRITICAL + HIGH + MEDIUM)
+
+Work Log:
+- C3: Removed NEXTAUTH_SECRET hardcoded fallback for production (throws if not set); dev-only fallback with console.warn
+- C2: Rewrote middleware.ts — now enforces auth on all /api/* routes except 15 whitelisted public prefixes
+- C1: Added requireProjectAccess to export-video, concatenate-video; requireSceneAccess to video-status; requireAuth to history
+- H1: Added security headers via next.config.ts (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy, HSTS)
+- H2: Created src/lib/rate-limit.ts in-memory rate limiter + applied to login (5/min), register (3/hr), forgot-password (5/hr)
+- H3: Created src/lib/validators.ts with Zod schemas for auth, projects, scenes, export, AI, payments
+- H4: Fixed command injection in concatenate-video (exec→execFile with args array); export-video uses exec only for complex filter expressions with documented server-generated paths
+- H5: Fixed err.message leaks in 6 routes (preview/image, admin/packages, admin/packages/[id], concatenate-video)
+- H6: CORS documented as reverse-proxy responsibility
+- M1: Replaced real DB password in .env.example with placeholder
+- Installed zod package
+
+Stage Summary:
+- 4 CRITICAL + 5 HIGH + 1 MEDIUM issues fixed in single commit a1e6dc9
+- Pushed to origin/main successfully
