@@ -23,18 +23,6 @@ echo "  Vidora Production Deploy"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
-# ── Safety: verify schema.prisma is PostgreSQL ──
-if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
-  echo "❌ FATAL: prisma/schema.prisma is NOT PostgreSQL!"
-  echo "   It currently has: $(head -30 prisma/schema.prisma | grep 'provider =')"
-  echo "   The VPS needs the PostgreSQL schema. Aborting deploy."
-  echo "   Fix: restore the postgres backup or re-push from dev."
-  exit 1
-fi
-
-echo "✅ Schema check passed (PostgreSQL)"
-echo ""
-
 # ── Step 1: Pull latest code (unless --no-pull) ──
 if [[ "${1:-}" != "--no-pull" ]]; then
   echo "▶ [1/6] Pulling latest code from git..."
@@ -42,6 +30,18 @@ if [[ "${1:-}" != "--no-pull" ]]; then
 else
   echo "▶ [1/6] Skipping git pull (--no-pull)"
 fi
+echo ""
+
+# ── Safety: verify schema.prisma is PostgreSQL (AFTER pull) ──
+if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
+  echo "❌ FATAL: prisma/schema.prisma is NOT PostgreSQL!"
+  echo "   It currently has: $(head -30 prisma/schema.prisma | grep 'provider =')"
+  echo "   The VPS needs the PostgreSQL schema. Aborting deploy."
+  echo "   Fix: re-push the correct schema from dev."
+  exit 1
+fi
+
+echo "✅ Schema check passed (PostgreSQL)"
 echo ""
 
 # ── Step 2: Install any new dependencies ──
