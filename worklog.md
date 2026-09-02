@@ -2291,3 +2291,23 @@ Stage Summary:
 - Z.ai SDK credentials can now be entered and tested directly in the Admin Portal
 - Changes take effect immediately (no server restart)
 - Committed as 08590fb and pushed to GitHub
+
+---
+Task ID: vps-deploy
+Agent: main
+Task: Deploy Vidora to production VPS
+
+Work Log:
+- Restored PostgreSQL schema (was accidentally committed as SQLite)
+- Added @db.Text annotations, errorMessage field, ContactMessage model
+- Hardened deploy.sh with schema safety check and --db-push flag
+- Pushed to GitHub (commit 7bc157a)
+- User ran deploy on VPS: git pull → bun install → build → PM2 restart
+- First deploy failed health check: Prisma client missing errorMessage column
+- Fix: ran prisma db push + prisma generate + deploy --no-pull
+- Second deploy succeeded: health check returned {"status":"ok"}
+
+Stage Summary:
+- Vidora is live at https://vidora.lightworldtech.com
+- AI health endpoint operational
+- User needs to enter ZAI credentials via Admin Portal
