@@ -455,10 +455,9 @@ export async function chat(opts: ChatOptions): Promise<string> {
   messages.push({ role: "user", content: opts.userPrompt });
 
   const body: CreateChatCompletionBody = {
-    // Default model: glm-4.5 (Z.ai's flagship chat model). Always specify a
-    // model so the API returns a clear error (e.g. "Insufficient balance")
-    // instead of a generic code-500 with no message.
-    model: opts.model ?? "glm-4.5",
+    // Default model: use SystemConfig if available, else glm-4-plus.
+    // Always specify a model so the API returns a clear error.
+    model: opts.model ?? (process.env.ZAI_CHAT_MODEL || "glm-4-plus"),
     messages,
     thinking: { type: opts.thinking ?? "disabled" },
     ...(opts.extra ?? {}),
@@ -498,11 +497,11 @@ export interface VisionOptions {
   retry?: RetryOptions;
 }
 
-/** Vision (multimodal) chat completion. Requires a model (e.g. "glm-4v"). */
+/** Vision (multimodal) chat completion. Uses ZAI_VISION_MODEL env or falls back to default chat model. */
 export async function vision(opts: VisionOptions): Promise<string> {
   const zai = await getClient();
   const body: CreateChatCompletionVisionBody = {
-    model: opts.model,
+    model: opts.model || process.env.ZAI_VISION_MODEL || process.env.ZAI_CHAT_MODEL || "glm-4-plus",
     messages: opts.messages,
     thinking: { type: opts.thinking ?? "enabled" },
   };

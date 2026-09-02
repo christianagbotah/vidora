@@ -52,6 +52,7 @@ module.exports = {
         // ── Z.ai SDK (CRITICAL — overrides .z-ai-config file lookup) ──
         ZAI_BASE_URL: process.env.ZAI_BASE_URL,
         ZAI_API_KEY: process.env.ZAI_API_KEY,
+        ZAI_CHAT_MODEL: process.env.ZAI_CHAT_MODEL || "glm-4-plus",
 
         // ── Payment Gateways ──
         PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,

@@ -115,7 +115,6 @@ Return the JSON storyboard now.`;
     storyboardJson = await zai.chat({
       systemPrompt: STORYBOARD_SYSTEM_PROMPT,
       userPrompt,
-      model: "glm-4.5",
       thinking: "disabled",
       retry: { label: "Storyboard preview", timeoutMs: 60_000, maxRetries: 2 },
     });

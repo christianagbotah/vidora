@@ -43,11 +43,10 @@ export async function GET() {
     const result = await zai.chat({
       systemPrompt: "You are a health-check endpoint. Reply with exactly: OK",
       userPrompt: "ping",
-      model: "glm-4.5",
       thinking: "disabled",
       retry: {
         label: "AI health check",
-        maxRetries: 1, // don't retry — we want fast failure
+        maxRetries: 1,
         timeoutMs: 15_000,
       },
     });

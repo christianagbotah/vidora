@@ -43,7 +43,9 @@ export async function POST(req: NextRequest) {
 
     const response = await client.chat.completions.create({
       messages: [{ role: "user", content: "Say 'ok' in one word." }],
-      model: "glm-4-flash",
+      model: process.env.ZAI_CHAT_MODEL || "glm-4-plus",
+      thinking: { type: "disabled" },
+      max_tokens: 10,
     });
 
     const reply = response?.choices?.[0]?.message?.content || "";
