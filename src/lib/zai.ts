@@ -155,6 +155,20 @@ export function classifyError(err: unknown): ZAIError {
     return new ZAIError(apiMessage || "ZAI rate limit reached. Please retry shortly.", "rate_limit", { cause: err });
   }
 
+  // 404 Not Found — endpoint doesn't exist on this API instance.
+  // Common for video generation: the account may not have video API access.
+  if (lower.includes("status 404")) {
+    // If the path mentions "/video/", give a specific message
+    if (lower.includes("/video/")) {
+      return new ZAIError(
+        "Video generation API not available (404). Your ZAI account may not have video generation access, or the base URL doesn't support this endpoint.",
+        "validation",
+        { cause: err, status: 404 }
+      );
+    }
+    return new ZAIError(apiMessage || raw, "validation", { cause: err, status: 404 });
+  }
+
   // Validation (4xx, non-retryable)
   if (
     lower.includes("400") ||

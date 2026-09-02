@@ -92,20 +92,37 @@ echo ""
 echo "▶ Port 3004 binding:"
 ss -tlnp | grep 3004 || echo "  ⚠  Nothing listening on port 3004!"
 echo ""
-
-echo "▶ Health check (local):"
-HEALTH=$(curl -s -m 5 http://localhost:3004/api/ai/health || echo "FAILED")
+# ── Basic reachability check (fast, 5s) ──
+echo "▶ Reachability check:"
+REACHABLE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://localhost:3004/ || echo "000")
+if [[ "$REACHABLE" == "200" ]]; then
+  echo "  ✅ Server responding (HTTP 200)"
+else
+  echo "  ⚠  Server returned HTTP $REACHABLE or didn't respond"
+fi
+echo ""
+# ── AI Health check (slower, 20s — may fail if ZAI API is slow) ──
+echo "▶ AI Health check (20s timeout):"
+HEALTH=$(curl -s -m 20 http://localhost:3004/api/ai/health || echo "FAILED")
 echo "  $HEALTH"
 echo ""
 
-if echo "$HEALTH" | grep -q '"status":"ok"'; then
-  echo "✅ Deploy successful — AI service is operational."
-elif echo "$HEALTH" | grep -q '"status":"degraded"'; then
-  echo "⚠  Deploy successful — but AI service is degraded (check Z.ai balance)."
-elif echo "$HEALTH" | grep -q '"status":"down"'; then
-  echo "❌ Server is up but AI service is down. Run: pm2 logs vidora --lines 30"
+if echo "$REACHABLE" | grep -q '200'; then
+  if echo "$HEALTH" | grep -q '"status":"ok"'; then
+    echo "✅ Deploy successful — AI service is operational."
+  elif echo "$HEALTH" | grep -q '"status":"degraded"'; then
+    echo "⚠  Deploy successful — AI service is degraded (check Z.ai credentials/balance)."
+  elif echo "$HEALTH" | grep -q '"status":"down"'; then
+    echo "⚠  Deploy successful — but AI service is down (check Z.ai credentials)."
+    echo "   Run: pm2 logs vidora --lines 30 --nostream"
+  elif echo "$HEALTH" | grep -q 'FAILED\|timed out'; then
+    echo "⚠  Deploy successful — but AI health check timed out."
+    echo "   The server is running. Check Z.ai credentials in Admin Portal."
+  else
+    echo "✅ Deploy successful — server is running."
+  fi
 else
-  echo "❌ Health check failed. Server may not be responding."
+  echo "❌ Server is NOT responding on port 3004."
   echo "   Run: pm2 logs vidora --lines 30 --nostream"
 fi
 echo ""
