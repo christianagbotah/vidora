@@ -2311,3 +2311,18 @@ Stage Summary:
 - Vidora is live at https://vidora.lightworldtech.com
 - AI health endpoint operational
 - User needs to enter ZAI credentials via Admin Portal
+---
+Task ID: deploy-fix
+Agent: main
+Task: Fix deploy.sh schema check ordering and verify VPS deploy
+
+Work Log:
+- Confirmed deploy.sh already had the schema check moved AFTER git pull (line 35)
+- User ran deploy on VPS: successful — health check returned {"status":"ok"}
+- Server listening on port 3004 via PM2
+- Site live at https://vidora.lightworldtech.com
+- Verified sandbox dev environment working (SQLite schema, dev server on port 3000)
+
+Stage Summary:
+- VPS deploy fully working with corrected deploy.sh
+- Next step: User needs to enter ZAI credentials via Admin Portal on production

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin";
+import { constructClient, ZAIError, classifyError } from "@/lib/zai";
 
 export const runtime = "nodejs";
 
@@ -36,23 +37,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Dynamically import so we don't pollute the module-level singleton
-    const ZAI = (await import("z-ai-web-dev-sdk")).default;
-
-    type ZAIInstance = Awaited<ReturnType<typeof ZAI.create>>;
-    type ZAIConstructor = new (config: {
-      baseUrl: string;
-      apiKey: string;
-      chatId?: string;
-      userId?: string;
-      token?: string;
-    }) => ZAIInstance;
-
-    // Build a one-off client with the provided credentials
-    const client = new (ZAI as unknown as ZAIConstructor)({
-      baseUrl,
-      apiKey,
-    });
+    // Build a one-off client with the provided credentials (same logic as the
+    // singleton in zai.ts — no singleton side effects).
+    const client = constructClient(baseUrl, apiKey);
 
     const response = await client.chat.completions.create({
       messages: [{ role: "user", content: "Say 'ok' in one word." }],
@@ -67,15 +54,18 @@ export async function POST(req: NextRequest) {
       reply: reply.slice(0, 100),
     });
   } catch (err: unknown) {
-    let msg = "Unknown error";
-    if (err instanceof Error) {
-      msg = err.message;
-      // Truncate very long error messages (e.g. HTML error pages)
-      if (msg.length > 500) msg = msg.slice(0, 500) + "...";
-    }
+    // Classify the error for a clear message
+    const classified = err instanceof ZAIError
+      ? err
+      : classifyError(err);
+
     return NextResponse.json(
-      { success: false, error: msg },
-      { status: 502 },
+      {
+        success: false,
+        error: classified.message,
+        kind: classified.kind,
+      },
+      { status: classified.kind === "auth" ? 401 : classified.kind === "validation" ? 400 : 502 },
     );
   }
 }

@@ -72,7 +72,7 @@ export class ZAIError extends Error {
  * we parse out the real API message so it surfaces to the user instead of a
  * generic "rate limit reached" placeholder.
  */
-function classifyError(err: unknown): ZAIError {
+export function classifyError(err: unknown): ZAIError {
   if (err instanceof ZAIError) return err;
 
   const raw = err instanceof Error ? err.message : String(err);
@@ -315,7 +315,9 @@ async function buildClient(): Promise<ZAIInstance> {
     const dbBaseUrl = baseUrlRow?.value;
     const dbApiKey = apiKeyRow?.value;
     if (dbBaseUrl && dbApiKey) {
-      return constructClient(dbBaseUrl, dbApiKey);
+      const client = constructClient(dbBaseUrl, dbApiKey);
+      globalForZAI.__zaiClient = client;
+      return client;
     }
   } catch {
     // DB not available (e.g. during build) — fall through to env vars
@@ -325,16 +327,27 @@ async function buildClient(): Promise<ZAIInstance> {
   const envBaseUrl = process.env.ZAI_BASE_URL;
   const envApiKey = process.env.ZAI_API_KEY;
   if (envBaseUrl && envApiKey) {
-    return constructClient(envBaseUrl, envApiKey);
+    const client = constructClient(envBaseUrl, envApiKey);
+    globalForZAI.__zaiClient = client;
+    return client;
   }
 
   // 3. Dev fallback: let the SDK read .z-ai-config from disk
-  const instance = await ZAI.create();
-  globalForZAI.__zaiClient = instance;
-  return instance;
+  try {
+    const instance = await ZAI.create();
+    globalForZAI.__zaiClient = instance;
+    return instance;
+  } catch (sdkErr) {
+    const raw = sdkErr instanceof Error ? sdkErr.message : String(sdkErr);
+    throw new ZAIError(
+      `No ZAI credentials configured. Set them via Admin Portal (zai_base_url + zai_api_key), env vars (ZAI_BASE_URL + ZAI_API_KEY), or .z-ai-config file. SDK said: ${raw}`,
+      "auth",
+      { cause: sdkErr }
+    );
+  }
 }
 
-function constructClient(baseUrl: string, apiKey: string): ZAIInstance {
+export function constructClient(baseUrl: string, apiKey: string): ZAIInstance {
   type ZAIConstructor = new (config: {
     baseUrl: string;
     apiKey: string;
@@ -346,7 +359,6 @@ function constructClient(baseUrl: string, apiKey: string): ZAIInstance {
     baseUrl,
     apiKey,
   });
-  globalForZAI.__zaiClient = instance;
   return instance;
 }
 
