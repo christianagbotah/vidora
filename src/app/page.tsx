@@ -6858,9 +6858,20 @@ function VidoraApp() {
                         <Button
                           variant="outline"
                           onClick={async () => {
+                            if (!configForm.zai_base_url?.trim() || !configForm.zai_api_key?.trim()) {
+                              toast({ title: "Missing credentials", description: "Enter both Base URL and API Key before testing.", variant: "destructive" });
+                              return;
+                            }
                             setZaiTestStatus("testing");
                             try {
-                              const res = await fetch("/api/admin/config/test-connection", { method: "POST" });
+                              const res = await fetch("/api/admin/config/test-connection", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  baseUrl: configForm.zai_base_url || "",
+                                  apiKey: configForm.zai_api_key || "",
+                                }),
+                              });
                               const data = await res.json();
                               if (data.success) {
                                 setZaiTestStatus("success");
