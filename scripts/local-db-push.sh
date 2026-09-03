@@ -24,6 +24,35 @@ SCHEMA_PROD="prisma/schema.prisma"
 SCHEMA_LOCAL="prisma/schema.prisma.local"
 BACKUP="/tmp/vidora-schema.prod.bak.$$"
 
+# ── Production passthrough ────────────────────────────────────────────────
+# If DATABASE_URL points at postgres (i.e. we're on a real server, not the
+# sandbox), run prisma directly against the canonical schema — no sqlite swap.
+for envfile in .env prisma/.env; do
+  if [[ -f "$envfile" && -z "${DATABASE_URL:-}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$envfile"
+    set +a
+  fi
+done
+if [[ "${DATABASE_URL:-}" == postgres://* || "${DATABASE_URL:-}" == postgresql://* || "${DATABASE_URL:-}" == postgres+* || "${DATABASE_URL:-}" == postgresql+* ]]; then
+  echo "▶ DATABASE_URL is postgres — running prisma directly against canonical schema"
+  case "${1:-push}" in
+    push)
+      bunx prisma db push --accept-data-loss
+      ;;
+    generate)
+      bunx prisma generate
+      ;;
+    *)
+      echo "Unknown command: $1 (use 'push' or 'generate')"
+      exit 1
+      ;;
+  esac
+  echo "✓ Done"
+  exit 0
+fi
+
 # Ensure we always restore the postgres schema, even on error/interrupt
 cleanup() {
   if [[ -f "$BACKUP" ]]; then

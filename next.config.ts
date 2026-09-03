@@ -1,6 +1,21 @@
 import type { NextConfig } from "next";
 
+// Production builds get the full security header set (X-Frame-Options DENY + HSTS).
+// Dev builds omit them so the sandbox preview panel can embed the app in an iframe.
+const isProduction = process.env.NODE_ENV === "production";
+
 const securityHeaders = [
+  // Prevent clickjacking (production only — dev preview requires iframes)
+  ...(isProduction ? [{ key: "X-Frame-Options", value: "DENY" }] : []),
+  // HSTS — enforce HTTPS (production only)
+  ...(isProduction
+    ? [
+        {
+          key: "Strict-Transport-Security",
+          value: "max-age=31536000; includeSubDomains; preload",
+        },
+      ]
+    : []),
   // Prevent MIME type sniffing
   { key: "X-Content-Type-Options", value: "nosniff" },
   // XSS protection (legacy, but still helps older browsers)
@@ -9,9 +24,6 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   // Permissions policy — restrict browser features
   { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=()" },
-  // NOTE (sandbox): X-Frame-Options DENY and HSTS are intentionally omitted
-  // in this dev sandbox so the preview panel can embed the app in an iframe.
-  // Restore them for production deployments.
 ];
 
 const nextConfig: NextConfig = {
@@ -30,12 +42,22 @@ const nextConfig: NextConfig = {
 
   // ── Security Headers ──
   async headers() {
-    return [
+    const rules = [
       {
         source: "/(.*)",
         headers: securityHeaders,
       },
     ];
+    // Allow iframe embedding for shared project pages only (production)
+    if (isProduction) {
+      rules.push({
+        source: "/api/share/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "ALLOW-FROM https://vidora.lightworldtech.com" },
+        ],
+      });
+    }
+    return rules;
   },
 
   // ── CORS ──
