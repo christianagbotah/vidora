@@ -43,13 +43,53 @@ export async function POST(
     if (!authResult.ok) return authResult.response;
 
     const body = await req.json();
-    const { prompt, enhancedPrompt, duration, transition } = body;
+    const { prompt, enhancedPrompt, duration, transition, characterIds, characterNames } = body;
 
     if (!prompt) {
       return NextResponse.json(
         { success: false, error: "Prompt is required" },
         { status: 400 }
       );
+    }
+
+    // ── Resolve scene ↔ character linkage ──
+    // Accept either explicit character IDs (array or JSON string) or
+    // character NAMES (resolved against this project's characters).
+    // Without this linkage, character portraits/descriptions can never be
+    // used as reference for the scene's video + image generation.
+    const resolvedIds = new Set<string>();
+
+    const rawIds = characterIds;
+    if (typeof rawIds === "string") {
+      try {
+        const parsed = JSON.parse(rawIds);
+        if (Array.isArray(parsed)) parsed.forEach((id: unknown) => typeof id === "string" && resolvedIds.add(id));
+      } catch { /* ignore */ }
+    } else if (Array.isArray(rawIds)) {
+      rawIds.forEach((id: unknown) => typeof id === "string" && resolvedIds.add(id));
+    }
+
+    let linkedCharacterIds: string | null = null;
+    const needsNameResolution =
+      Array.isArray(characterNames) && characterNames.length > 0 && resolvedIds.size === 0;
+
+    if (needsNameResolution || resolvedIds.size > 0) {
+      const projectCharacters = await db.character.findMany({
+        where: { projectId: id },
+        select: { id: true, name: true },
+      });
+      if (Array.isArray(characterNames)) {
+        const names = (characterNames as string[])
+          .map((n) => (typeof n === "string" ? n.trim().toLowerCase() : ""))
+          .filter(Boolean);
+        for (const ch of projectCharacters) {
+          if (names.includes(ch.name.trim().toLowerCase())) resolvedIds.add(ch.id);
+        }
+      }
+    }
+
+    if (resolvedIds.size > 0) {
+      linkedCharacterIds = JSON.stringify([...resolvedIds]);
     }
 
     // Get the next scene number
@@ -69,6 +109,7 @@ export async function POST(
         enhancedPrompt: enhancedPrompt || null,
         duration: duration || 3,
         transition: transition || "fade",
+        characterIds: linkedCharacterIds,
       },
     });
 

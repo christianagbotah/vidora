@@ -4,6 +4,7 @@ import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { saveGeneratedFile } from "@/lib/generated-store";
+import { buildCharacterPortraitPrompt } from "@/lib/image-prompt";
 
 export const runtime = "nodejs";
 
@@ -24,14 +25,25 @@ export async function POST(
       return NextResponse.json({ success: false, error: "Character not found in this project" }, { status: 404 });
     }
 
-    // Build portrait prompt from character info
-    const portraitPrompt = [
-      character.description || `A character named ${character.name}`,
-      character.role === "protagonist" ? "main character, central focus" : character.role === "narrator" ? "storyteller character" : "supporting character",
-      "professional character portrait, clean background",
-      "high quality, detailed, consistent art style",
-      "suitable for use as character reference in video generation",
-    ].join(", ");
+    // Project style steers the portrait's rendering style
+    const project = await db.videoProject.findUnique({
+      where: { id },
+      select: { style: true },
+    });
+
+    // Build a character-reference prompt that leads with the name + full
+    // appearance description so the model renders the described character
+    // as exactly as possible.
+    const portraitPrompt = buildCharacterPortraitPrompt(
+      {
+        id: character.id,
+        name: character.name,
+        role: character.role,
+        description: character.description,
+        stylePrompt: character.stylePrompt,
+      },
+      project?.style
+    );
 
     const imageBase64 = await zai.generateImage({
       prompt: portraitPrompt,

@@ -2770,6 +2770,18 @@ function VidoraApp() {
 
       for (let i = 0; i < scenesToCreate.length; i++) {
         const s = scenesToCreate[i];
+        // Resolve character names → IDs from the freshly-created project so
+        // scenes are linked to their characters (drives reference images +
+        // character-aware generation prompts). The API also accepts names
+        // as a fallback when IDs can't be resolved client-side.
+        const sceneCharIds = (s.characterNames || [])
+          .map((n: string) =>
+            (project.characters || []).find(
+              (ch: { id: string; name: string }) =>
+                ch.name.trim().toLowerCase() === (n || "").trim().toLowerCase()
+            )?.id
+          )
+          .filter(Boolean);
         const sceneRes = await fetch(`/api/projects/${project.id}/scenes`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2777,7 +2789,8 @@ function VidoraApp() {
             prompt: s.prompt,
             title: s.title || undefined,
             dialogue: s.dialogue || undefined,
-            characterIds: s.characterNames ? JSON.stringify([]) : undefined,
+            characterIds: sceneCharIds.length > 0 ? sceneCharIds : undefined,
+            characterNames: s.characterNames || undefined,
             duration: Math.floor(effectiveDuration / scenesToCreate.length),
           }),
         });
@@ -4152,12 +4165,15 @@ function VidoraApp() {
   // Load dashboard data
   useEffect(() => {
     if (currentView === "dashboard" && session) {
+      // Fresh project list on every dashboard visit (creates/deletes from
+      // other tabs or background jobs would otherwise stay stale).
+      fetchProjects();
       fetch("/api/tokens/history")
         .then((r) => r.json())
         .then((d) => d.success && setTokenHistory(d.transactions || []))
         .catch(() => {});
     }
-  }, [currentView, session]);
+  }, [currentView, session, fetchProjects]);
 
   // Load profile data
   useEffect(() => {
@@ -6371,6 +6387,14 @@ function VidoraApp() {
                   <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Dashboard</h1>
                   <p className="text-muted-foreground text-sm">Welcome back, {userProfile?.name || "User"}</p>
                 </div>
+                {/* Primary CTA — always visible at the top of the dashboard */}
+                <Button
+                  size="lg"
+                  className="btn-gradient ml-auto h-11 px-5 shadow-lg shadow-violet-500/25"
+                  onClick={() => setCurrentView("create")}
+                >
+                  <Plus className="h-5 w-5 mr-2" />Create New Video
+                </Button>
               </div>
 
               {/* Stats Row */}
@@ -6495,8 +6519,18 @@ function VidoraApp() {
                         ({safeProjects.length})
                       </span>
                     </CardTitle>
-                    {/* View toggle: grid / table */}
-                    <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5" role="group" aria-label="Projects view mode">
+                    <div className="flex items-center gap-2">
+                      {/* Quick create — visible in both grid and table views */}
+                      <Button
+                        size="sm"
+                        className="btn-gradient h-8"
+                        onClick={() => setCurrentView("create")}
+                        title="Start a new video project"
+                      >
+                        <Plus className="h-4 w-4 mr-1" />New Project
+                      </Button>
+                      {/* View toggle: grid / table */}
+                      <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5" role="group" aria-label="Projects view mode">
                       <button
                         onClick={() => setProjectsView("grid")}
                         aria-pressed={projectsView === "grid"}
@@ -6523,6 +6557,7 @@ function VidoraApp() {
                       >
                         <Table2 className="h-4 w-4" />
                       </button>
+                      </div>
                     </div>
                   </div>
                 </CardHeader>

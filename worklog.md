@@ -2547,3 +2547,27 @@ Work Log:
 Stage Summary:
 - All Back buttons now have proper browser-back semantics backed by an in-memory view history; labels tell the user exactly where Back will go
 - The reported bug (projects page → project page → back → homepage) is fixed: Back now returns to the Dashboard
+
+---
+Task ID: char-aware-gen-1
+Agent: main
+Task: (1) Add prominent Create Project CTAs on the user dashboard; (2) Make image/video generation character-aware so described characters (e.g. CoComelon's JJ, Super Kittens) render accurately
+
+Work Log:
+- Dashboard CTAs: added a gradient "Create New Video" button to the dashboard header (top-right, always visible) and a "New Project" button in the My Projects card header (both grid + table views); dashboard now also refetches projects on every visit (fixes stale list)
+- ROOT CAUSE found for bad character images: scenes were NEVER linked to characters — the frontend sent characterIds:[] (empty placeholder) and the scenes POST API dropped the field entirely, so character portraits/descriptions could never influence generation
+- Fixed linkage: scenes POST /api/projects/[id]/scenes now accepts characterIds (array or JSON string) AND characterNames (resolved server-side against project characters); wizard frontend resolves names→IDs from the created project and sends both
+- New src/lib/image-prompt.ts (character-aware prompt builders):
+  * buildSceneImagePrompt — merges scene prompt + style rendering keywords + full appearance descriptions of linked/name-mentioned characters + "render EXACTLY as described" consistency instructions (≤1800 chars)
+  * buildSceneVideoPrompt — appends compact character digest to the scene prompt within the video API's hard 512-char limit
+  * buildCharacterPortraitPrompt — reference-sheet prompt leading with name + full description + project style
+  * detectSceneCharacters — matches characters via linked IDs, word-boundary name mentions in the prompt, or single-character fallback; stripLeadingName avoids "JJ — JJ, the toddler…" duplication
+- Wired into all generation routes: generate-video-scene (video + thumbnail), generate-video (createSceneTask + generateMissingThumbnails with new ctx {style, characters}), character portrait generate-image (also reads project style now)
+- Bonus robustness fix in zai.ts pollVideoTask: a 429 during POLLING no longer fails an in-flight task — the video keeps rendering server-side, so polls now back off 3× and retry; task-CREATION 429s remain fail-fast
+- Added a startup log of the built prompts in generate-video-scene for production diagnosability
+- Verified end-to-end in sandbox (admin session): dashboard CTAs render (VLM-verified, desktop + 390px mobile) and navigate to Create; project+character "JJ" created via API; scene created with characterNames → characterIds correctly stored; real /api/generate-video-scene run → dev.log shows videoPrompt="…nursery | Chars: JJ: JJ, the toddler star of CoComelon, adorable round face, …" and 670-char character-aware imagePrompt; generated thumbnail (1344x768) VLM-analyzed as matching ALL character attributes (toddler, round face, big brown eyes, curly dark hair, yellow/white striped onesie, nursery, colorful blocks); ESLint passes
+
+Stage Summary:
+- Dashboard has a prominent always-visible Create CTA (header) + quick New Project (My Projects card) + fresh project list on visit
+- Scene↔character linkage now works end-to-end, and all image/video/portrait generation prompts are character-aware: full appearance descriptions + style keywords + exact-match instructions
+- VLM-verified that the described character (JJ) now renders accurately; polling rate-limits no longer kill healthy generation tasks

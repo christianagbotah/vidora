@@ -1236,10 +1236,16 @@ export async function pollVideoTask(opts: PollVideoOptions): Promise<PollVideoRe
       }
     } catch (err) {
       const classified = classifyError(err);
-      // Network blips during polling are recoverable — keep polling if attempts remain
-      if (classified.retryable && attempt < maxAttempts) {
-        console.warn(`[ZAI] pollVideoTask attempt ${attempt} transient error: ${classified.message}`);
-        await sleep(intervalMs);
+      // Network blips during polling are recoverable — keep polling if attempts remain.
+      // Rate limits during POLLING are also transient: the video task keeps
+      // rendering server-side, and a single 429 on the status endpoint should
+      // NOT fail an otherwise-healthy 20-minute task. Wait longer and retry.
+      // (429s at task CREATION remain fail-fast — that window is minutes long.)
+      const isTransient = classified.retryable || classified.kind === "rate_limit";
+      if (isTransient && attempt < maxAttempts) {
+        const waitMs = classified.kind === "rate_limit" ? intervalMs * 3 : intervalMs;
+        console.warn(`[ZAI] pollVideoTask attempt ${attempt} ${classified.kind} error (will retry): ${classified.message}`);
+        await sleep(waitMs);
         continue;
       }
       return { status: "failed", error: classified.message };

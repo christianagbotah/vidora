@@ -7,6 +7,10 @@ import {
   publicOrigin,
   toAbsoluteUrl,
 } from "@/lib/generated-store";
+import {
+  buildSceneImagePrompt,
+  buildSceneVideoPrompt,
+} from "@/lib/image-prompt";
 
 export const runtime = "nodejs";
 
@@ -59,9 +63,14 @@ export async function POST(req: NextRequest) {
       if (!authResult.ok) return authResult.response;
     }
 
-    // Get the project for aspect ratio and scene context
+    // Get the project for aspect ratio, style, and scene/character context
     let aspectRatio = "16:9";
+    let projectStyle: string | null = null;
     let referenceImage: string | undefined;
+    // Character-aware prompts — fallback to the raw client prompt when the
+    // project/scene can't be loaded (prompt-only generation).
+    let videoPrompt = prompt;
+    let imagePrompt = prompt;
 
     if (projectId) {
       const project = await db.videoProject.findUnique({
@@ -73,6 +82,7 @@ export async function POST(req: NextRequest) {
       });
       if (project) {
         aspectRatio = project.aspectRatio;
+        projectStyle = project.style;
 
         const scene = project.scenes[0];
         if (scene?.referenceImageUrl) {
@@ -91,6 +101,22 @@ export async function POST(req: NextRequest) {
             }
           } catch { /* ignore parse errors */ }
         }
+
+        // ── Character-aware prompts ──
+        // Merge the characters' full appearance descriptions into the
+        // prompts so the generated thumbnail/video actually match the
+        // described characters (e.g. "JJ, the toddler star of CoComelon…").
+        videoPrompt = buildSceneVideoPrompt({
+          scenePrompt: prompt,
+          characters: project.characters,
+          linkedCharacterIds: scene?.characterIds,
+        });
+        imagePrompt = buildSceneImagePrompt({
+          scenePrompt: prompt,
+          style: projectStyle,
+          characters: project.characters,
+          linkedCharacterIds: scene?.characterIds,
+        });
       }
     }
 
@@ -109,8 +135,10 @@ export async function POST(req: NextRequest) {
     }).catch(() => { /* scene may not exist yet client-side */ });
 
     // ── Fire-and-forget: everything below runs in the background ──
+    console.log(`[generate-video-scene] scene=${sceneId} videoPrompt="${videoPrompt.slice(0, 120)}${videoPrompt.length > 120 ? "…" : ""}" imagePromptLen=${imagePrompt.length}`);
     void runSceneGeneration({
-      prompt,
+      prompt: videoPrompt,
+      imagePrompt,
       sceneId,
       duration: duration || 10,
       videoSize,
@@ -146,13 +174,15 @@ export async function POST(req: NextRequest) {
  * then thumbnail in parallel while the video renders, then poll. */
 async function runSceneGeneration(opts: {
   prompt: string;
+  /** Character-aware prompt for the thumbnail (may differ from the video prompt). */
+  imagePrompt: string;
   sceneId: string;
   duration: number;
   videoSize: string;
   thumbSize: string;
   referenceImage?: string;
 }): Promise<void> {
-  const { prompt, sceneId, duration, videoSize, thumbSize, referenceImage } = opts;
+  const { prompt, imagePrompt, sceneId, duration, videoSize, thumbSize, referenceImage } = opts;
 
   // Step 1: Create the video generation task FIRST — this is the moment
   // "generation actually starts" (a few seconds). The thumbnail is NOT an
@@ -200,7 +230,7 @@ async function runSceneGeneration(opts: {
     void (async () => {
       try {
         const imageBase64 = await zai.generateImage({
-          prompt,
+          prompt: imagePrompt,
           size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
           retry: { label: "Thumbnail generation", timeoutMs: 120_000, maxRetries: 4 },
         });

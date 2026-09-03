@@ -7,6 +7,11 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
+import {
+  buildSceneImagePrompt,
+  buildSceneVideoPrompt,
+  type CharacterLike,
+} from "@/lib/image-prompt";
 
 export const runtime = "nodejs";
 
@@ -42,7 +47,8 @@ async function createSceneTask(
     imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null;
   },
   videoSize: string,
-  origin: string
+  origin: string,
+  ctx: { style: string; characters: CharacterLike[] }
 ): Promise<string | null> {
   const scenePrompt = scene.enhancedPrompt || scene.prompt;
 
@@ -70,9 +76,18 @@ async function createSceneTask(
     } catch { /* ignore parse errors */ }
   }
 
+  // Character-aware video prompt (≤512 chars): appends a compact digest of
+  // the linked/mentioned characters' appearance so the video model knows
+  // who is in the frame.
+  const videoPrompt = buildSceneVideoPrompt({
+    scenePrompt,
+    characters: ctx.characters,
+    linkedCharacterIds: scene.characterIds,
+  });
+
   // Create video generation task via centralized wrapper
   const taskId = await zai.generateVideo({
-    prompt: scenePrompt,
+    prompt: videoPrompt,
     size: videoSize,
     duration: 10,
     quality: "quality",
@@ -90,16 +105,25 @@ async function createSceneTask(
 }
 
 /** Generate thumbnails for scenes that are missing one — runs in parallel
- * with the polling phase (non-fatal on failure). */
+ * with the polling phase (non-fatal on failure). Prompts are character-aware:
+ * linked/mentioned characters' full appearance descriptions are merged in so
+ * the thumbnail matches the described characters. */
 async function generateMissingThumbnails(
-  scenes: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; imageUrl?: string | null }[],
-  thumbSize: string
+  scenes: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; characterIds?: string | null; imageUrl?: string | null }[],
+  thumbSize: string,
+  ctx: { style: string; characters: CharacterLike[] }
 ): Promise<void> {
   for (const scene of scenes) {
     if (scene.imageUrl) continue;
     try {
+      const imagePrompt = buildSceneImagePrompt({
+        scenePrompt: scene.enhancedPrompt || scene.prompt,
+        style: ctx.style,
+        characters: ctx.characters,
+        linkedCharacterIds: scene.characterIds,
+      });
       const imageBase64 = await zai.generateImage({
-        prompt: scene.enhancedPrompt || scene.prompt,
+        prompt: imagePrompt,
         size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
         retry: { label: `Scene ${scene.sceneNumber} thumbnail`, timeoutMs: 120_000, maxRetries: 4 },
       });
@@ -183,7 +207,10 @@ export async function POST(req: NextRequest) {
 
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: { scenes: { orderBy: { sceneNumber: "asc" } } },
+      include: {
+        scenes: { orderBy: { sceneNumber: "asc" } },
+        characters: { orderBy: { createdAt: "asc" } },
+      },
     });
     if (!project) {
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
@@ -269,6 +296,12 @@ export async function POST(req: NextRequest) {
     // background task needs it to build absolute reference-image URLs.
     const origin = publicOrigin(req);
 
+    // Character context for character-aware generation prompts (video + thumbnails)
+    const genCtx = {
+      style: project.style || "cinematic",
+      characters: (project.characters || []) as CharacterLike[],
+    };
+
     // Mark scenes as generating immediately
     for (const scene of scenesToProcess) {
       await db.videoScene.update({ where: { id: scene.id }, data: { status: "generating", errorMessage: null } });
@@ -284,7 +317,7 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < scenesToProcess.length; i++) {
           const scene = scenesToProcess[i];
           try {
-            const taskId = await createSceneTask(scene, videoSize, origin);
+            const taskId = await createSceneTask(scene, videoSize, origin, genCtx);
             if (taskId) {
               taskIds.push({ sceneId: scene.id, sceneNumber: scene.sceneNumber, taskId });
             }
@@ -322,7 +355,7 @@ export async function POST(req: NextRequest) {
         // Phase 1.5: Generate missing thumbnails IN PARALLEL with polling —
         // the video tasks are already running, so the thumbnails just fill
         // in the scene previews while we wait.
-        const thumbnailPromise = generateMissingThumbnails(scenesToProcess, thumbSize)
+        const thumbnailPromise = generateMissingThumbnails(scenesToProcess, thumbSize, genCtx)
           .catch((e) => console.error("Thumbnail pass crashed (non-fatal):", e));
 
         // Phase 2: Poll for completion sequentially
