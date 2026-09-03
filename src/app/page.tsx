@@ -2857,7 +2857,14 @@ function VidoraApp() {
       if (sessionCheck?.user?.email) {
         setAuthDialogOpen(false);
         toast({ title: "Welcome back!" });
-        await fetchUserProfile();
+        // NextAuth v4 has no public API to flip useSession() from
+        // logged-out → logged-in in the same tab when the session cookie
+        // was set manually (our /api/auth/manual-session flow). A page
+        // refresh is the reliable way to sync the client session state
+        // (fetchUserProfile() is also triggered automatically on mount
+        // once the session is populated).
+        setTimeout(() => window.location.reload(), 400);
+        return;
       } else {
         // Cookie may need one more tick to be available
         await new Promise((r) => setTimeout(r, 300));
@@ -2867,7 +2874,8 @@ function VidoraApp() {
         if (retry?.user?.email) {
           setAuthDialogOpen(false);
           toast({ title: "Welcome back!" });
-          await fetchUserProfile();
+          setTimeout(() => window.location.reload(), 400);
+          return;
         } else {
           setAuthError(
             "Login failed — session could not be saved. Please try clearing your browser cookies and retrying."

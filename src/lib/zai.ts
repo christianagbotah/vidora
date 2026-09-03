@@ -22,7 +22,6 @@ import type {
   CreateChatCompletionVisionBody,
   CreateImageGenerationBody,
   CreateImageEditBody,
-  CreateVideoGenerationBody,
   CreateAudioTTSBody,
   CreateAudioASRBody,
   AsyncResultResponse,
@@ -384,6 +383,7 @@ export function constructClient(baseUrl: string, apiKey: string): ZAIInstance {
 export function resetZaiClient(): void {
   globalForZAI.__zaiClient = undefined;
   clientPromise = null;
+  cachedEndpointConfig = null;
 }
 
 // ─── Response body error detection ──────────────────────────────────────────
@@ -429,6 +429,290 @@ function assertNoBodyError(body: unknown, label: string): void {
     }
     throw new ZAIError(`${obj.error} (during ${label})`, "server", { cause: body });
   }
+}
+
+// ─── Video Endpoint Compatibility (public API vs internal gateway) ─────────
+//
+// WHY THIS EXISTS:
+// The z-ai-web-dev-sdk (v0.0.18) video methods target the INTERNAL Z.ai
+// gateway (internal-api.z.ai/v1):
+//     create: POST {baseUrl}/video/generation         (singular path, no model)
+//     poll:   GET  {baseUrl}/async-result?id={taskId} (query parameter)
+//
+// The PUBLIC api.z.ai (https://api.z.ai/api/paas/v4) uses DIFFERENT routes:
+//     create: POST {baseUrl}/videos/generations       (plural path, `model` REQUIRED)
+//     poll:   GET  {baseUrl}/async-result/{taskId}    (path parameter)
+//
+// Deployments configured with the public API (e.g. a VPS via the Admin
+// Portal) therefore received 404 "Not Found" on EVERY video create/poll,
+// even though the tasks themselves succeed server-side.
+//
+// The compat helpers below try the public form first and fall back to the
+// SDK/internal form when the route is missing. This is safe because on both
+// servers an HTTP 404 means "route not found" — a missing or expired task
+// returns 400 + error body {"error":{"code":"1233","message":"...does not exist"}}.
+
+interface ZAIRawConfig {
+  baseUrl: string;
+  apiKey: string;
+  chatId?: string;
+  userId?: string;
+  token?: string;
+}
+
+let cachedEndpointConfig: ZAIRawConfig | null = null;
+
+/**
+ * Read the resolved connection config (baseUrl/apiKey + optional gateway
+ * headers) from the singleton ZAI instance. Works no matter where the
+ * credentials came from: SystemConfig DB, env vars, or .z-ai-config file.
+ */
+async function getEndpointConfig(): Promise<ZAIRawConfig> {
+  if (cachedEndpointConfig) return cachedEndpointConfig;
+  const client = await getClient();
+  // `config` is private in the SDK's type declarations but stable across
+  // v0.0.x and the only reliable source of the fully-resolved connection.
+  const cfg = (client as unknown as { config?: ZAIRawConfig }).config;
+  if (!cfg?.baseUrl || !cfg?.apiKey) {
+    throw new ZAIError(
+      "ZAI client is missing baseUrl/apiKey — cannot build video endpoints",
+      "auth"
+    );
+  }
+  cachedEndpointConfig = {
+    ...cfg,
+    baseUrl: cfg.baseUrl.replace(/\/+$/, ""),
+  };
+  return cachedEndpointConfig;
+}
+
+interface ZaiRequestResult {
+  status: number;
+  body: unknown;
+}
+
+/** Authenticated JSON request against the configured Z.ai endpoint,
+ * with an AbortController timeout. Returns status + parsed body. */
+async function zaiRequest(
+  url: string,
+  init: { method: "GET" | "POST"; bodyJson?: unknown },
+  timeoutMs: number
+): Promise<ZaiRequestResult> {
+  const cfg = await getEndpointConfig();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${cfg.apiKey}`,
+    "X-Z-AI-From": "Z",
+  };
+  if (cfg.chatId) headers["X-Chat-Id"] = cfg.chatId;
+  if (cfg.userId) headers["X-User-Id"] = cfg.userId;
+  if (cfg.token) headers["X-Token"] = cfg.token;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: init.method,
+      headers,
+      ...(init.bodyJson !== undefined
+        ? { body: JSON.stringify(init.bodyJson) }
+        : {}),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    let body: unknown = text;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        // non-JSON body — keep the raw text
+      }
+    }
+    return { status: res.status, body };
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new ZAIError(
+        `Request to ${url} timed out after ${Math.round(timeoutMs / 1000)}s`,
+        "timeout"
+      );
+    }
+    throw classifyError(err); // network errors etc.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function extractApiErrorMessage(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const obj = body as Record<string, unknown>;
+  if (obj.error && typeof obj.error === "object") {
+    const err = obj.error as Record<string, unknown>;
+    if (err.message) return String(err.message);
+    if (err.code) return `error code ${err.code}`;
+  }
+  if (typeof obj.error === "string" && obj.error) return obj.error;
+  if (typeof obj.message === "string" && obj.message) return obj.message;
+  return null;
+}
+
+function statusToErrorKind(status: number): ZAIErrorKind {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate_limit";
+  if (status >= 500) return "server";
+  return "validation"; // 400/404/422 — not worth retrying verbatim
+}
+
+export interface VideoTaskCreateResult {
+  id?: string;
+  task_status?: string;
+  [key: string]: unknown;
+}
+
+const DEFAULT_VIDEO_MODEL = "CogVideoX-3";
+
+/**
+ * Create a video generation task, working on BOTH the public api.z.ai and
+ * the internal gateway:
+ *   1st attempt: POST {baseUrl}/videos/generations  — public form (`model`
+ *                is REQUIRED there; without it the API returns a 500 NPE)
+ *   fallback:    POST {baseUrl}/video/generation    — SDK/internal form
+ * A 404 (route not found) triggers the fallback; any other error is thrown.
+ */
+async function createVideoCompat(
+  body: {
+    prompt?: string;
+    size?: string;
+    duration?: number;
+    quality?: string;
+    with_audio?: boolean;
+    image_url?: string | string[];
+  },
+  timeoutMs: number
+): Promise<VideoTaskCreateResult> {
+  const cfg = await getEndpointConfig();
+  const model = process.env.ZAI_VIDEO_MODEL || DEFAULT_VIDEO_MODEL;
+  const attempts: { url: string; bodyJson: unknown; label: string }[] = [
+    {
+      url: `${cfg.baseUrl}/videos/generations`,
+      bodyJson: { ...body, model },
+      label: "POST /videos/generations (public)",
+    },
+    {
+      url: `${cfg.baseUrl}/video/generation`,
+      bodyJson: body,
+      label: "POST /video/generation (internal/SDK)",
+    },
+  ];
+
+  let lastError: ZAIError | null = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    const isLast = i === attempts.length - 1;
+    let res: ZaiRequestResult;
+    try {
+      res = await zaiRequest(attempt.url, { method: "POST", bodyJson: attempt.bodyJson }, timeoutMs);
+    } catch (err) {
+      const classified = err instanceof ZAIError ? err : classifyError(err);
+      if (isLast) throw classified;
+      lastError = classified;
+      continue;
+    }
+    if (res.status === 404) {
+      // Route not found on this infrastructure — try the other form.
+      lastError = new ZAIError(
+        `Video create endpoint not available (404) at ${attempt.url}`,
+        "validation",
+        { status: 404 }
+      );
+      if (!isLast) continue;
+      throw lastError;
+    }
+    if (res.status >= 400) {
+      const apiMsg = extractApiErrorMessage(res.body);
+      throw new ZAIError(
+        apiMsg
+          ? `API request failed with status ${res.status}: ${apiMsg}`
+          : `API request failed with status ${res.status}`,
+        statusToErrorKind(res.status),
+        { status: res.status, cause: res.body }
+      );
+    }
+    assertNoBodyError(res.body, "video generation create");
+    return res.body as VideoTaskCreateResult;
+  }
+  throw lastError ?? new ZAIError("createVideoCompat exhausted attempts", "unknown");
+}
+
+/**
+ * Query an async task result, working on BOTH infrastructures:
+ *   1st attempt: GET {baseUrl}/async-result/{taskId}   — public form (path param)
+ *   fallback:    GET {baseUrl}/async-result?id={taskId} — internal/SDK form
+ * A 404 (route not found) triggers the fallback. A missing/expired task
+ * surfaces as a 400 + error code 1233 ("Task ... does not exist") and is
+ * thrown immediately without falling back.
+ */
+async function queryAsyncResultCompat(
+  taskId: string,
+  timeoutMs = 30_000
+): Promise<AsyncResultResponse> {
+  const cfg = await getEndpointConfig();
+  const id = encodeURIComponent(taskId);
+  const attempts: string[] = [
+    `${cfg.baseUrl}/async-result/${id}`, // public api.z.ai (path param)
+    `${cfg.baseUrl}/async-result?id=${id}`, // internal gateway (query param)
+  ];
+
+  let lastError: ZAIError | null = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const url = attempts[i];
+    const isLast = i === attempts.length - 1;
+    let res: ZaiRequestResult;
+    try {
+      res = await zaiRequest(url, { method: "GET" }, timeoutMs);
+    } catch (err) {
+      const classified = err instanceof ZAIError ? err : classifyError(err);
+      if (isLast) throw classified;
+      lastError = classified;
+      continue;
+    }
+    if (res.status === 404) {
+      // Route not found on this infrastructure — try the other form.
+      lastError = new ZAIError(
+        `Async result endpoint not available (404) at ${url}`,
+        "validation",
+        { status: 404 }
+      );
+      if (!isLast) continue;
+      throw lastError;
+    }
+    if (res.status >= 400) {
+      const apiMsg = extractApiErrorMessage(res.body);
+      throw new ZAIError(
+        apiMsg
+          ? `API request failed with status ${res.status}: ${apiMsg}`
+          : `API request failed with status ${res.status}`,
+        statusToErrorKind(res.status),
+        { status: res.status, cause: res.body }
+      );
+    }
+    // HTTP 200 but error body (internal gateway reports "task does not
+    // exist" as code 1233 in a 200/4xx body) — fail fast, no retry.
+    const bodyObj = (res.body ?? {}) as Record<string, unknown>;
+    const errObj =
+      bodyObj.error && typeof bodyObj.error === "object"
+        ? (bodyObj.error as Record<string, unknown>)
+        : null;
+    if (errObj && String(errObj.code) === "1233") {
+      throw new ZAIError(
+        String(errObj.message ?? `Task ${taskId} does not exist`),
+        "validation",
+        { status: res.status, cause: res.body }
+      );
+    }
+    assertNoBodyError(res.body, "async result query");
+    return res.body as AsyncResultResponse;
+  }
+  throw lastError ?? new ZAIError("queryAsyncResultCompat exhausted attempts", "unknown");
 }
 
 // ─── Specialized Helpers ────────────────────────────────────────────────────
@@ -597,8 +881,7 @@ export interface VideoOptions {
  * whether to wait and retry later.
  */
 export async function generateVideo(opts: VideoOptions): Promise<string> {
-  const zai = await getClient();
-  const body: CreateVideoGenerationBody = {
+  const body = {
     prompt: opts.prompt,
     size: opts.size,
     duration: opts.duration,
@@ -608,19 +891,16 @@ export async function generateVideo(opts: VideoOptions): Promise<string> {
   };
 
   const maxRetries = opts.retry?.maxRetries ?? 4;
+  const timeoutMs = opts.retry?.timeoutMs ?? 120_000;
 
   try {
+    // createVideoCompat tries the PUBLIC endpoint form first
+    // (POST /videos/generations with `model`) and falls back to the
+    // SDK/internal form (POST /video/generation) on 404. It handles its
+    // own AbortController timeout internally.
     const res = await withRetry(
-      (signal) =>
-        Promise.race([
-          zai.video.generations.create(body),
-          new Promise<never>((_, reject) => {
-            signal.addEventListener("abort", () => reject(new ZAIError("Video generation timed out", "timeout")), {
-              once: true,
-            });
-          }),
-        ]),
-      { label: "ZAI video generation", timeoutMs: 120_000, maxRetries, ...opts.retry }
+      async () => createVideoCompat(body, timeoutMs),
+      { label: "ZAI video generation", timeoutMs, maxRetries, ...opts.retry }
     );
 
     assertNoBodyError(res, "video generation");
@@ -668,7 +948,10 @@ export async function pollVideoTask(opts: PollVideoOptions): Promise<PollVideoRe
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const res: AsyncResultResponse = await zai.async.result.query(opts.taskId);
+      // queryAsyncResultCompat tries the PUBLIC endpoint form first
+      // (GET /async-result/{taskId}) and falls back to the SDK/internal
+      // form (GET /async-result?id=...) on 404.
+      const res: AsyncResultResponse = await queryAsyncResultCompat(opts.taskId);
 
       if (res.task_status === "SUCCESS") {
         const videoUrl =

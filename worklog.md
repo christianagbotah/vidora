@@ -2326,3 +2326,57 @@ Work Log:
 Stage Summary:
 - VPS deploy fully working with corrected deploy.sh
 - Next step: User needs to enter ZAI credentials via Admin Portal on production
+
+---
+Task ID: migrate-1
+Agent: main (Z.ai Code)
+Task: Clone https://github.com/christianagbotah/vidora.git into the dev sandbox and get it fully running so work can continue
+
+Work Log:
+- Cloned the repo (token-authenticated) into vidora-src, then copied the full source tree (src/, public/, prisma/, scripts/, configs, .gitignore, .env.example) into the sandbox project root
+- Replaced the sandbox template's .git with the vidora repository history (remote: github.com/christianagbotah/vidora) so future commits/pushes land on top of the existing history
+- Kept the repo's schema convention: prisma/schema.prisma stays PostgreSQL (git-clean); pushed the SQLite mirror (schema.prisma.local) to db/custom.db via `bash scripts/local-db-push.sh`; re-pointed package.json db:push/db:generate scripts to that script so the sandbox `bun run db:push` works
+- Adapted next.config.ts for the sandbox: removed X-Frame-Options DENY + HSTS headers (would break the iframe preview panel) and the ALLOW-FROM share override; kept nosniff/XSS/referrer/permissions headers
+- Installed missing deps: bcryptjs + @types/bcryptjs; bumped prisma/@prisma/client to ^6.19.2 and zod to ^4.5.4 (matching the repo)
+- Created .env: DATABASE_URL (SQLite), NEXTAUTH_URL/SECRET, NEXT_PUBLIC_BASE_URL=http://localhost:3000, ZAI_CHAT_MODEL=glm-4-plus; ZAI SDK auto-configures via ZAI.create() in this sandbox
+- Installed the pre-commit guard hook (blocks accidental sqlite schema commits)
+- Seeded admin user: admin@vidora.local / Admin@123 (role=admin, 1000 tokens) via `bun run seed-admin`
+- FIXED BUG: after manual-session login the header stayed "Sign In" until a manual page reload — NextAuth v4 useSession() cannot flip logged-out→logged-in in the same tab when the cookie is set by our custom /api/auth/manual-session flow. Fix: handleLogin now reloads the page (window.location.reload() after 400ms) once the session cookie is verified; fetchUserProfile() then runs automatically on mount
+- Browser-verified (agent-browser): home page + hero slider render, VLM-confirmed visuals; login → header flips to Dashboard/Admin/1000 tokens/Profile/Sign Out; sign-out works; Create view with Script/Text/Voice/Image tabs; AI Enhance returns real LLM output and renders the Enhanced Prompt panel; Try Live Demo opens the Mountain Journey studio with scene timeline + working video playback; Dashboard shows stats; Admin Portal loads users/revenue/analytics; mobile 390px layout responsive; footer uses min-h-screen flex column and pushes down naturally on long pages
+- ESLint passes with 0 errors; dev.log shows all routes returning 200 (auth, projects, demo, admin, enhance-prompt, music, packages, ai/health)
+
+Stage Summary:
+- Vidora is fully cloned, migrated, and running in the sandbox on port 3000 (dev server in background)
+- SQLite DB (db/custom.db) carries the full schema; templates auto-seed on first /api/templates hit; admin login available (admin@vidora.local / Admin@123)
+- Git working tree sits on top of vidora history (678876c) with uncommitted sandbox adaptations: next.config.ts (no frame-deny headers), package.json (bcryptjs + db script changes), worklog.md, deleted root screenshots/deploy scripts not needed in sandbox — commit/push is left to the owner
+- Repo clone folder vidora-src/ removed after migration
+
+---
+Task ID: video-fix-1
+Agent: main (Z.ai Code)
+Task: Fix ZAI SDK video generation failing on the VPS (public api.z.ai) — diagnose with user-provided curl feedback and ship a verified fix
+
+Work Log:
+- Analyzed the VPS curl feedback: GET /videos/generations?task_id= → method not supported; POST /videos/generations with task_id body → CreateVideoRequest NPE (route exists, model required); /images/generations/{id} + /video/tasks/{id} → 404
+- Inspected z-ai-web-dev-sdk@0.0.18 source: video create uses POST {baseUrl}/video/generation (singular, no model) and poll uses GET {baseUrl}/async-result?id= (query param)
+- Probed both infrastructures and confirmed they use OPPOSITE endpoint styles:
+  * public api.z.ai/api/paas/v4: create POST /videos/generations (plural, `model` REQUIRED) + poll GET /async-result/{taskId} (path param)
+  * internal gateway (internal-api.z.ai/v1): create POST /video/generation + poll GET /async-result?id= (the SDK's forms)
+- Verified task-not-found semantics: public returns 400 + {"error":{"code":"1233"}} (NOT 404), so an HTTP 404 unambiguously means route-missing on both servers
+- Retrieved the user's stuck task 202609021223281d2c380bfd664737 via the correct path-param endpoint: task_status=SUCCESS with a real video URL — the videos WERE generating server-side; only the SDK's polling (and create) endpoints were wrong
+- Implemented an endpoint compatibility layer in src/lib/zai.ts:
+  * getEndpointConfig() reads the resolved baseUrl/apiKey/headers from the ZAI singleton (works for Admin Portal DB creds, env vars, and .z-ai-config)
+  * zaiRequest() authenticated JSON fetch with AbortController timeout
+  * createVideoCompat(): POST /videos/generations with model (default CogVideoX-3, env ZAI_VIDEO_MODEL) → 404-fallback to POST /video/generation
+  * queryAsyncResultCompat(): GET /async-result/{id} → 404-fallback to GET /async-result?id=; code 1233 (task not exist) fails fast
+  * generateVideo() and pollVideoTask() now use the compat functions; resetZaiClient() also clears the endpoint-config cache
+- Verified end-to-end on BOTH infrastructures:
+  * internal gateway: bun script (scripts/test-video-compat.ts) → task created, polled to SUCCESS, real playable MP4 (HTTP 206 range check)
+  * public api.z.ai (user's key, exact body the fix sends): task 20260903090405cce8c1ae562a4a61 created → polled to task_status=SUCCESS
+  * app-level: POST /api/generate-video-scene through the running app — thumbnail generated, video task creation reached the API, and a deliberate 429 rate-limit (from test task spam) was classified and surfaced with the designed user-friendly message
+- ESLint passes with 0 errors; tsc shows no new errors in zai.ts
+
+Stage Summary:
+- Root cause: SDK v0.0.18 video endpoints only exist on the internal Z.ai gateway; the public api.z.ai uses different routes, so every create/poll on the VPS 404'd
+- Fix: dual-form compat layer in src/lib/zai.ts that works on both infrastructures (404-triggered fallback), with clear error surfacing
+- The user's stuck scenes can be re-generated after deploying this fix; ZAI_VIDEO_MODEL env optionally overrides the default CogVideoX-3
