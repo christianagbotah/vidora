@@ -7,6 +7,7 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
+import { resolveModelForRequest } from "@/lib/video-models";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -48,7 +49,7 @@ async function createSceneTask(
   },
   videoSize: string,
   origin: string,
-  ctx: { style: string; characters: CharacterLike[] }
+  ctx: { style: string; characters: CharacterLike[]; aspectRatio: string; videoModel: string | null }
 ): Promise<string | null> {
   const scenePrompt = scene.enhancedPrompt || scene.prompt;
 
@@ -85,7 +86,10 @@ async function createSceneTask(
     linkedCharacterIds: scene.characterIds,
   });
 
-  // Create video generation task via centralized wrapper
+  // Create video generation task via centralized wrapper.
+  // The model is resolved per-scene: image-dependent models gracefully
+  // substitute their text-capable sibling when no reference image exists.
+  const model = resolveModelForRequest(ctx.videoModel, Boolean(referenceImage));
   const taskId = await zai.generateVideo({
     prompt: videoPrompt,
     size: videoSize,
@@ -93,8 +97,14 @@ async function createSceneTask(
     quality: "quality",
     withAudio: false,
     ...(referenceImage ? { imageUrl: referenceImage } : {}),
+    model,
+    aspectRatio: ctx.aspectRatio,
+    style: ctx.style,
     retry: { label: `Scene ${scene.sceneNumber} video task`, timeoutMs: 120_000, maxRetries: 2 },
   });
+  if (model !== (ctx.videoModel ?? "CogVideoX-3")) {
+    console.log(`Scene ${scene.sceneNumber}: no reference image — model substituted ${ctx.videoModel ?? "default"} → ${model}`);
+  }
 
   await db.videoScene.update({
     where: { id: scene.id },
@@ -296,10 +306,13 @@ export async function POST(req: NextRequest) {
     // background task needs it to build absolute reference-image URLs.
     const origin = publicOrigin(req);
 
-    // Character context for character-aware generation prompts (video + thumbnails)
+    // Character context for character-aware generation prompts (video + thumbnails),
+    // plus the project's video engine selection and aspect ratio (used by Vidu models)
     const genCtx = {
       style: project.style || "cinematic",
       characters: (project.characters || []) as CharacterLike[],
+      aspectRatio: project.aspectRatio || "16:9",
+      videoModel: project.videoModel ?? null,
     };
 
     // Mark scenes as generating immediately

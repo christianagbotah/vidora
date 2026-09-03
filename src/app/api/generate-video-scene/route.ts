@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { resolveModelForRequest } from "@/lib/video-models";
 import {
   saveGeneratedFile,
   publicOrigin,
@@ -63,9 +64,11 @@ export async function POST(req: NextRequest) {
       if (!authResult.ok) return authResult.response;
     }
 
-    // Get the project for aspect ratio, style, and scene/character context
+    // Get the project for aspect ratio, style, scene/character context, and
+    // the project's selected video engine (model)
     let aspectRatio = "16:9";
     let projectStyle: string | null = null;
+    let videoModel: string | null = null;
     let referenceImage: string | undefined;
     // Character-aware prompts — fallback to the raw client prompt when the
     // project/scene can't be loaded (prompt-only generation).
@@ -83,6 +86,7 @@ export async function POST(req: NextRequest) {
       if (project) {
         aspectRatio = project.aspectRatio;
         projectStyle = project.style;
+        videoModel = project.videoModel ?? null;
 
         const scene = project.scenes[0];
         if (scene?.referenceImageUrl) {
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
     }).catch(() => { /* scene may not exist yet client-side */ });
 
     // ── Fire-and-forget: everything below runs in the background ──
-    console.log(`[generate-video-scene] scene=${sceneId} videoPrompt="${videoPrompt.slice(0, 120)}${videoPrompt.length > 120 ? "…" : ""}" imagePromptLen=${imagePrompt.length}`);
+    console.log(`[generate-video-scene] scene=${sceneId} model=${resolveModelForRequest(videoModel, Boolean(absoluteReferenceImage))} videoPrompt="${videoPrompt.slice(0, 120)}${videoPrompt.length > 120 ? "…" : ""}" imagePromptLen=${imagePrompt.length}`);
     void runSceneGeneration({
       prompt: videoPrompt,
       imagePrompt,
@@ -144,6 +148,9 @@ export async function POST(req: NextRequest) {
       videoSize,
       thumbSize,
       referenceImage: absoluteReferenceImage,
+      aspectRatio,
+      style: projectStyle,
+      videoModel,
     }).catch((err) => {
       console.error("[generate-video-scene] background task crashed:", err);
       db.videoScene.update({
@@ -181,8 +188,14 @@ async function runSceneGeneration(opts: {
   videoSize: string;
   thumbSize: string;
   referenceImage?: string;
+  /** Project aspect ratio — sent natively to Vidu models. */
+  aspectRatio?: string;
+  /** Project style — mapped to the viduq1-text style enum. */
+  style?: string | null;
+  /** Project's selected video engine (null = default CogVideoX-3). */
+  videoModel?: string | null;
 }): Promise<void> {
-  const { prompt, imagePrompt, sceneId, duration, videoSize, thumbSize, referenceImage } = opts;
+  const { prompt, imagePrompt, sceneId, duration, videoSize, thumbSize, referenceImage, aspectRatio, style, videoModel } = opts;
 
   // Step 1: Create the video generation task FIRST — this is the moment
   // "generation actually starts" (a few seconds). The thumbnail is NOT an
@@ -190,6 +203,9 @@ async function runSceneGeneration(opts: {
   // blocking task creation for 30-60s.
   let taskId: string;
   try {
+    // Per-scene model resolution: image-dependent models substitute their
+    // text-capable sibling when no reference image is available.
+    const model = resolveModelForRequest(videoModel, Boolean(referenceImage));
     taskId = await zai.generateVideo({
       prompt,
       size: videoSize,
@@ -197,8 +213,14 @@ async function runSceneGeneration(opts: {
       quality: "quality",
       withAudio: false,
       ...(referenceImage ? { imageUrl: referenceImage } : {}),
+      model,
+      ...(aspectRatio ? { aspectRatio } : {}),
+      ...(style ? { style } : {}),
       retry: { label: "Video generation task", timeoutMs: 120_000, maxRetries: 2 },
     });
+    if (model !== (videoModel ?? "CogVideoX-3")) {
+      console.log(`[generate-video-scene] scene=${sceneId}: no reference image — model substituted ${videoModel ?? "default"} → ${model}`);
+    }
   } catch (err) {
     const isRateLimit = err instanceof ZAIError && err.kind === "rate_limit";
     const errorMsg = isRateLimit

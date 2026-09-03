@@ -28,8 +28,13 @@ import {
   Share2, Music2, Subtitles, Languages, BarChart2, Globe, Image as ImageIcon2,
   Building, Youtube, Instagram, Facebook, Send,
   ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon,
-  Table2,
+  Table2, Cpu, Gauge,
 } from "lucide-react";
+import {
+  VIDEO_MODELS,
+  DEFAULT_VIDEO_MODEL_ID,
+  getVideoModelInfo,
+} from "@/lib/video-models";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -1343,6 +1348,8 @@ function VidoraApp() {
   const [enhancedText, setEnhancedText] = useState("");
   const [selectedStyle, setSelectedStyle] = useState("cinematic");
   const [selectedAspect, setSelectedAspect] = useState("16:9");
+  // Video engine selection (see src/lib/video-models.ts) — CogVideoX-3 default
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_VIDEO_MODEL_ID);
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [customDuration, setCustomDuration] = useState("");
   const [isCustomDuration, setIsCustomDuration] = useState(false);
@@ -1624,6 +1631,8 @@ function VidoraApp() {
   const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
   const createTokensNeeded = createSceneCount * tokensPerScene;
   const tokensInsufficient = createTokensNeeded > userTokens;
+  // Selected video engine's catalog entry (always defined — CogVideoX-3 is the fallback)
+  const selectedModelInfo = getVideoModelInfo(selectedModel) ?? VIDEO_MODELS[0];
   const inputModeLabels: Record<InputMode, string> = {
     script: "Script / Screenplay",
     text: "Text description",
@@ -2715,6 +2724,7 @@ function VidoraApp() {
           description: text.slice(0, 200),
           style: selectedStyle,
           aspectRatio: selectedAspect,
+          videoModel: selectedModel,
           targetDuration: effectiveDuration,
           projectType,
           characters: parsedCharacters.length > 0 ? parsedCharacters.map((c) => ({
@@ -3421,7 +3431,7 @@ function VidoraApp() {
         body: JSON.stringify({ [key]: value }),
       });
       refreshProject();
-      toast({ title: `${key === "style" ? "Style" : key === "aspectRatio" ? "Aspect Ratio" : key === "targetDuration" ? "Duration" : "Setting"} updated` });
+      toast({ title: `${key === "style" ? "Style" : key === "aspectRatio" ? "Aspect Ratio" : key === "targetDuration" ? "Duration" : key === "videoModel" ? "Video Engine" : "Setting"} updated` });
     } catch {
       toast({ title: "Failed to update setting", variant: "destructive" });
     } finally {
@@ -5372,6 +5382,65 @@ function VidoraApp() {
                       </CardContent>
                     </Card>
 
+                    {/* ── VIDEO ENGINE (model selection) ── */}
+                    <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-base font-bold flex items-center gap-2 flex-wrap">
+                          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                            <Cpu className="h-3.5 w-3.5" />
+                          </div>
+                          Video Engine
+                          <Badge variant="outline" className="text-xs ml-auto font-normal text-muted-foreground">
+                            {selectedModelInfo.resolution} · {selectedModelInfo.durationSec}s/clip · ~${selectedModelInfo.costUsd.toFixed(2)}/clip
+                          </Badge>
+                        </CardTitle>
+                        <CardDescription>The AI model that renders every scene — pick your trade-off between quality, speed and cost</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3" role="radiogroup" aria-label="Video engine">
+                          {VIDEO_MODELS.map((m) => {
+                            const active = selectedModel === m.id;
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={active}
+                                onClick={() => setSelectedModel(m.id)}
+                                className={`relative text-left p-4 rounded-xl border-2 transition-all ${
+                                  active
+                                    ? "border-violet-400 bg-violet-50/70 shadow-md shadow-violet-500/10"
+                                    : "border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50/50"
+                                }`}
+                              >
+                                {active ? (
+                                  <span className="absolute top-3 right-3 h-5 w-5 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white flex items-center justify-center shadow-sm">
+                                    <Check className="h-3 w-3" />
+                                  </span>
+                                ) : m.isDefault ? (
+                                  <Badge variant="secondary" className="absolute top-3 right-3 text-[10px] font-semibold">Default</Badge>
+                                ) : null}
+                                <p className="text-sm font-bold text-slate-800 pr-16">{m.name}</p>
+                                <Badge variant="outline" className="mt-1.5 text-[10px] font-semibold text-violet-600 border-violet-200 bg-violet-50/60">
+                                  {m.tierLabel}
+                                </Badge>
+                                <p className="text-xs text-muted-foreground mt-2 line-clamp-2 leading-relaxed">{m.tagline}</p>
+                                <div className="flex items-center gap-2.5 flex-wrap mt-2.5 text-[10px] font-medium text-muted-foreground">
+                                  <span className="flex items-center gap-0.5"><Gauge className="h-3 w-3" />{m.resolution}</span>
+                                  <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{m.durationSec}s</span>
+                                  <span className="flex items-center gap-0.5"><Coins className="h-3 w-3" />${m.costUsd.toFixed(2)}/clip</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-3 flex items-start gap-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          Image-based engines use your scene &amp; character reference images. Scenes without one automatically fall back to a text-capable model — generation never dead-ends.
+                        </p>
+                      </CardContent>
+                    </Card>
+
                     {/* ── FREE PREVIEW (try before you buy) ── */}
                     {/* Lets users see a storyboard + watermarked style image before
                         spending tokens. Costs the owner ~$0.03 per user/day max
@@ -5467,6 +5536,7 @@ function VidoraApp() {
                             { icon: Clock, label: "Duration", value: formatDuration(effectiveDuration) },
                             { icon: Palette, label: "Style", value: STYLES.find((s) => s.value === selectedStyle)?.label || selectedStyle },
                             { icon: LayoutGrid, label: "Aspect", value: `${selectedAspect} (${ASPECTS.find((a) => a.value === selectedAspect)?.desc || ""})` },
+                            { icon: Cpu, label: "Engine", value: selectedModelInfo.name },
                             ...(parsedCharacters.length > 0 ? [{ icon: Users, label: "Characters", value: `${parsedCharacters.length}` }] : []),
                           ].map((row) => (
                             <div key={row.label} className="flex items-center gap-3 px-4 py-2.5 bg-slate-50/50">
@@ -5713,6 +5783,48 @@ function VidoraApp() {
                           </div>
                         </div>
 
+                        {/* Video Engine — which AI model renders future generations */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium flex items-center gap-1.5">
+                            <Cpu className="h-3.5 w-3.5 text-muted-foreground" />Video Engine
+                            <span className="text-xs font-normal text-muted-foreground">(applies to new generations)</span>
+                          </Label>
+                          <div className="flex flex-wrap gap-2">
+                            {VIDEO_MODELS.map((m) => {
+                              const current = (currentProject.videoModel ?? DEFAULT_VIDEO_MODEL_ID) === m.id;
+                              return (
+                                <button
+                                  key={m.id}
+                                  type="button"
+                                  title={m.tagline}
+                                  onClick={() => handleUpdateProjectSetting("videoModel", m.id)}
+                                  disabled={updatingSettings}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                                    current
+                                      ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                  }`}
+                                >
+                                  {m.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                            {(() => {
+                              const mi = getVideoModelInfo(currentProject.videoModel) ?? VIDEO_MODELS[0];
+                              return (
+                                <>
+                                  <Gauge className="h-3 w-3 shrink-0" />
+                                  {mi.tagline}
+                                  <span className="opacity-70">·</span>
+                                  {mi.resolution} · {mi.durationSec}s/clip
+                                </>
+                              );
+                            })()}
+                          </p>
+                        </div>
+
                         {/* Duration */}
                         <div className="space-y-2">
                           <Label className="text-sm font-medium flex items-center gap-1.5">
@@ -5744,6 +5856,10 @@ function VidoraApp() {
               {/* Project Info Bar */}
               <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
                 <span className="flex items-center gap-0.5"><Film className="h-3 w-3" />{safeScenes.length} scenes</span>
+                <span className="flex items-center gap-0.5" title="Video engine used for new generations">
+                  <Cpu className="h-3 w-3" />
+                  {(getVideoModelInfo(currentProject.videoModel) ?? VIDEO_MODELS[0]).name}
+                </span>
                 {safeCharacters.length > 0 && (
                   <span className="flex items-center gap-0.5"><Users className="h-3 w-3" />{safeCharacters.length} chars</span>
                 )}

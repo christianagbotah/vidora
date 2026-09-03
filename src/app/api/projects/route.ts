@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
 import { saveGeneratedFile } from "@/lib/generated-store";
+import { isValidVideoModelId } from "@/lib/video-models";
 import crypto from "crypto";
 
 /**
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     const { userId } = authResult.session;
     const body = await req.json();
-    const { title, description, style, aspectRatio, projectType, characters } = body;
+    const { title, description, style, aspectRatio, projectType, characters, videoModel } = body;
 
     if (!title) {
       return NextResponse.json(
@@ -114,6 +115,10 @@ export async function POST(req: NextRequest) {
         aspectRatio: aspectRatio || "16:9",
         targetDuration: body.targetDuration || 60,
         projectType: projectType || "custom",
+        // Video engine selection — null/undefined falls back to CogVideoX-3.
+        // Unknown ids are dropped (silently defaulting) so a bad client value
+        // can never break project creation.
+        ...(isValidVideoModelId(videoModel) ? { videoModel } : {}),
         characters: processedCharacters?.length
           ? { create: processedCharacters }
           : undefined,

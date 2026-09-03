@@ -61,6 +61,10 @@ model VideoProject {
   status         String     @default("draft")
   targetDuration  Int        @default(60)
   projectType    String     @default("custom")   // custom, birthday, commercial, event, social
+  // ── Video engine selection (see src/lib/video-models.ts) ──
+  // null = CogVideoX-3 (the default). Values: "CogVideoX-3" | "vidu2-image" |
+  // "vidu2-reference" | "viduq1-text" | "viduq1-image"
+  videoModel     String?                        // Z.ai video model id used for generation
   finalVideoUrl  String?
   // ── Sharing ──
   shareSlug      String?    @unique  // public share URL slug

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { isValidVideoModelId } from "@/lib/video-models";
 
 /**
  * GET /api/projects/[id]
@@ -62,7 +63,7 @@ export async function PUT(
     if (!authResult.ok) return authResult.response;
 
     const body = await req.json();
-    const { title, description, style, aspectRatio, status, targetDuration } = body;
+    const { title, description, style, aspectRatio, status, targetDuration, videoModel } = body;
 
     const project = await db.videoProject.update({
       where: { id },
@@ -73,6 +74,14 @@ export async function PUT(
         ...(aspectRatio && { aspectRatio }),
         ...(status && { status }),
         ...(targetDuration !== undefined && { targetDuration }),
+        // Video engine switch — `null` resets to the default (CogVideoX-3).
+        // Unknown ids are rejected so typos can't silently strand a project
+        // on a model the transport layer would fall back from anyway.
+        ...(videoModel !== undefined && {
+          ...(isValidVideoModelId(videoModel) || videoModel === null
+            ? { videoModel }
+            : {}),
+        }),
       },
       include: {
         scenes: {

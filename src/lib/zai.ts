@@ -26,6 +26,13 @@ import type {
   CreateAudioASRBody,
   AsyncResultResponse,
 } from "z-ai-web-dev-sdk";
+import {
+  DEFAULT_VIDEO_MODEL_ID,
+  getVideoModelInfo,
+  viduAspectRatio,
+  viduStyle,
+  type VideoModelId,
+} from "./video-models";
 
 // ─── Error Classification ───────────────────────────────────────────────────
 
@@ -595,14 +602,15 @@ export interface VideoTaskCreateResult {
   [key: string]: unknown;
 }
 
-const DEFAULT_VIDEO_MODEL = "CogVideoX-3";
-
 // ─── Public API constraint normalization ────────────────────────────────────
 //
 // The public api.z.ai documents (docs.z.ai → Video API → Generate Video):
-//   * duration: enum of exactly 5 or 10 seconds (default 5)
-//   * size:     1280x720, 720x1280, 1024x1024, 1920x1080, 1080x1920,
-//               2048x1080, 3840x2160
+//   * duration: CogVideoX-3 accepts 5 or 10 seconds (default 5);
+//               Vidu models are fixed — vidu2: 4s, viduq1: 5s
+//   * size:     CogVideoX-3: 1280x720, 720x1280, 1024x1024, 1920x1080,
+//               1080x1920, 2048x1080, 3840x2160
+//               Vidu models: use `aspect_ratio` instead ("16:9", "9:16",
+//               "1:1", "4:3") — the API derives the size
 //   * prompt:   maximum 512 characters
 // The app derives per-scene durations from project settings (e.g. a 30s
 // project ÷ 4 scenes = 7s, or the raw targetDuration on older paths) and
@@ -681,83 +689,208 @@ function videoDurationCandidates(requested?: number): (number | undefined)[] {
   return candidates;
 }
 
+/** Shape `image_url` per the model's input mode (see video-models.ts). */
+function shapeImageUrlForModel(
+  imageUrl: string | string[] | undefined,
+  mode: "none" | "single" | "array" | "any"
+): string | string[] | undefined {
+  if (mode === "none" || imageUrl === undefined) {
+    return mode === "none" ? undefined : imageUrl;
+  }
+  const asArray = Array.isArray(imageUrl);
+  if (mode === "single") {
+    return asArray ? imageUrl[0] : imageUrl;
+  }
+  if (mode === "array") {
+    // Reference models take a list (docs: up to 7 refs) — wrap/keep as array.
+    const arr = asArray ? imageUrl : [imageUrl];
+    return arr.slice(0, 7);
+  }
+  return imageUrl; // "any" — pass through untouched
+}
+
+/** One concrete request shape to try. `base` excludes the duration field. */
+interface VideoAttempt {
+  label: string;
+  url: string;
+  base: Record<string, unknown>;
+  /** Duration candidates in order (undefined = omit the field). */
+  durations: (number | undefined)[];
+  /** Only CogVideoX attempts update the shared lastGoodVideoDuration cache. */
+  cachesDuration: boolean;
+}
+
+/** Duration candidates for Vidu models: fixed per docs + omit fallback. */
+function viduDurationCandidates(fixed: number): (number | undefined)[] {
+  const forcedRaw = process.env.ZAI_VIDEO_DURATION;
+  if (forcedRaw) {
+    const forced = Number(forcedRaw);
+    if (Number.isFinite(forced)) return [forced];
+  }
+  return [fixed, undefined];
+}
+
 /**
  * Create a video generation task, working on BOTH the public api.z.ai and
- * the internal gateway:
- *   1st attempt: POST {baseUrl}/videos/generations  — public form (`model`
- *                is REQUIRED there; without it the API returns a 500 NPE),
- *                with duration/size/prompt normalized to the documented
- *                public constraints (duration ∈ {5,10}, supported sizes,
- *                prompt ≤ 512 chars)
- *   fallback:    POST {baseUrl}/video/generation    — SDK/internal form
- *                (raw values — the internal gateway is permissive)
- * A 404 (route not found) triggers the fallback; any other error is thrown.
- * Within each form, a 400 that mentions "duration" advances a duration
- * candidate ladder (normalized → 5 → omit) so unsupported values
- * self-heal instead of hard-failing.
+ * the internal gateway, for ANY model in src/lib/video-models.ts.
+ *
+ * Attempt ladder (first success wins):
+ *   1. PUBLIC form  — POST {baseUrl}/videos/generations with `model` (required
+ *      there) and per-family constraint normalization:
+ *        • CogVideoX-3: size normalized to the documented set, duration ladder
+ *          (normalized → 5 → omit), prompt ≤ 500 chars
+ *        • Vidu models: `aspect_ratio` + `movement_amplitude` + fixed duration
+ *          (vidu2: 4s, viduq1: 5s), image_url shaped per model, `style` for
+ *          viduq1-text, quality/with_audio omitted
+ *   2. PUBLIC form with the DEFAULT model (CogVideoX-3) — auto-fallback when
+ *      the requested model is rejected (400 mentioning "model"), so a
+ *      deprecated/renamed model id never dead-ends a generation.
+ *   3. INTERNAL form — POST {baseUrl}/video/generation with the model id
+ *      included (raw values — the internal gateway is permissive).
+ *   4. INTERNAL form without `model` — the legacy SDK shape (gateway default).
+ *
+ * A 404 (route not found) or network error advances to the next attempt.
+ * Within an attempt, a 400 that mentions "duration" advances the duration
+ * candidate ladder so unsupported values self-heal instead of hard-failing.
  */
 async function createVideoCompat(
   body: {
     prompt?: string;
     size?: string;
+    /** App aspect ratio ("16:9" etc.) — sent natively to Vidu models. */
+    aspect_ratio?: string;
+    /** Project style — mapped to the viduq1-text `style` enum. */
+    style?: string;
     duration?: number;
     quality?: string;
     with_audio?: boolean;
     image_url?: string | string[];
+    /** Requested model id (see src/lib/video-models.ts). */
+    model?: string;
   },
   timeoutMs: number
 ): Promise<VideoTaskCreateResult> {
   const cfg = await getEndpointConfig();
-  const model = process.env.ZAI_VIDEO_MODEL || DEFAULT_VIDEO_MODEL;
-  const durationCandidates = videoDurationCandidates(body.duration);
 
-  const forms: {
-    url: string;
-    build: (d: number | undefined) => unknown;
-  }[] = [
-    {
+  // Env override forces ONE model for every request (operator escape hatch);
+  // otherwise use the requested model, validated against the catalog.
+  const requestedRaw = process.env.ZAI_VIDEO_MODEL || body.model || DEFAULT_VIDEO_MODEL_ID;
+  const info = getVideoModelInfo(requestedRaw);
+  const requestedModel: VideoModelId = info ? info.id : DEFAULT_VIDEO_MODEL_ID;
+  if (requestedRaw !== requestedModel) {
+    console.warn(
+      `[ZAI] Unknown video model "${requestedRaw}" — falling back to ${requestedModel}`
+    );
+  }
+
+  const attempts: VideoAttempt[] = [];
+
+  // ── Attempt 1: public form for the requested model ──
+  const prompt500 = body.prompt ? body.prompt.slice(0, 500) : undefined;
+  const shapedImage = shapeImageUrlForModel(body.image_url, info?.imageMode ?? "any");
+
+  if (info && info.family !== "cogvideox") {
+    // Vidu family — aspect_ratio + movement_amplitude, fixed duration
+    const viduBase: Record<string, unknown> = {
+      model: requestedModel,
+      ...(prompt500 !== undefined ? { prompt: prompt500 } : {}),
+      ...(shapedImage !== undefined ? { image_url: shapedImage } : {}),
+      ...(body.aspect_ratio ? { aspect_ratio: viduAspectRatio(body.aspect_ratio) } : {}),
+      movement_amplitude: "auto",
+      ...(info.supportsStyle ? { style: viduStyle(body.style) } : {}),
+    };
+    attempts.push({
+      label: `public/${requestedModel}`,
       url: `${cfg.baseUrl}/videos/generations`,
-      // Public form: model required + normalized constraints
-      build: (d) => ({
-        ...body,
-        ...(body.prompt ? { prompt: body.prompt.slice(0, 500) } : {}),
+      base: viduBase,
+      durations: viduDurationCandidates(info.durationSec),
+      cachesDuration: false,
+    });
+  } else {
+    // CogVideoX family — explicit size + duration ladder (legacy behavior)
+    attempts.push({
+      label: `public/${requestedModel}`,
+      url: `${cfg.baseUrl}/videos/generations`,
+      base: {
+        model: requestedModel,
+        ...(prompt500 !== undefined ? { prompt: prompt500 } : {}),
+        ...(body.image_url !== undefined ? { image_url: body.image_url } : {}),
         ...(body.size ? { size: normalizeVideoSizeForPublic(body.size) } : {}),
-        ...(d !== undefined ? { duration: d } : {}),
-        model,
-      }),
+        ...(body.quality !== undefined ? { quality: body.quality } : {}),
+        ...(body.with_audio !== undefined ? { with_audio: body.with_audio } : {}),
+      },
+      durations: videoDurationCandidates(body.duration),
+      cachesDuration: true,
+    });
+  }
+
+  // ── Attempt 2: public form with the DEFAULT model (model-rejection fallback) ──
+  if (requestedModel !== DEFAULT_VIDEO_MODEL_ID) {
+    attempts.push({
+      label: `public/${DEFAULT_VIDEO_MODEL_ID} (fallback)`,
+      url: `${cfg.baseUrl}/videos/generations`,
+      base: {
+        model: DEFAULT_VIDEO_MODEL_ID,
+        ...(prompt500 !== undefined ? { prompt: prompt500 } : {}),
+        ...(body.image_url !== undefined ? { image_url: body.image_url } : {}),
+        ...(body.size ? { size: normalizeVideoSizeForPublic(body.size) } : {}),
+        ...(body.quality !== undefined ? { quality: body.quality } : {}),
+        ...(body.with_audio !== undefined ? { with_audio: body.with_audio } : {}),
+      },
+      durations: videoDurationCandidates(body.duration),
+      cachesDuration: true,
+    });
+  }
+
+  // ── Attempt 3: internal/SDK form WITH the model id ──
+  attempts.push({
+    label: `internal/${requestedModel}`,
+    url: `${cfg.baseUrl}/video/generation`,
+    base: {
+      ...body,
+      model: requestedModel,
     },
-    {
-      url: `${cfg.baseUrl}/video/generation`,
-      // Internal/SDK form: raw values, no model
-      build: (d) => ({ ...body, ...(d !== undefined ? { duration: d } : {}) }),
-    },
-  ];
+    durations:
+      info && info.family !== "cogvideox"
+        ? viduDurationCandidates(info.durationSec)
+        : videoDurationCandidates(body.duration),
+    cachesDuration: false,
+  });
+
+  // ── Attempt 4: internal/SDK form without a model (legacy gateway default) ──
+  attempts.push({
+    label: "internal/default",
+    url: `${cfg.baseUrl}/video/generation`,
+    base: { ...body },
+    durations: videoDurationCandidates(body.duration),
+    cachesDuration: false,
+  });
 
   let lastError: ZAIError | null = null;
-  for (let f = 0; f < forms.length; f++) {
-    const form = forms[f];
-    const isLastForm = f === forms.length - 1;
-    for (let c = 0; c < durationCandidates.length; c++) {
-      const duration = durationCandidates[c];
-      const isLastCandidate = c === durationCandidates.length - 1;
+  for (let f = 0; f < attempts.length; f++) {
+    const attempt = attempts[f];
+    const isLastForm = f === attempts.length - 1;
+    for (let c = 0; c < attempt.durations.length; c++) {
+      const duration = attempt.durations[c];
+      const isLastCandidate = c === attempt.durations.length - 1;
+      const bodyJson = {
+        ...attempt.base,
+        ...(duration !== undefined ? { duration } : {}),
+      };
       let res: ZaiRequestResult;
       try {
-        res = await zaiRequest(
-          form.url,
-          { method: "POST", bodyJson: form.build(duration) },
-          timeoutMs
-        );
+        res = await zaiRequest(attempt.url, { method: "POST", bodyJson }, timeoutMs);
       } catch (err) {
-        // Network/timeout error — try the other endpoint form
+        // Network/timeout error — try the next attempt form
         const classified = err instanceof ZAIError ? err : classifyError(err);
         if (isLastForm && isLastCandidate) throw classified;
         lastError = classified;
         break;
       }
       if (res.status === 404) {
-        // Route not found on this infrastructure — try the other form.
+        // Route not found on this infrastructure — try the next form.
         lastError = new ZAIError(
-          `Video create endpoint not available (404) at ${form.url}`,
+          `Video create endpoint not available (404) at ${attempt.url}`,
           "validation",
           { status: 404 }
         );
@@ -772,19 +905,34 @@ async function createVideoCompat(
           statusToErrorKind(res.status),
           { status: res.status, cause: res.body }
         );
-        // "The current duration value is not supported" → next candidate
+        // "The current duration value is not supported" → next duration candidate
         if (/duration/i.test(apiMsg ?? "") && !isLastCandidate) {
           lastError = err;
           continue;
         }
+        // "model not found / not supported" → next attempt (default-model
+        // public form, or the model-less internal form)
+        if (/model/i.test(apiMsg ?? "") && !isLastForm) {
+          console.warn(
+            `[ZAI] Video model ${attempt.label} rejected: ${apiMsg} — trying next form`
+          );
+          lastError = err;
+          break;
+        }
         throw err;
       }
       assertNoBodyError(res.body, "video generation create");
-      // Success — remember which duration worked and warn if we adjusted
-      lastGoodVideoDuration = duration === undefined ? "omit" : duration;
+      // Success — remember which duration worked (Cog attempts only) and
+      // warn if we adjusted the requested value.
+      if (attempt.cachesDuration) {
+        lastGoodVideoDuration = duration === undefined ? "omit" : duration;
+      }
+      if (attempt.label.startsWith("public/") && requestedModel !== DEFAULT_VIDEO_MODEL_ID) {
+        console.log(`[ZAI] Video task created via ${attempt.label}`);
+      }
       if (body.duration !== undefined && duration !== body.duration) {
         console.warn(
-          `[ZAI] Video duration ${body.duration}s adjusted to ${duration ?? "API default"}s (API supports 5s/10s only)`
+          `[ZAI] Video duration ${body.duration}s adjusted to ${duration ?? "API default"}s for ${attempt.label}`
         );
       }
       return res.body as VideoTaskCreateResult;
@@ -1127,9 +1275,15 @@ export interface VideoOptions {
   prompt?: string;
   imageUrl?: string | string[];
   size?: string;
+  /** App aspect ratio ("16:9" etc.) — Vidu models accept this natively. */
+  aspectRatio?: string;
   duration?: number;
   quality?: "speed" | "quality";
   withAudio?: boolean;
+  /** Video model id (see src/lib/video-models.ts). Env ZAI_VIDEO_MODEL forces it. */
+  model?: string;
+  /** Project style — mapped to the viduq1-text `style` enum (anime/general). */
+  style?: string;
   retry?: RetryOptions;
 }
 
@@ -1144,6 +1298,9 @@ export async function generateVideo(opts: VideoOptions): Promise<string> {
   const body = {
     prompt: opts.prompt,
     size: opts.size,
+    aspect_ratio: opts.aspectRatio,
+    style: opts.style,
+    model: opts.model,
     duration: opts.duration,
     quality: opts.quality ?? "quality",
     with_audio: opts.withAudio ?? true,

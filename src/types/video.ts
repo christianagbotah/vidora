@@ -71,6 +71,8 @@ export interface VideoProject {
   status: string;
   targetDuration: number;
   projectType?: string;
+  /** Z.ai video model id (see src/lib/video-models.ts) — null = CogVideoX-3 default. */
+  videoModel?: string | null;
   finalVideoUrl?: string | null;
   createdAt: string;
   updatedAt: string;

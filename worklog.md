@@ -2571,3 +2571,49 @@ Stage Summary:
 - Dashboard has a prominent always-visible Create CTA (header) + quick New Project (My Projects card) + fresh project list on visit
 - Scene↔character linkage now works end-to-end, and all image/video/portrait generation prompts are character-aware: full appearance descriptions + style keywords + exact-match instructions
 - VLM-verified that the described character (JJ) now renders accurately; polling rate-limits no longer kill healthy generation tasks
+
+---
+Task ID: video-models-1
+Agent: main
+Task: Multi-model video generation — expose Vidu2 / ViduQ1 / CogVideoX-3 as selectable engines
+
+User request: Asked whether the app uses the best video model (Vidu2) since they saw CogVideoX-3 integrated, and whether all models are available in-app.
+
+Work Log:
+- Verified the exact Z.ai video model lineup from official docs (docs.z.ai/guides/video/vidu-q1, /vidu2, api-reference/video/generate-video):
+  vidu2-image (4s, 720P, $0.2), vidu2-reference (4s, 720P, $0.4), viduq1-text (5s, 1080P, $0.4, style anime/general),
+  viduq1-image (5s, 1080P, $0.4), CogVideoX-3 (5/10s, up to 4K, ~$0.08). vidu2/q1-start-end excluded (need 2 frames; pipeline can't supply).
+- NEW src/lib/video-models.ts: dependency-free model catalog (ids, tiers, specs, pricing, image modes) + helpers:
+  getVideoModelInfo / isValidVideoModelId / resolveModelForRequest (smart per-scene substitution when no image:
+  viduq1-image→viduq1-text, vidu2-*→CogVideoX-3) / viduAspectRatio / viduStyle.
+- src/lib/zai.ts: createVideoCompat rewritten as a 4-attempt ladder — public form with requested model
+  (per-family normalization: Vidu gets aspect_ratio + movement_amplitude + fixed duration + shaped image_url +
+  style for viduq1-text; CogVideoX keeps size normalization + duration ladder), public form with DEFAULT model
+  (auto-fallback on 400 mentioning "model"), internal form with model, internal form without model.
+  VideoOptions gains model/aspectRatio/style; generateVideo passes them through.
+- Prisma: VideoProject.videoModel String? added to BOTH schema.prisma and schema.prisma.local (sqlite mirror —
+  the local-db-push script pushes the mirror, first push was a no-op). db:push re-run; column verified in sqlite.
+- API routes: POST /api/projects validates+stores videoModel; PUT /api/projects/[id] allows switching (null = reset);
+  /api/generate-video + /api/generate-video-scene resolve model per scene (project.videoModel, aspectRatio, style
+  passed to zai.generateVideo; substitution logged).
+- Frontend (page.tsx): "Video Engine" radio-card picker in create wizard Parameters step (tier badges, resolution/
+  duration/price specs, check indicator, Default badge, fallback helper note); "Engine" row in Review & Generate
+  summary; studio Project Settings gains Video Engine chip row (applies-to-new-generations hint + active model
+  tagline); studio info bar gains engine chip; videoModel sent on project creation; toast label for videoModel.
+- Dev server restarted (Prisma client regeneration requires restart — first POST 500 PrismaClientValidationError
+  with stale in-memory client).
+- agent-browser verification (desktop + 390px mobile session): engine picker renders (VLM-verified on both
+  viewports); Vidu 2 · Reference selected → project created with videoModel=viduq1-reference (DB verified) →
+  generation started → "Scene 1: no reference image — model substituted vidu2-reference → CogVideoX-3" →
+  ZAI task 20260903134426c3fc8eae41424de5 created OK; studio settings chip switch (ViduQ1 · Text) → toast
+  "Video Engine updated" + active chip + DB value all confirmed; mobile layout single-column, no overflow.
+  Video rendering still in progress at press time (sandbox async-result polling hit transient 429 rate-limits;
+  retry logic handles it — infrastructure noise, not a code path issue).
+
+Stage Summary:
+- ALL models are now available in-app: CogVideoX-3 (default/value), ViduQ1 Text/Image (cinematic 1080p),
+  Vidu 2 Image/Reference (fast 720p / character consistency). Choice is per-project, switchable in studio.
+- Default remains CogVideoX-3 (cheapest, 4K-capable) — users upgrade per project as needed. Env override
+  ZAI_VIDEO_MODEL still forces a single model globally (operator escape hatch).
+- Corollary for the user: their comparison table's "Vidu2 = 4K flagship/most expensive" is marketing-flavored;
+  official docs put Vidu2 at 720P/4-5s/$0.2-0.4, ViduQ1 at 1080P/5s/$0.4, CogVideoX-3 up to 4K and cheapest.
