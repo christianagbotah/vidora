@@ -2500,3 +2500,25 @@ Work Log:
 Stage Summary:
 - Generate button feedback is now instant and the video task starts in seconds instead of a minute; thumbnails render in parallel without blocking generation
 - VPS redeploy: git pull && bun run build && pm2 restart vidora (no DB/env changes)
+
+---
+Task ID: dashboard-delete-1
+Agent: main
+Task: Add per-project delete buttons, bulk delete, and grid/table view toggle to the user dashboard "My Projects" section
+
+Work Log:
+- Added state to page.tsx: projectsView ("grid" | "table"), selectedProjectIds, bulkDeleteOpen, isBulkDeleting
+- Added handlers: toggleProjectSelection, toggleSelectAllProjects, handleBulkDeleteProjects (parallel DELETE via Promise.allSettled + res.ok check, clears selection, refetches projects, toasts success/failure counts), and a useEffect that prunes stale selected ids after refresh
+- Rewrote the dashboard "My Projects" card:
+  - Header now shows project count + a Grid/Table segmented view-toggle (LayoutGrid / Table2 icons, matches existing Token Usage period-toggle styling)
+  - Grid view: each card gained a selection Checkbox (stopPropagation so card click still opens project), a trash delete button (reuses handleDeleteClick("project", id) -> existing Confirm Delete dialog), a created-date, and a violet ring highlight when selected
+  - Table view: new shadcn Table with sticky header, select-all checkbox (supports indeterminate state), Title/Status/Duration/Scenes/Created columns (responsive: Duration/Scenes hidden below sm, Created below md), Open + Delete action buttons, row-click opens project
+  - Bulk action bar appears above the list when >=1 selected: "N of M selected", Clear, "Delete Selected (N)"
+- Added a Bulk Delete confirmation dialog listing affected project titles, with loading state (Loader2 + "Deleting…"), disabled Cancel while deleting, and the project list dims during deletion
+- UX fix in confirmDelete: deleting the currently-open project from the dashboard no longer kicks the user to Home (only navigates away when deleting from the studio view)
+- Imports: added Table2 (lucide), Checkbox (ui), Table components (ui)
+- Verified end-to-end with agent-browser as admin: grid renders with checkboxes/delete/toggle; table renders all columns; select-all + indeterminate states work; bulk bar count updates; bulk delete dialog lists projects; real bulk delete of 2 test projects succeeded (DB confirms 2 remaining); single-delete dialog opens/cancels; stats/counters update; mobile 390px layout verified (VLM: toggle, checkboxes, trash icons, badges all fit, no overflow); no console or dev.log errors; ESLint passes
+
+Stage Summary:
+- Dashboard "My Projects" now supports: per-card delete with confirmation, bulk multi-select delete with confirmation + loading state, and a persistent grid/table view toggle
+- All delete flows reuse the existing owner-checked DELETE /api/projects/[id] endpoint — no backend changes needed

@@ -28,6 +28,7 @@ import {
   Share2, Music2, Subtitles, Languages, BarChart2, Globe, Image as ImageIcon2,
   Building, Youtube, Instagram, Facebook, Send,
   ArrowUp, MessageCircle, Bot, Phone, BookOpen, Code, Mail as MailIcon,
+  Table2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +49,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
@@ -1385,6 +1390,14 @@ function VidoraApp() {
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"week" | "month" | "year">("month");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<{ type: string; id: string } | null>(null);
+
+  /* ── Dashboard: projects view toggle + bulk selection ── */
+  // "grid" = card grid, "table" = compact table rows
+  const [projectsView, setProjectsView] = useState<"grid" | "table">("grid");
+  // Project ids ticked for bulk delete
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [continuityResult, setContinuityResult] = useState<{ score: number; issues: ContinuityIssue[]; summary?: string } | null>(null);
   const [isCheckingContinuity, setIsCheckingContinuity] = useState(false);
   const [continuityDialogOpen, setContinuityDialogOpen] = useState(false);
@@ -2043,7 +2056,9 @@ function VidoraApp() {
         fetchProjects();
         if (currentProject?.id === id) {
           setCurrentProject(null);
-          setCurrentView("home");
+          // Only navigate away if we were viewing this project in the studio;
+          // deleting from the dashboard keeps the user on the dashboard.
+          if (currentView === "studio") setCurrentView("home");
         }
         toast({ title: "Project deleted" });
       } catch {
@@ -2055,6 +2070,63 @@ function VidoraApp() {
   const cancelDelete = () => {
     setConfirmDeleteOpen(false);
     setPendingDeleteAction(null);
+  };
+
+  /* ── Dashboard: project selection + bulk delete ── */
+  const toggleProjectSelection = (id: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const isAllProjectsSelected =
+    safeProjects.length > 0 && selectedProjectIds.length === safeProjects.length;
+
+  const toggleSelectAllProjects = () => {
+    setSelectedProjectIds((prev) =>
+      prev.length === safeProjects.length
+        ? []
+        : safeProjects.map((p: VideoProject) => p.id)
+    );
+  };
+
+  // Prune selections that no longer exist (e.g. after deletes / refreshes)
+  useEffect(() => {
+    setSelectedProjectIds((prev) => {
+      if (prev.length === 0) return prev;
+      const existing = new Set(safeProjects.map((p: VideoProject) => p.id));
+      const next = prev.filter((id) => existing.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [safeProjects]);
+
+  const handleBulkDeleteProjects = async () => {
+    if (selectedProjectIds.length === 0 || isBulkDeleting) return;
+    const ids = [...selectedProjectIds];
+    setIsBulkDeleting(true);
+    const results = await Promise.allSettled(
+      ids.map((id) =>
+        fetch(`/api/projects/${id}`, { method: "DELETE" }).then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        })
+      )
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    setSelectedProjectIds([]);
+    setIsBulkDeleting(false);
+    setBulkDeleteOpen(false);
+    if (currentProject && ids.includes(currentProject.id)) {
+      setCurrentProject(null);
+    }
+    await fetchProjects();
+    if (failed > 0) {
+      toast({
+        title: `${ids.length - failed} deleted, ${failed} failed`,
+        variant: "destructive",
+      });
+    } else {
+      toast({ title: `Deleted ${ids.length} project${ids.length === 1 ? "" : "s"}` });
+    }
   };
 
   const handleAddScene = async () => {
@@ -6361,12 +6433,46 @@ function VidoraApp() {
               {/* My Projects */}
               <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base font-bold flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-white">
-                      <Layers className="h-3.5 w-3.5" />
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-white">
+                        <Layers className="h-3.5 w-3.5" />
+                      </div>
+                      My Projects
+                      <span className="text-xs font-medium text-muted-foreground">
+                        ({safeProjects.length})
+                      </span>
+                    </CardTitle>
+                    {/* View toggle: grid / table */}
+                    <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5" role="group" aria-label="Projects view mode">
+                      <button
+                        onClick={() => setProjectsView("grid")}
+                        aria-pressed={projectsView === "grid"}
+                        title="Grid view"
+                        aria-label="Grid view"
+                        className={`px-2.5 py-1.5 rounded-md transition-colors ${
+                          projectsView === "grid"
+                            ? "bg-white text-violet-700 shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <LayoutGrid className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setProjectsView("table")}
+                        aria-pressed={projectsView === "table"}
+                        title="Table view"
+                        aria-label="Table view"
+                        className={`px-2.5 py-1.5 rounded-md transition-colors ${
+                          projectsView === "table"
+                            ? "bg-white text-violet-700 shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <Table2 className="h-4 w-4" />
+                      </button>
                     </div>
-                    My Projects
-                  </CardTitle>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {safeProjects.length === 0 ? (
@@ -6378,40 +6484,206 @@ function VidoraApp() {
                       </Button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
-                      {safeProjects.map((project: VideoProject) => {
-                        const statusColors: Record<string, string> = {
-                          completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-                          generating: "bg-violet-50 text-violet-700 border-violet-200",
-                          failed: "bg-red-50 text-red-700 border-red-200",
-                          pending: "bg-amber-50 text-amber-700 border-amber-200",
-                        };
-                        return (
-                          <Card
-                            key={project.id}
-                            className="border border-slate-100 hover:border-violet-200 hover:shadow-md transition-all cursor-pointer group"
-                            onClick={() => openProject(project)}
-                          >
-                            <CardContent className="p-4">
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm font-bold truncate">{project.title || "Untitled"}</span>
-                                <Badge className={`text-xs px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
-                                  {project.status}
-                                </Badge>
-                              </div>
-                              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDuration(project.targetDuration || 0)}</span>
-                                <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{project.scenes?.length || 0} scenes</span>
-                              </div>
-                              <div className="flex items-center justify-end mt-2">
-                                <span className="text-xs text-violet-500 group-hover:text-violet-700 flex items-center gap-0.5">
-                                  Open <ArrowRight className="h-3 w-3" />
-                                </span>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
+                    <div className={isBulkDeleting ? "opacity-50 pointer-events-none" : ""}>
+                      {/* Bulk selection bar */}
+                      {selectedProjectIds.length > 0 && (
+                        <div className="flex items-center justify-between flex-wrap gap-2 p-2.5 mb-3 rounded-lg bg-violet-50 border border-violet-200">
+                          <div className="flex items-center gap-2 text-sm">
+                            <CheckCircle className="h-4 w-4 text-violet-600" />
+                            <span className="font-medium text-violet-800">
+                              {selectedProjectIds.length} of {safeProjects.length} selected
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              size="sm" variant="ghost"
+                              className="h-8 text-violet-700 hover:text-violet-900 hover:bg-violet-100"
+                              onClick={() => setSelectedProjectIds([])}
+                            >
+                              Clear
+                            </Button>
+                            <Button
+                              size="sm" variant="destructive"
+                              className="h-8"
+                              onClick={() => setBulkDeleteOpen(true)}
+                              disabled={isBulkDeleting}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 mr-1" />
+                              Delete Selected ({selectedProjectIds.length})
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {projectsView === "grid" ? (
+                        /* ── Grid view ── */
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
+                          {safeProjects.map((project: VideoProject) => {
+                            const statusColors: Record<string, string> = {
+                              completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                              generating: "bg-violet-50 text-violet-700 border-violet-200",
+                              failed: "bg-red-50 text-red-700 border-red-200",
+                              pending: "bg-amber-50 text-amber-700 border-amber-200",
+                            };
+                            const isSelected = selectedProjectIds.includes(project.id);
+                            return (
+                              <Card
+                                key={project.id}
+                                className={`border transition-all cursor-pointer group ${
+                                  isSelected
+                                    ? "border-violet-300 ring-2 ring-violet-200 bg-violet-50/30"
+                                    : "border-slate-100 hover:border-violet-200 hover:shadow-md"
+                                }`}
+                                onClick={() => openProject(project)}
+                              >
+                                <CardContent className="p-4">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Checkbox
+                                      checked={isSelected}
+                                      onCheckedChange={() => toggleProjectSelection(project.id)}
+                                      onClick={(e) => e.stopPropagation()}
+                                      aria-label={`Select ${project.title || "Untitled"}`}
+                                      className="h-4 w-4"
+                                    />
+                                    <span className="text-sm font-bold truncate flex-1" title={project.title}>
+                                      {project.title || "Untitled"}
+                                    </span>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost" size="sm"
+                                          className="h-8 w-8 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteClick("project", project.id);
+                                          }}
+                                          aria-label={`Delete ${project.title || "Untitled"}`}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Delete project</TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Badge className={`text-xs px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
+                                      {project.status}
+                                    </Badge>
+                                    <span className="ml-auto text-[11px] text-muted-foreground flex items-center gap-1">
+                                      <Calendar className="h-3 w-3" />
+                                      {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : "—"}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDuration(project.targetDuration || 0)}</span>
+                                    <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{project.scenes?.length || 0} scenes</span>
+                                  </div>
+                                  <div className="flex items-center justify-end mt-2">
+                                    <span className="text-xs text-violet-500 group-hover:text-violet-700 flex items-center gap-0.5">
+                                      Open <ArrowRight className="h-3 w-3" />
+                                    </span>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        /* ── Table view ── */
+                        <div className="rounded-lg border border-slate-100 max-h-96 overflow-y-auto">
+                          <Table>
+                            <TableHeader className="sticky top-0 bg-white z-10 shadow-[0_1px_0_0_#e2e8f0]">
+                              <TableRow className="hover:bg-transparent">
+                                <TableHead className="w-10">
+                                  <Checkbox
+                                    checked={
+                                      selectedProjectIds.length === 0
+                                        ? false
+                                        : isAllProjectsSelected
+                                          ? true
+                                          : "indeterminate"
+                                    }
+                                    onCheckedChange={toggleSelectAllProjects}
+                                    aria-label="Select all projects"
+                                    className="data-[state=indeterminate]:bg-violet-500 data-[state=indeterminate]:border-violet-500"
+                                  />
+                                </TableHead>
+                                <TableHead>Title</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="hidden sm:table-cell">Duration</TableHead>
+                                <TableHead className="hidden sm:table-cell">Scenes</TableHead>
+                                <TableHead className="hidden md:table-cell">Created</TableHead>
+                                <TableHead className="w-24 text-right">Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {safeProjects.map((project: VideoProject) => {
+                                const statusColors: Record<string, string> = {
+                                  completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                  generating: "bg-violet-50 text-violet-700 border-violet-200",
+                                  failed: "bg-red-50 text-red-700 border-red-200",
+                                  pending: "bg-amber-50 text-amber-700 border-amber-200",
+                                };
+                                const isSelected = selectedProjectIds.includes(project.id);
+                                return (
+                                  <TableRow
+                                    key={project.id}
+                                    className={`cursor-pointer ${isSelected ? "bg-violet-50/60" : ""}`}
+                                    onClick={() => openProject(project)}
+                                  >
+                                    <TableCell onClick={(e) => e.stopPropagation()}>
+                                      <Checkbox
+                                        checked={isSelected}
+                                        onCheckedChange={() => toggleProjectSelection(project.id)}
+                                        aria-label={`Select ${project.title || "Untitled"}`}
+                                      />
+                                    </TableCell>
+                                    <TableCell className="font-medium max-w-[160px] sm:max-w-[240px] truncate" title={project.title}>
+                                      {project.title || "Untitled"}
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge className={`text-xs px-2 ${statusColors[project.status] || "bg-slate-50 text-slate-600 border-slate-200"}`}>
+                                        {project.status}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell className="hidden sm:table-cell text-muted-foreground">
+                                      <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDuration(project.targetDuration || 0)}</span>
+                                    </TableCell>
+                                    <TableCell className="hidden sm:table-cell text-muted-foreground">
+                                      <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{project.scenes?.length || 0}</span>
+                                    </TableCell>
+                                    <TableCell className="hidden md:table-cell text-muted-foreground text-xs">
+                                      {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : "—"}
+                                    </TableCell>
+                                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                                      <div className="flex items-center justify-end gap-1">
+                                        <Button
+                                          variant="ghost" size="sm"
+                                          className="h-8 w-8 p-0 text-violet-600 hover:bg-violet-50"
+                                          onClick={() => openProject(project)}
+                                          title="Open project"
+                                          aria-label={`Open ${project.title || "Untitled"}`}
+                                        >
+                                          <ArrowRight className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost" size="sm"
+                                          className="h-8 w-8 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                          onClick={() => handleDeleteClick("project", project.id)}
+                                          title="Delete project"
+                                          aria-label={`Delete ${project.title || "Untitled"}`}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -7990,6 +8262,50 @@ function VidoraApp() {
             <Button variant="outline" onClick={cancelDelete}>Cancel</Button>
             <Button variant="destructive" onClick={confirmDelete}>
               <Trash2 className="h-4 w-4 mr-1.5" />Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Projects Dialog */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={(open) => !isBulkDeleting && setBulkDeleteOpen(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-red-600" />
+              Delete {selectedProjectIds.length} Project{selectedProjectIds.length === 1 ? "" : "s"}?
+            </DialogTitle>
+            <DialogDescription>
+              This will permanently delete {selectedProjectIds.length === 1 ? "this project" : `these ${selectedProjectIds.length} projects`} and all their scenes, characters, and generated videos. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedProjectIds.length > 0 && (
+            <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-100">
+              {selectedProjectIds.map((id) => {
+                const p = safeProjects.find((proj: VideoProject) => proj.id === id);
+                return (
+                  <div key={id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <Film className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                    <span className="truncate">{p?.title || "Untitled"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)} disabled={isBulkDeleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleBulkDeleteProjects} disabled={isBulkDeleting}>
+              {isBulkDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Deleting…
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-1.5" />Delete {selectedProjectIds.length} Project{selectedProjectIds.length === 1 ? "" : "s"}
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
