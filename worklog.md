@@ -2480,3 +2480,23 @@ Work Log:
 Stage Summary:
 - 524 eliminated (337ms response, background generation, client polls DB status) and generated media now survives rebuilds in generated-store/ — both the reported errors are addressed
 - VPS redeploy: git pull && bun run build && pm2 restart vidora (no DB changes, no env changes needed; optional GENERATED_DIR env to relocate the store)
+
+---
+Task ID: gen-feedback-1
+Agent: main (Z.ai Code)
+Task: Fix missing loading feedback + ~1 minute delay when clicking Generate on a failed scene in the Scene Timeline
+
+Work Log:
+- Root-caused the delay: both generation routes created the scene THUMBNAIL (30-60s image API call) BEFORE creating the video task, so 'generation' only actually started ~1 minute after the click; the old sync route also meant the DB status only flipped after that
+- Root-caused the missing feedback: SortableSceneCard never received the parent's generatingScenes set (no spinner/disabled state on the Generate button), the scene badge stayed 'failed' until the next 15s auto-refresh, and single-scene generation didn't trigger the 5s fast refresh interval
+- Frontend: SortableSceneCard gains isGeneratingScene prop — Generate button swaps to disabled 'Generating...' with spinner, clickable thumbnail gets a spinner overlay, Retry hides while generating
+- handleGenerateSingle: optimistic scene status flip (badge+spinner paint instantly), instant 'Starting generation...' toast, refreshProject right after the fast POST, refreshProject reverts on failure
+- Auto-refresh interval now 5s while ANY scene is generating (was: only during the batch lock overlay)
+- Backend single-scene route: runSceneGeneration creates the video task FIRST (seconds), then fires the thumbnail generation as a parallel fire-and-forget task, then polls — thumbnail failures remain non-fatal
+- Backend batch route: createSceneTask no longer generates thumbnails; new generateMissingThumbnails pass runs in parallel with the Phase-2 polling (awaited before final status updates)
+- Browser-verified end-to-end with a failed scene: click -> spinner + toast in <1s; POST 200 in 176ms; video task created immediately; poll detected a genuine ZAI 429 (test-volume rate limit) and the UI reverted to the failed state with Retry available within 15s; ESLint 0 errors
+- Committed cfdc1ee and pushed
+
+Stage Summary:
+- Generate button feedback is now instant and the video task starts in seconds instead of a minute; thumbnails render in parallel without blocking generation
+- VPS redeploy: git pull && bun run build && pm2 restart vidora (no DB/env changes)
