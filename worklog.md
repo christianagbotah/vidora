@@ -2403,3 +2403,21 @@ Stage Summary:
 - Video creation is now a professional 3-step wizard with validation and a cost review
 - The entire page is hard-locked during video generation with live progress feedback, and releases only via the completed/failed overlay states
 - Generation handoff is robust: awaited, error-handled, double-fire-proof, reload-recoverable, and zombie-scene-safe
+
+---
+Task ID: vps-pull-1
+Agent: main (Z.ai Code)
+Task: Make the pushed branch safe to pull & deploy on the user's VPS
+
+Work Log:
+- Audited the 3 unpushed commits and found sandbox-adaptation commit 514938b was VPS-hostile: it deleted deploy.sh, nginx.conf, nginx-proxy.conf, setup-nginx.sh, start-server.sh, ecosystem.config.js/.cjs, cron-check.sh; stripped X-Frame-Options/HSTS/share-iframe headers; dropped prisma client copy steps from the standalone build script
+- Restored all 8 deployment files verbatim from d74dad2 (the commit the VPS is currently on)
+- next.config.ts: security headers now gated on NODE_ENV=production — prod builds get XFO DENY + HSTS + /api/share ALLOW-FROM rule; dev keeps iframes for the sandbox preview
+- package.json: restored `cp -r node_modules/.prisma + @prisma/client` into the build script (required for the standalone server on the VPS)
+- scripts/local-db-push.sh: added postgres passthrough — if DATABASE_URL (incl. .env/prisma/.env sourcing) is postgres*, runs plain prisma db push/generate against the canonical schema; sqlite swap dance only in the sandbox. Verified with mocked bunx + real sandbox generate
+- Pushed first (8f960e0) so the user could pull, then pushed the safety commit 4a57e75 on top
+- Verified in sandbox: ESLint 0 errors, dev server restarted cleanly with the new config, page renders (no page errors), dev headers correctly omit XFO/HSTS
+
+Stage Summary:
+- Repo is now safe to `git pull` on the VPS: deployment files are back, prod security headers restored (env-gated), standalone build works again, and db:push is environment-aware (postgres passthrough / sqlite swap)
+- VPS has NO prisma schema changes since d74dad2 — no migration needed, just pull → bun install → build → restart
