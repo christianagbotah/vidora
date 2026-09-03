@@ -3,12 +3,13 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { zaiErrorResponse, friendlySceneError } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { getEngineChargeInfo } from "@/lib/storefront";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
 import { resolveModelForRequest } from "@/lib/video-models";
+import { ensureReferenceAspect } from "@/lib/aspect-normalize";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -60,11 +61,14 @@ async function createSceneTask(
 
   // Determine reference image URL — must be absolute so the ZAI API
   // can fetch it (local /generated/... paths are unreachable).
+  // Orientation guard: image-to-video engines follow the INPUT image's
+  // orientation, so a mismatched reference (legacy square portrait, etc.)
+  // is center-cropped to the project's aspect ratio before it is sent.
   let referenceImage: string | undefined;
   if (scene.referenceImageUrl) {
     // Skip base64 data URLs — too large for the API
     if (!scene.referenceImageUrl.startsWith("data:")) {
-      referenceImage = toAbsoluteUrl(scene.referenceImageUrl, origin);
+      referenceImage = scene.referenceImageUrl;
     }
   } else if (scene.characterIds) {
     try {
@@ -72,10 +76,18 @@ async function createSceneTask(
       if (charIds.length > 0) {
         const firstChar = await db.character.findUnique({ where: { id: charIds[0] } });
         if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
-          referenceImage = toAbsoluteUrl(firstChar.imageUrl, origin);
+          referenceImage = firstChar.imageUrl;
         }
       }
     } catch { /* ignore parse errors */ }
+  }
+  if (referenceImage) {
+    referenceImage = await ensureReferenceAspect(
+      referenceImage,
+      ctx.aspectRatio,
+      `Scene ${scene.sceneNumber}`
+    );
+    referenceImage = toAbsoluteUrl(referenceImage, origin) ?? undefined;
   }
 
   // Character-aware video prompt (≤512 chars): appends a compact digest of
@@ -165,19 +177,21 @@ async function pollTaskUntilDone(
       where: { id: sceneId },
       data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
     });
-    console.log(`Scene ${scene.sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
+    console.log(`Scene ${sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
     return result.videoUrl;
   }
 
   if (result.status === "timeout") {
     // Timeout — leave in "generating" state so the frontend can keep polling
-    console.warn(`Scene ${scene.sceneNumber}: polling timed out, scene left in "generating" state for client polling`);
+    console.warn(`Scene ${sceneNumber}: polling timed out, scene left in "generating" state for client polling`);
     return null;
   }
 
   // Failed
-  const errorMsg = result.error || "Video generation task failed on the server";
-  console.error(`Scene ${scene.sceneNumber}: task failed. ${errorMsg}`);
+  const errorMsg = friendlySceneError(
+    result.error || "Video generation task failed on the server"
+  );
+  console.error(`Scene ${sceneNumber}: task failed. ${result.error || errorMsg}`);
   await db.videoScene.update({
     where: { id: sceneId },
     data: { status: "failed", errorMessage: errorMsg },
@@ -186,17 +200,22 @@ async function pollTaskUntilDone(
 }
 
 /**
- * Extract a user-friendly error message from a ZAIError or generic error.
+ * Extract a user-friendly, actionable error message from a ZAIError or
+ * generic error (stored in scene.errorMessage — see friendlySceneError).
+ * Rate-limit detection is preserved so the batch loop can stop early.
  */
 function getErrorInfo(err: unknown): { message: string; isRateLimit: boolean } {
   if (err instanceof ZAIError) {
     const isRateLimit = err.kind === "rate_limit";
     const message = isRateLimit
       ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
-      : err.message;
+      : friendlySceneError(err.message);
     return { message, isRateLimit };
   }
-  return { message: err instanceof Error ? err.message : String(err), isRateLimit: false };
+  return {
+    message: friendlySceneError(err instanceof Error ? err.message : String(err)),
+    isRateLimit: false,
+  };
 }
 
 export async function POST(req: NextRequest) {

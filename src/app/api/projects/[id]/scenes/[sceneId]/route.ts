@@ -20,6 +20,9 @@ export async function PUT(
       prompt, enhancedPrompt, duration, transition, status, imageUrl,
       mood, cameraMove, lighting, narrationVoice, narrationLang,
       title, visualNote, dialogue,
+      // Internal-state resets (scene prompt editor + retry flow): clear the
+      // stale error/task so the scene is treated as a fresh pending scene.
+      errorMessage, taskId,
     } = body;
 
     // Verify the scene belongs to this project (prevents ID manipulation)
@@ -51,6 +54,9 @@ export async function PUT(
         ...(title !== undefined && { title: title || null }),
         ...(visualNote !== undefined && { visualNote: visualNote || null }),
         ...(dialogue !== undefined && { dialogue: dialogue || null }),
+        // Prompt-editor / retry resets — null clears the stale state.
+        ...(errorMessage !== undefined && { errorMessage: errorMessage || null }),
+        ...(taskId !== undefined && { taskId: taskId || null }),
       },
     });
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
+import { friendlySceneError } from "@/lib/zai-errors";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { resolveModelForRequest } from "@/lib/video-models";
 import {
@@ -8,6 +9,7 @@ import {
   publicOrigin,
   toAbsoluteUrl,
 } from "@/lib/generated-store";
+import { ensureReferenceAspect } from "@/lib/aspect-normalize";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -129,8 +131,9 @@ export async function POST(req: NextRequest) {
 
     // Resolve the reference image to an absolute URL the ZAI API can
     // fetch (local /generated/... paths are unreachable from the API).
+    // Orientation normalization happens INSIDE the background task
+    // (see runSceneGeneration) so this response stays fast.
     const origin = publicOrigin(req);
-    const absoluteReferenceImage = toAbsoluteUrl(referenceImage, origin);
 
     // Mark generating right away so the client's status polling sees it
     await db.videoScene.update({
@@ -139,7 +142,7 @@ export async function POST(req: NextRequest) {
     }).catch(() => { /* scene may not exist yet client-side */ });
 
     // ── Fire-and-forget: everything below runs in the background ──
-    console.log(`[generate-video-scene] scene=${sceneId} model=${resolveModelForRequest(videoModel, Boolean(absoluteReferenceImage))} videoPrompt="${videoPrompt.slice(0, 120)}${videoPrompt.length > 120 ? "…" : ""}" imagePromptLen=${imagePrompt.length}`);
+    console.log(`[generate-video-scene] scene=${sceneId} model=${resolveModelForRequest(videoModel, Boolean(referenceImage))} videoPrompt="${videoPrompt.slice(0, 120)}${videoPrompt.length > 120 ? "…" : ""}" imagePromptLen=${imagePrompt.length}`);
     void runSceneGeneration({
       prompt: videoPrompt,
       imagePrompt,
@@ -147,7 +150,8 @@ export async function POST(req: NextRequest) {
       duration: duration || 10,
       videoSize,
       thumbSize,
-      referenceImage: absoluteReferenceImage,
+      referenceImage,
+      origin,
       aspectRatio,
       style: projectStyle,
       videoModel,
@@ -187,7 +191,10 @@ async function runSceneGeneration(opts: {
   duration: number;
   videoSize: string;
   thumbSize: string;
+  /** LOCAL reference image path (if any) — normalized + absolutized below. */
   referenceImage?: string;
+  /** Public origin — used to build the absolute reference URL. */
+  origin: string;
   /** Project aspect ratio — sent natively to Vidu models. */
   aspectRatio?: string;
   /** Project style — mapped to the viduq1-text style enum. */
@@ -195,12 +202,26 @@ async function runSceneGeneration(opts: {
   /** Project's selected video engine (null = default CogVideoX-3). */
   videoModel?: string | null;
 }): Promise<void> {
-  const { prompt, imagePrompt, sceneId, duration, videoSize, thumbSize, referenceImage, aspectRatio, style, videoModel } = opts;
+  const { prompt, imagePrompt, sceneId, duration, videoSize, thumbSize, aspectRatio, style, videoModel, origin } = opts;
 
   // Step 1: Create the video generation task FIRST — this is the moment
   // "generation actually starts" (a few seconds). The thumbnail is NOT an
   // input to the video task, so it runs in parallel below instead of
   // blocking task creation for 30-60s.
+  //
+  // Orientation guard FIRST: image-to-video engines follow the INPUT
+  // image's orientation — a mismatched reference (legacy square portrait,
+  // landscape upload) is center-cropped to the project's aspect ratio.
+  let referenceImage: string | undefined;
+  if (opts.referenceImage) {
+    const normalized = await ensureReferenceAspect(
+      opts.referenceImage,
+      aspectRatio || "16:9",
+      `scene=${sceneId.slice(0, 8)}`
+    );
+    referenceImage = toAbsoluteUrl(normalized, origin) ?? undefined;
+  }
+
   let taskId: string;
   try {
     // Per-scene model resolution: image-dependent models substitute their
@@ -223,15 +244,16 @@ async function runSceneGeneration(opts: {
     }
   } catch (err) {
     const isRateLimit = err instanceof ZAIError && err.kind === "rate_limit";
+    const rawMsg = err instanceof Error ? err.message : String(err);
     const errorMsg = isRateLimit
       ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
-      : err instanceof Error ? err.message : String(err);
+      : friendlySceneError(rawMsg);
 
     await db.videoScene.update({
       where: { id: sceneId },
       data: { status: "failed", errorMessage: errorMsg },
     });
-    console.error(`[generate-video-scene] task creation failed: ${errorMsg}`);
+    console.error(`[generate-video-scene] task creation failed: ${rawMsg}`);
     return;
   }
 
@@ -290,7 +312,12 @@ async function runSceneGeneration(opts: {
   }
 
   // Failed
-  const errorMsg = result.error || "Video generation failed on the server";
+  const errorMsg = friendlySceneError(
+    result.error || "Video generation failed on the server"
+  );
+  console.error(
+    `[generate-video-scene] scene=${sceneId} task failed: ${result.error || errorMsg}`
+  );
   await db.videoScene.update({
     where: { id: sceneId },
     data: { status: "failed", errorMessage: errorMsg },

@@ -470,6 +470,12 @@ function GenerationLockOverlay({
       ? EXPECTED_SCENE_SEC + 60
       : remainingScenes * 110;
 
+  /* Moderation-flagged scenes need a PROMPT EDIT before retry — a blind
+     retry will fail again, so the failed-phase footnote says so. */
+  const moderationFlagged = failedList.some(
+    (s) => s.errorMessage && /flagged by the AI content safety filter/i.test(s.errorMessage)
+  );
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -560,14 +566,18 @@ function GenerationLockOverlay({
                   </p>
                   <p className="text-xs text-red-600 mt-1">
                     {failedList[0]?.errorMessage
-                      ? failedList[0].errorMessage.slice(0, 140)
+                      ? failedList[0].errorMessage.slice(0, 240)
                       : "The video service could not complete the request."}
                   </p>
                 </div>
               </div>
               <div className="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden">
                 <div className="px-4 py-2.5 flex items-center justify-between bg-slate-50/60 text-xs">
-                  <span className="text-muted-foreground">Failed scenes are retried with one click — tokens for failed scenes were refunded.</span>
+                  <span className="text-muted-foreground">
+                    {moderationFlagged
+                      ? "Some scenes were flagged by the AI content filter — edit their prompts in the studio (Edit ✎ on the scene), then retry. Tokens for failed scenes were refunded."
+                      : "Failed scenes are retried with one click — tokens for failed scenes were refunded."}
+                  </span>
                 </div>
               </div>
             </>
@@ -721,7 +731,7 @@ function GenerationLockOverlay({
 
 function SortableSceneCard({
   scene, sceneIndex, totalScenes, projectStyle,
-  onPreview, onGenerate, onRetry, onDelete, onNarrate,
+  onPreview, onGenerate, onRetry, onEditPrompt, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
   isGeneratingNarration, isGeneratingScene,
   onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
@@ -730,6 +740,9 @@ function SortableSceneCard({
   onPreview: (url: string) => void;
   onGenerate: (id: string, prompt: string) => void;
   onRetry: (scene: VideoScene) => void;
+  /** Opens the scene-prompt editor (failed / flagged scenes need a prompt
+      edit before retry — a blind retry fails again). */
+  onEditPrompt: (scene: VideoScene) => void;
   onDelete: (id: string, label: string) => void;
   onNarrate: (id: string, voice?: string) => void;
   onTransitionChange: (id: string, transition: string) => void;
@@ -923,6 +936,15 @@ function SortableSceneCard({
                             <Play className="h-3.5 w-3.5 mr-1" />Generate Video
                           </Button>
                         )}
+                        {!scene.videoUrl && !generating && scene.status !== "failed" && (
+                          <Button
+                            size="sm" variant="ghost" className="h-7 w-7 p-0"
+                            onClick={() => onEditPrompt(scene)}
+                            title="Edit this scene's prompt"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         {generating && !scene.videoUrl && (
                           <Button size="sm" variant="outline" className="h-7 text-xs px-2.5" disabled>
                             <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Generating...
@@ -935,6 +957,13 @@ function SortableSceneCard({
                               onClick={() => onRetry(scene)}
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-1" />Retry
+                            </Button>
+                            <Button
+                              size="sm" variant="outline" className="h-7 text-xs px-2.5"
+                              onClick={() => onEditPrompt(scene)}
+                              title="Rephrase this scene's prompt, then regenerate"
+                            >
+                              <Pencil className="h-3.5 w-3.5 mr-1" />Edit Prompt
                             </Button>
                             {scene.errorMessage && (
                               <Tooltip>
@@ -1528,6 +1557,13 @@ function VidoraApp() {
   const [newScenePrompt, setNewScenePrompt] = useState("");
   const [newSceneTransition, setNewSceneTransition] = useState("fade");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+
+  /* ── Scene prompt editor (failed / content-flagged scenes) ──
+     Lets the user rephrase a flagged or unsatisfying prompt, then
+     regenerate — the retry guidance points here. */
+  const [editPromptScene, setEditPromptScene] = useState<VideoScene | null>(null);
+  const [editPromptText, setEditPromptText] = useState("");
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -2324,6 +2360,62 @@ function VidoraApp() {
     }
   };
 
+  /* ── Scene prompt editor (failed / content-flagged scenes) ── */
+
+  /* Open the scene-prompt editor prefilled with the scene's current text. */
+  const handleEditScenePrompt = (scene: VideoScene) => {
+    setEditPromptText(scene.enhancedPrompt || scene.prompt);
+    setEditPromptScene(scene);
+  };
+
+  /* Save the edited prompt (clears the stale enhanced prompt + error) and
+     optionally regenerates the scene right away. */
+  const handleSaveScenePrompt = async (andGenerate: boolean) => {
+    if (!currentProject || !editPromptScene) return;
+    const text = editPromptText.trim();
+    if (!text) {
+      toast({ title: "Prompt can't be empty", variant: "destructive" });
+      return;
+    }
+    setIsSavingPrompt(true);
+    const sceneId = editPromptScene.id;
+    try {
+      const res = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // Replace the prompt, clear the stale enhanced prompt + error so
+        // the new text is exactly what generation uses.
+        body: JSON.stringify({
+          prompt: text,
+          enhancedPrompt: null,
+          status: "pending",
+          errorMessage: null,
+          taskId: null,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast({ title: "Could not save prompt", description: getApiError(data), variant: "destructive" });
+        return;
+      }
+      setEditPromptScene(null);
+      // Suppress the studio's pending-scene auto-generation BEFORE the
+      // refresh lands — refreshProject() re-renders and the auto-gen effect
+      // would otherwise race past the check below ("Save Only" contract).
+      if (!andGenerate) autoGenFiredRef.current.add(currentProject.id);
+      await refreshProject();
+      if (andGenerate) {
+        toast({ title: "Prompt updated", description: "Regenerating this scene…" });
+        handleGenerateSingle(sceneId, text);
+      } else {
+        toast({ title: "Prompt updated", description: "Use Generate Video when you're ready." });
+      }
+    } catch {
+      toast({ title: "Could not save prompt", variant: "destructive" });
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
   const handleDeleteClick = (type: string, id: string) => {
     setPendingDeleteAction({ type, id });
     setConfirmDeleteOpen(true);
@@ -2546,10 +2638,12 @@ function VidoraApp() {
     setGeneratingCharPortraits((prev) => new Set(prev).add(charName));
     try {
       // 1. POST — starts generation, returns taskId immediately (< 1s)
+      // aspectRatio: the portrait is generated at the selected orientation so
+      // it can anchor image-to-video without flipping the video's orientation.
       const startRes = await fetch("/api/generate-character-portrait", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: charName, description, style: selectedStyle }),
+        body: JSON.stringify({ name: charName, description, style: selectedStyle, aspectRatio: selectedAspect }),
       });
       if (!startRes.ok) {
         let errMsg = `Server error (${startRes.status})`;
@@ -6763,6 +6857,7 @@ function VidoraApp() {
                               onGenerate={handleGenerateSingle}
                               isGeneratingScene={generatingScenes.has(scene.id)}
                               onRetry={handleRetryScene}
+                              onEditPrompt={handleEditScenePrompt}
                               onDelete={handleDeleteClick}
                               onNarrate={handleNarrateScene}
                               onTransitionChange={handleSceneTransitionChange}
@@ -9913,6 +10008,58 @@ function VidoraApp() {
               </Button>
             </TabsContent>
           </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════
+          SCENE PROMPT EDITOR
+          For failed / content-filter-flagged scenes (and any unrendered
+          scene): rephrase the prompt, then optionally regenerate
+          immediately. The "flagged by the AI content safety filter"
+          error guidance points here.
+          ═══════════════════════════════════════════════════════ */}
+      <Dialog open={Boolean(editPromptScene)} onOpenChange={(open) => !open && setEditPromptScene(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Scene Prompt</DialogTitle>
+            <DialogDescription>
+              {editPromptScene?.status === "failed"
+                ? "Rephrase the scene description (e.g. replace real celebrity or brand names with your own description), then regenerate."
+                : "Adjust the scene description used for generation."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Textarea
+              value={editPromptText}
+              onChange={(e) => setEditPromptText(e.target.value)}
+              placeholder="Describe the scene…"
+              className="min-h-[140px]"
+            />
+            {editPromptScene?.errorMessage && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200">
+                <AlertCircle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-red-600 leading-relaxed">{editPromptScene.errorMessage}</p>
+              </div>
+            )}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Button
+                className="flex-1"
+                disabled={!editPromptText.trim() || isSavingPrompt}
+                onClick={() => handleSaveScenePrompt(true)}
+              >
+                {isSavingPrompt ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1.5" />}
+                Save &amp; Generate
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1"
+                disabled={!editPromptText.trim() || isSavingPrompt}
+                onClick={() => handleSaveScenePrompt(false)}
+              >
+                <Save className="h-4 w-4 mr-1.5" />Save Only
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

@@ -2693,3 +2693,32 @@ Stage Summary:
 - The generation overlay now shows visible, honest progress within seconds (estimated, marked with ~), a ticking ETA, and a real queue→render progression per scene
 - Fast-fail bug fixed: rate-limited runs surface the failure + retry path immediately instead of hanging for 25 minutes
 - Portrait + health polling survive network outages gracefully (backoff, no budget burn, no badge flapping)
+
+---
+Task ID: orientation-moderation-1
+Agent: main
+Task: Fix (1) raw "400 unsafe or sensitive content" error surfaced to users and (2) scenes generating landscape/square video in portrait projects (orientation mismatch). User also asked how Token Packages differ from plan packages (answered in chat).
+
+Root causes found:
+1. ORIENTATION: image-to-video engines derive OUTPUT orientation from the INPUT reference image. Character portraits were generated at a FIXED square 1024x1024 regardless of the project's aspect ratio — a portrait (9:16) project with a linked character got a square/landscape video, and mismatch errors could fail the task.
+2. MODERATION 400: ZAI's content-safety rejection ("System detected potentially unsafe or sensitive content…", often triggered by real celebrity/brand names like "CoComelon" in prompts) was stored raw in VideoScene.errorMessage and shown verbatim — API jargon with no actionable next step.
+
+Fixes:
+- src/lib/image-prompt.ts: REFERENCE_IMAGE_SIZES map + portraitImageSizeForAspect() — reference/portrait image sizes per aspect (9:16→768x1344 etc.)
+- Aspect-aware portraits: /api/generate-character-portrait now accepts aspectRatio from the wizard (page.tsx passes selectedAspect); /api/projects/[id]/characters/[characterId]/generate-image selects project.aspectRatio
+- NEW src/lib/aspect-normalize.ts — ensureReferenceAspect(): probes local reference images (PNG IHDR / JPEG SOF header parse), center-crops+rescales via ffmpeg to the exact project aspect when orientation mismatches (2% tolerance), saves /generated/refs/norm_<hash>.png; fully non-fatal (unknown format/missing ffmpeg → original URL). Wired into BOTH generate-video createSceneTask and generate-video-scene runSceneGeneration BEFORE zai.generateVideo — legacy square portraits now auto-correct
+- zai-errors.ts: friendlySceneError() maps moderation 400 → "flagged by the AI content safety filter… edit the prompt" guidance; rate limits; aspect mismatches; billing codes (1113); strips "API request failed with status NNN:" prefixes and caps length. Applied to every scene.errorMessage write in both generation routes (raw detail still in server logs)
+- Latent bugs fixed in touched files: pollTaskUntilDone referenced undefined `scene` (used sceneNumber — runtime ReferenceError risk after DB success); generate-image route's catch referenced out-of-scope authResult (hoisted)
+- UI: failed-scene overlay footnote becomes "edit their prompts in the studio" when scenes are moderation-flagged (vs one-click-retry); failed-scene error shown to 240 chars; NEW Edit Scene Prompt dialog (Textarea prefilled + friendly error panel + "Save & Generate"/"Save Only"); "Edit Prompt" button on failed scene cards, pencil icon on pending ones; scenes PUT accepts errorMessage/taskId clears
+- "Save Only" contract: the studio's pending-scene auto-gen effect raced the save (autoGenFiredRef added after refreshProject) — suppression now happens BEFORE the refresh; verified no batch call fires after Save Only
+
+Verification (script + agent-browser, admin session):
+- Script: 7/7 checks — moderation 400→friendly msg, 429→busy msg, prefix stripping, square 1024x1024→768x1344 exact crop, matching-aspect passthrough, external URL untouched, size map
+- In-route E2E (live dev.log): scene linked to square-portrait character → "[aspect-normalize] scene=…: 1024x1024 (ratio 1.000) didn't match 9:16 — normalized to 768x1344 → /generated/refs/norm_….png" BEFORE the (rate-limited) ZAI call
+- Browser: failed scene shows Retry + Edit Prompt; dialog prefilled + friendly error panel; Save Only saved the EXACT typed prompt (controlled component verified), status→pending, error cleared, 0 auto-gen calls; earlier text concatenation was a CLI stale-ref artifact, not an app bug
+- Mobile 390px no overflow; browser console clean; ESLint 0 errors; test project/character/refs deleted (DB back to 0 projects)
+- Note: ZAI sandbox API remained 429 rate-limited throughout, so a real moderation-400 and full video render couldn't be triggered live — mapping verified by script, normalization by live in-route log
+
+Stage Summary:
+- Portrait projects now stay portrait end-to-end: new portraits are generated at the project's aspect, and any mismatched reference (legacy square portraits, uploads) is auto-cropped before the video API call
+- Content-filter rejections are user-friendly and actionable, with an in-studio Edit Prompt → regenerate loop instead of raw "API request failed with status 400: System detected…"

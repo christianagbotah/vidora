@@ -27,6 +27,33 @@ export interface CharacterLike {
   stylePrompt?: string | null;
 }
 
+/**
+ * Image sizes for character portraits / reference images, matched to the
+ * project's aspect ratio.
+ *
+ * WHY: image-to-video engines derive the OUTPUT video's orientation from the
+ * INPUT reference image. A square 1024x1024 portrait fed to a portrait (9:16)
+ * project produced landscape/square videos. Generating the portrait itself in
+ * the project's aspect ratio keeps the whole chain consistent.
+ */
+export const REFERENCE_IMAGE_SIZES: Record<
+  string,
+  "1024x1024" | "768x1344" | "1344x768" | "1152x864" | "1440x720"
+> = {
+  "16:9": "1344x768",
+  "9:16": "768x1344",
+  "1:1": "1024x1024",
+  "4:3": "1152x864",
+  "21:9": "1440x720",
+};
+
+/** Portrait/reference image size for a project aspect ratio (default square). */
+export function portraitImageSizeForAspect(
+  aspect?: string | null
+): "1024x1024" | "768x1344" | "1344x768" | "1152x864" | "1440x720" {
+  return REFERENCE_IMAGE_SIZES[(aspect || "").trim()] ?? "1024x1024";
+}
+
 /** Per-character budget inside the scene image prompt. */
 const MAX_CHAR_DESCRIPTION = 320;
 /** Total cap for the image prompt (cogview-4 handles long prompts fine). */

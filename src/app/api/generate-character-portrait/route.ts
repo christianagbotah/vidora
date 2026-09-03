@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { generateImage } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
+import { portraitImageSizeForAspect } from "@/lib/image-prompt";
 import { taskStore } from "./task-store";
 
 export const runtime = "nodejs";
@@ -34,7 +35,10 @@ function buildPortraitPrompt(name: string, description: string, role?: string, s
  * Client should poll GET /api/generate-character-portrait/status?taskId=xxx
  * for the result.
  *
- * Body: { name, description, role, style }
+ * Body: { name, description, role, style, aspectRatio }
+ *   aspectRatio — the wizard's selected project aspect ("16:9", "9:16", …).
+ *   The portrait is generated at the MATCHING orientation so it can be used
+ *   as an image-to-video reference without flipping the video's orientation.
  * Returns: { success: true, taskId: string }
  */
 export async function POST(req: NextRequest) {
@@ -43,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, description, role, style } = body;
+    const { name, description, role, style, aspectRatio } = body;
 
     if (!name) {
       return NextResponse.json(
@@ -63,7 +67,7 @@ export async function POST(req: NextRequest) {
       try {
         const base64 = await generateImage({
           prompt,
-          size: "1024x1024",
+          size: portraitImageSizeForAspect(aspectRatio),
           retry: {
             label: `Pre-project character portrait: ${name}`,
             timeoutMs: 120_000,

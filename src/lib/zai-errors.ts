@@ -90,6 +90,54 @@ export function adminZaiDetail(error: unknown): string {
 }
 
 /**
+ * Map a RAW scene-generation error message to a friendly, actionable one.
+ *
+ * Stored in VideoScene.errorMessage and shown in the generation progress
+ * overlay + scene rows. Raw ZAI messages like "API request failed with
+ * status 400: System detected potentially unsafe or sensitive content…"
+ * leak API jargon and give the user no next step — this translates them.
+ *
+ * The raw technical detail is always preserved in the server console logs.
+ */
+export function friendlySceneError(raw: string | null | undefined): string {
+  if (!raw) return "Video generation failed. Please try again.";
+  const msg = raw;
+
+  // 1. AI content-safety moderation (HTTP 400 "unsafe or sensitive content")
+  if (
+    /unsafe|sensitive content|moderation|content (filter|policy)|safety filter|flagged/i.test(
+      msg
+    )
+  ) {
+    return (
+      "This scene's description was flagged by the AI content safety filter. " +
+      "Edit the scene prompt — avoid real celebrity or brand names, violence, or other " +
+      "sensitive content — then retry. Tokens for failed scenes are refunded."
+    );
+  }
+
+  // 2. Rate limits (429)
+  if (/rate.?limit|too many requests/i.test(msg) || /\b429\b/.test(msg)) {
+    return "The AI video service is busy right now. Please wait a few minutes and retry — failed scenes are refunded automatically.";
+  }
+
+  // 3. Reference-image orientation/size mismatch
+  if (/aspect.?ratio|image (size|resolution)|resolution (mismatch|not)/i.test(msg)) {
+    return "The scene's reference image didn't match the project's orientation. This is now auto-corrected — please retry the scene.";
+  }
+
+  // 4. Upstream billing/config problems must NOT leak to users
+  if (/1113|1112|insufficient (balance|credit)|invalid api key/i.test(msg)) {
+    return "The AI rendering service is temporarily unavailable. Our team has been notified — please try again later.";
+  }
+
+  // 5. Generic: strip the raw "API request failed with status NNN:" prefix, cap length
+  const cleaned = msg.replace(/^API request failed with status \d+:\s*/i, "").trim();
+  if (!cleaned) return "Video generation failed. Please try again.";
+  return cleaned.length > 240 ? `${cleaned.slice(0, 239)}…` : cleaned;
+}
+
+/**
  * Build a standardized error NextResponse that hides raw details from
  * non-admin users while still surfacing them to admins.
  *

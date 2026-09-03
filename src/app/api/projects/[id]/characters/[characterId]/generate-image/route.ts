@@ -4,7 +4,7 @@ import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { saveGeneratedFile } from "@/lib/generated-store";
-import { buildCharacterPortraitPrompt } from "@/lib/image-prompt";
+import { buildCharacterPortraitPrompt, portraitImageSizeForAspect } from "@/lib/image-prompt";
 
 export const runtime = "nodejs";
 
@@ -12,9 +12,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; characterId: string }> }
 ) {
+  // Hoisted so the catch handler can reference it (it scopes the admin
+  // detail in the error response) even when the try block fails early.
+  let authResult: Awaited<ReturnType<typeof requireProjectAccess>> | null = null;
   try {
     const { id, characterId } = await params;
-    const authResult = await requireProjectAccess(id, true); // write access
+    authResult = await requireProjectAccess(id, true); // write access
     if (!authResult.ok) return authResult.response;
 
     // Verify the character belongs to this project
@@ -25,10 +28,13 @@ export async function POST(
       return NextResponse.json({ success: false, error: "Character not found in this project" }, { status: 404 });
     }
 
-    // Project style steers the portrait's rendering style
+    // Project style steers the portrait's rendering style; the portrait is
+    // generated at the PROJECT'S aspect ratio so it works as an
+    // image-to-video reference without flipping the output orientation
+    // (e.g. square portrait → landscape video in a 9:16 project).
     const project = await db.videoProject.findUnique({
       where: { id },
-      select: { style: true },
+      select: { style: true, aspectRatio: true },
     });
 
     // Build a character-reference prompt that leads with the name + full
@@ -47,7 +53,7 @@ export async function POST(
 
     const imageBase64 = await zai.generateImage({
       prompt: portraitPrompt,
-      size: "1024x1024",
+      size: portraitImageSizeForAspect(project?.aspectRatio),
       retry: { label: `Character ${character.name} image generation`, timeoutMs: 120_000, maxRetries: 4 },
     });
 
@@ -73,7 +79,7 @@ export async function POST(
   } catch (error) {
     console.error("Failed to generate character image:", error);
     return zaiErrorResponse(error, {
-      session: authResult.ok ? authResult.session : null,
+      session: authResult?.ok ? authResult.session : null,
       logLabel: "character-image",
     });
   }
