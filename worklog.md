@@ -2640,3 +2640,20 @@ Stage Summary:
 - Generation charges are per-engine (seed: CogVideoX-3 3tk, vidu2-image 4tk, viduq1/vidu2-reference 8tk + 1tk thumbnail) with matching refunds
 - New public endpoint /api/storefront/pricing (cached 60s, admin writes invalidate)
 - Test artifacts cleaned (temp admin deleted); DB back to seed defaults; commit ready
+
+---
+Task ID: 20
+Agent: main
+Task: Sandbox admin credential lookup + re-seed (user asked "what is the sandbox admin credential")
+
+Work Log:
+- Searched worklog + DB for admin credentials
+- Found User table was EMPTY (0 users) — a prior DB reset had wiped the seeded admin
+- Re-seeded via `bun run prisma/seed-admin.ts admin@vidora.local Admin@123 "Vidora Admin" 1000`
+- Verified in SQLite: 1 admin user (role=admin, tokens=1000, active)
+- Verified login end-to-end: POST /api/auth/manual-session → 200 success; GET /api/auth/user with session cookie → role=admin confirmed
+- Cleaned up temp query script
+
+Stage Summary:
+- Sandbox admin credential: admin@vidora.local / Admin@123 (role=admin, 1000 tokens)
+- Login flow re-verified working against live dev server on port 3000
