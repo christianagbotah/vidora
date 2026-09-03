@@ -25,7 +25,6 @@ import type {
   CreateAudioTTSBody,
   CreateAudioASRBody,
   AsyncResultResponse,
-  ImageGenerationResponse,
 } from "z-ai-web-dev-sdk";
 
 // ─── Error Classification ───────────────────────────────────────────────────
@@ -384,6 +383,7 @@ export function resetZaiClient(): void {
   globalForZAI.__zaiClient = undefined;
   clientPromise = null;
   cachedEndpointConfig = null;
+  lastGoodVideoDuration = null;
 }
 
 // ─── Response body error detection ──────────────────────────────────────────
@@ -428,6 +428,33 @@ function assertNoBodyError(body: unknown, label: string): void {
       throw new ZAIError(`${obj.error} (during ${label})`, "rate_limit", { cause: body });
     }
     throw new ZAIError(`${obj.error} (during ${label})`, "server", { cause: body });
+  }
+  // Public api.z.ai error wrapper: HTTP 200 with { "code": 123, "message": "..." }
+  // (e.g. a missing required field can produce this instead of a 4xx). Only
+  // treat it as an error when the body has no success payload fields.
+  if (
+    typeof obj.code === "number" &&
+    typeof obj.message === "string" &&
+    obj.message &&
+    obj.data === undefined &&
+    obj.choices === undefined &&
+    obj.id === undefined &&
+    obj.task_status === undefined
+  ) {
+    const msgLower = obj.message.toLowerCase();
+    let kind: ZAIErrorKind = "server";
+    if (obj.code === 1113 || obj.code === 1112 || msgLower.includes("balance")) {
+      kind = "auth";
+    } else if (obj.code === 429 || msgLower.includes("rate limit") || msgLower.includes("too many requests")) {
+      kind = "rate_limit";
+    } else if (obj.code === 1211 || msgLower.includes("model")) {
+      kind = "validation";
+    }
+    throw new ZAIError(
+      `ZAI API error (code ${obj.code}) during ${label}: ${obj.message}`,
+      kind,
+      { cause: body }
+    );
   }
 }
 
@@ -570,13 +597,104 @@ export interface VideoTaskCreateResult {
 
 const DEFAULT_VIDEO_MODEL = "CogVideoX-3";
 
+// ─── Public API constraint normalization ────────────────────────────────────
+//
+// The public api.z.ai documents (docs.z.ai → Video API → Generate Video):
+//   * duration: enum of exactly 5 or 10 seconds (default 5)
+//   * size:     1280x720, 720x1280, 1024x1024, 1920x1080, 1080x1920,
+//               2048x1080, 3840x2160
+//   * prompt:   maximum 512 characters
+// The app derives per-scene durations from project settings (e.g. a 30s
+// project ÷ 4 scenes = 7s, or the raw targetDuration on older paths) and
+// maps aspect ratios to sizes like 1080x1080 — none of which the public
+// API accepts. The internal gateway is more permissive, so normalization
+// is applied to the PUBLIC endpoint form only.
+
+const SUPPORTED_VIDEO_DURATIONS = [5, 10];
+
+const PUBLIC_VIDEO_SIZES = new Set([
+  "1280x720",
+  "720x1280",
+  "1024x1024",
+  "1920x1080",
+  "1080x1920",
+  "2048x1080",
+  "3840x2160",
+]);
+
+/** Aspect-ratio sizes the app uses that the public API doesn't support,
+ *  mapped to the closest supported equivalent. */
+const PUBLIC_VIDEO_SIZE_ALIASES: Record<string, string> = {
+  "1080x1080": "1024x1024", // 1:1
+  "1440x1080": "1024x1024", // 4:3 — public has no 4:3; 1:1 is closest
+  "1080x1440": "1024x1024", // 3:4
+  "2560x1080": "2048x1080", // 21:9 — widest public size
+  "1080x2560": "1080x1920", // 9:21 ultratall
+  "720x1440": "720x1280",
+  "1440x720": "1280x720",
+};
+
+/** Map an arbitrary requested size to one the public API accepts.
+ *  Unknown sizes fall back by orientation. */
+function normalizeVideoSizeForPublic(size?: string): string | undefined {
+  if (!size) return size;
+  if (PUBLIC_VIDEO_SIZES.has(size)) return size;
+  const aliased = PUBLIC_VIDEO_SIZE_ALIASES[size];
+  if (aliased) return aliased;
+  const [w, h] = size.split("x").map(Number);
+  return w > h ? "1920x1080" : "1080x1920";
+}
+
+// Duration that last succeeded on this infrastructure ("omit" = the request
+// succeeded with no duration field). Null until the first success. Cached so
+// later scenes skip the probing attempts.
+let lastGoodVideoDuration: number | "omit" | null = null;
+
+/** Clamp an arbitrary requested duration to the public enum (5s/10s). */
+function clampVideoDuration(requested: number): number {
+  if (SUPPORTED_VIDEO_DURATIONS.includes(requested)) return requested;
+  return requested <= 7.5 ? 5 : 10;
+}
+
+/** Candidate durations to try, in order: forced env override → last-known-good
+ *  → clamped requested → 5 → omit-the-field (API default is 5). */
+function videoDurationCandidates(requested?: number): (number | undefined)[] {
+  const forcedRaw = process.env.ZAI_VIDEO_DURATION;
+  if (forcedRaw) {
+    const forced = Number(forcedRaw);
+    if (Number.isFinite(forced)) return [forced]; // operator override — no ladder
+  }
+  const normalized =
+    requested != null && Number.isFinite(requested)
+      ? clampVideoDuration(requested)
+      : undefined;
+  const candidates: (number | undefined)[] = [];
+  const push = (v: number | undefined) => {
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+  if (lastGoodVideoDuration !== null) {
+    push(lastGoodVideoDuration === "omit" ? undefined : lastGoodVideoDuration);
+  }
+  push(normalized);
+  push(5);
+  push(undefined);
+  return candidates;
+}
+
 /**
  * Create a video generation task, working on BOTH the public api.z.ai and
  * the internal gateway:
  *   1st attempt: POST {baseUrl}/videos/generations  — public form (`model`
- *                is REQUIRED there; without it the API returns a 500 NPE)
+ *                is REQUIRED there; without it the API returns a 500 NPE),
+ *                with duration/size/prompt normalized to the documented
+ *                public constraints (duration ∈ {5,10}, supported sizes,
+ *                prompt ≤ 512 chars)
  *   fallback:    POST {baseUrl}/video/generation    — SDK/internal form
+ *                (raw values — the internal gateway is permissive)
  * A 404 (route not found) triggers the fallback; any other error is thrown.
+ * Within each form, a 400 that mentions "duration" advances a duration
+ * candidate ladder (normalized → 5 → omit) so unsupported values
+ * self-heal instead of hard-failing.
  */
 async function createVideoCompat(
   body: {
@@ -591,54 +709,86 @@ async function createVideoCompat(
 ): Promise<VideoTaskCreateResult> {
   const cfg = await getEndpointConfig();
   const model = process.env.ZAI_VIDEO_MODEL || DEFAULT_VIDEO_MODEL;
-  const attempts: { url: string; bodyJson: unknown; label: string }[] = [
+  const durationCandidates = videoDurationCandidates(body.duration);
+
+  const forms: {
+    url: string;
+    build: (d: number | undefined) => unknown;
+  }[] = [
     {
       url: `${cfg.baseUrl}/videos/generations`,
-      bodyJson: { ...body, model },
-      label: "POST /videos/generations (public)",
+      // Public form: model required + normalized constraints
+      build: (d) => ({
+        ...body,
+        ...(body.prompt ? { prompt: body.prompt.slice(0, 500) } : {}),
+        ...(body.size ? { size: normalizeVideoSizeForPublic(body.size) } : {}),
+        ...(d !== undefined ? { duration: d } : {}),
+        model,
+      }),
     },
     {
       url: `${cfg.baseUrl}/video/generation`,
-      bodyJson: body,
-      label: "POST /video/generation (internal/SDK)",
+      // Internal/SDK form: raw values, no model
+      build: (d) => ({ ...body, ...(d !== undefined ? { duration: d } : {}) }),
     },
   ];
 
   let lastError: ZAIError | null = null;
-  for (let i = 0; i < attempts.length; i++) {
-    const attempt = attempts[i];
-    const isLast = i === attempts.length - 1;
-    let res: ZaiRequestResult;
-    try {
-      res = await zaiRequest(attempt.url, { method: "POST", bodyJson: attempt.bodyJson }, timeoutMs);
-    } catch (err) {
-      const classified = err instanceof ZAIError ? err : classifyError(err);
-      if (isLast) throw classified;
-      lastError = classified;
-      continue;
+  for (let f = 0; f < forms.length; f++) {
+    const form = forms[f];
+    const isLastForm = f === forms.length - 1;
+    for (let c = 0; c < durationCandidates.length; c++) {
+      const duration = durationCandidates[c];
+      const isLastCandidate = c === durationCandidates.length - 1;
+      let res: ZaiRequestResult;
+      try {
+        res = await zaiRequest(
+          form.url,
+          { method: "POST", bodyJson: form.build(duration) },
+          timeoutMs
+        );
+      } catch (err) {
+        // Network/timeout error — try the other endpoint form
+        const classified = err instanceof ZAIError ? err : classifyError(err);
+        if (isLastForm && isLastCandidate) throw classified;
+        lastError = classified;
+        break;
+      }
+      if (res.status === 404) {
+        // Route not found on this infrastructure — try the other form.
+        lastError = new ZAIError(
+          `Video create endpoint not available (404) at ${form.url}`,
+          "validation",
+          { status: 404 }
+        );
+        break;
+      }
+      if (res.status >= 400) {
+        const apiMsg = extractApiErrorMessage(res.body);
+        const err = new ZAIError(
+          apiMsg
+            ? `API request failed with status ${res.status}: ${apiMsg}`
+            : `API request failed with status ${res.status}`,
+          statusToErrorKind(res.status),
+          { status: res.status, cause: res.body }
+        );
+        // "The current duration value is not supported" → next candidate
+        if (/duration/i.test(apiMsg ?? "") && !isLastCandidate) {
+          lastError = err;
+          continue;
+        }
+        throw err;
+      }
+      assertNoBodyError(res.body, "video generation create");
+      // Success — remember which duration worked and warn if we adjusted
+      lastGoodVideoDuration = duration === undefined ? "omit" : duration;
+      if (body.duration !== undefined && duration !== body.duration) {
+        console.warn(
+          `[ZAI] Video duration ${body.duration}s adjusted to ${duration ?? "API default"}s (API supports 5s/10s only)`
+        );
+      }
+      return res.body as VideoTaskCreateResult;
     }
-    if (res.status === 404) {
-      // Route not found on this infrastructure — try the other form.
-      lastError = new ZAIError(
-        `Video create endpoint not available (404) at ${attempt.url}`,
-        "validation",
-        { status: 404 }
-      );
-      if (!isLast) continue;
-      throw lastError;
-    }
-    if (res.status >= 400) {
-      const apiMsg = extractApiErrorMessage(res.body);
-      throw new ZAIError(
-        apiMsg
-          ? `API request failed with status ${res.status}: ${apiMsg}`
-          : `API request failed with status ${res.status}`,
-        statusToErrorKind(res.status),
-        { status: res.status, cause: res.body }
-      );
-    }
-    assertNoBodyError(res.body, "video generation create");
-    return res.body as VideoTaskCreateResult;
   }
   throw lastError ?? new ZAIError("createVideoCompat exhausted attempts", "unknown");
 }
@@ -818,49 +968,159 @@ export interface ImageOptions {
   retry?: RetryOptions;
 }
 
-/** Generate an image, returning the base64 string of the first result. */
+// ─── Image Generation Compatibility (public API vs internal gateway) ────────
+//
+// The SDK posts {prompt, size} (no model) to {baseUrl}/images/generations and
+// expects data[].base64 — the internal gateway's contract. The PUBLIC
+// api.z.ai:
+//   * REQUIRES a `model` field (glm-image | cogview-4-250304). A request
+//     without it can return HTTP 200 with an error body, which crashes the
+//     SDK's `result.data.map(...)` with a TypeError (this is exactly what
+//     the VPS thumbnail failures showed).
+//   * Returns {created, data: [{url}]} — a URL that must be downloaded.
+//
+// createImageCompat tries the public form first (model included, cogview-4
+// sizes match the app's size maps exactly), then the SDK/internal form
+// (no model). Both response shapes are normalized to base64.
+
+const DEFAULT_IMAGE_MODEL = "cogview-4-250304";
+
+interface ImageCompatBody {
+  prompt: string;
+  size?: string;
+}
+
+/** Download a generated image URL and return it as base64. */
+async function downloadUrlAsBase64(url: string, timeoutMs = 60_000): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      throw new ZAIError(`Failed to download generated image (status ${res.status})`, "server");
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.toString("base64");
+  } catch (err) {
+    if (err instanceof ZAIError) throw err;
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new ZAIError("Image download timed out", "timeout");
+    }
+    throw classifyError(err);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Extract the first image from an /images/generations response body,
+ *  downloading it if the API returned a URL instead of base64 content. */
+async function extractImageAsBase64(body: unknown, timeoutMs: number): Promise<string> {
+  const obj = body as { data?: Array<{ base64?: string; url?: string }> } | null;
+  const first = obj?.data?.[0];
+  if (first?.base64) return first.base64;
+  if (first?.url) return downloadUrlAsBase64(first.url, timeoutMs);
+  throw new ZAIError("ZAI image generation returned no image data", "server", { cause: body });
+}
+
+async function createImageCompat(
+  body: ImageCompatBody,
+  timeoutMs: number
+): Promise<string> {
+  const cfg = await getEndpointConfig();
+  const model = process.env.ZAI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL;
+  const attempts: { bodyJson: unknown; label: string }[] = [
+    { bodyJson: { ...body, model }, label: "POST /images/generations (public, model included)" },
+    { bodyJson: { ...body }, label: "POST /images/generations (internal/SDK, no model)" },
+  ];
+
+  let lastError: ZAIError | null = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    const isLast = i === attempts.length - 1;
+    let res: ZaiRequestResult;
+    try {
+      res = await zaiRequest(
+        `${cfg.baseUrl}/images/generations`,
+        { method: "POST", bodyJson: attempt.bodyJson },
+        timeoutMs
+      );
+    } catch (err) {
+      const classified = err instanceof ZAIError ? err : classifyError(err);
+      if (isLast) throw classified;
+      lastError = classified;
+      continue;
+    }
+    if (res.status === 404) {
+      lastError = new ZAIError(
+        `Image create endpoint not available (404): ${attempt.label}`,
+        "validation",
+        { status: 404 }
+      );
+      if (!isLast) continue;
+      throw lastError;
+    }
+    if (res.status >= 400) {
+      const apiMsg = extractApiErrorMessage(res.body);
+      const err = new ZAIError(
+        apiMsg
+          ? `API request failed with status ${res.status}: ${apiMsg}`
+          : `API request failed with status ${res.status}`,
+        statusToErrorKind(res.status),
+        { status: res.status, cause: res.body }
+      );
+      // Model unknown/rejected on this infrastructure → try the no-model
+      // form (the internal gateway's contract).
+      if (!isLast && (err.kind === "validation" || /model/i.test(apiMsg ?? ""))) {
+        console.warn(`[ZAI] Image generation with model failed (${err.message}) — retrying without model`);
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+    // HTTP 200 — but the public API can wrap errors as {code, message}, and
+    // a wrong-form request can return a body with no usable data array.
+    try {
+      assertNoBodyError(res.body, "image generation");
+      return await extractImageAsBase64(res.body, timeoutMs);
+    } catch (err) {
+      if (
+        !isLast &&
+        err instanceof ZAIError &&
+        (err.kind === "validation" || err.kind === "server")
+      ) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new ZAIError("createImageCompat exhausted attempts", "unknown");
+}
+
+/** Generate an image, returning the base64 string of the first result.
+ *
+ *  Goes through createImageCompat so it works on BOTH the public api.z.ai
+ *  (model required, data[].url responses that get downloaded) and the
+ *  internal gateway (no model, data[].base64 responses).
+ */
 export async function generateImage(opts: ImageOptions): Promise<string> {
-  const zai = await getClient();
-  const body: CreateImageGenerationBody = {
+  const body: ImageCompatBody = {
     prompt: opts.prompt,
     size: opts.size ?? "1024x1024",
   };
 
-  let res: ImageGenerationResponse;
-  try {
-    res = await withRetry(
-      (signal) =>
-        Promise.race([
-          zai.images.generations.create(body),
-          new Promise<never>((_, reject) => {
-            signal.addEventListener("abort", () => reject(new ZAIError("Image generation timed out", "timeout")), {
-              once: true,
-            });
-          }),
-        ]),
-      { label: "ZAI image generation", timeoutMs: 120_000, maxRetries: 4, ...opts.retry }
-    );
-  } catch (err) {
-    // The SDK internally does `result.data.map(...)` which throws a TypeError
-    // if the API returned an error body like { error: {...} } (no `data` field).
-    // Re-classify this as a server error with a helpful message.
-    if (err instanceof TypeError && err.message.includes("undefined")) {
-      throw new ZAIError(
-        "ZAI image generation failed — the API may have returned an error (check account balance/model availability)",
-        "server",
-        { cause: err }
-      );
-    }
-    throw err;
-  }
-
-  assertNoBodyError(res, "image generation");
-
-  const base64 = res?.data?.[0]?.base64;
-  if (!base64) {
-    throw new ZAIError("ZAI image generation returned no image data", "server");
-  }
-  return base64;
+  return withRetry(
+    (signal) =>
+      Promise.race([
+        createImageCompat(body, 120_000),
+        new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(new ZAIError("Image generation timed out", "timeout")), {
+            once: true,
+          });
+        }),
+      ]),
+    { label: "ZAI image generation", timeoutMs: 120_000, maxRetries: 4, ...opts.retry }
+  );
 }
 
 export interface VideoOptions {

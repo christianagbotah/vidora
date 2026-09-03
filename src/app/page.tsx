@@ -1901,6 +1901,10 @@ function VidoraApp() {
     if (!currentProject) return;
     setGeneratingScenes((prev) => new Set(prev).add(sceneId));
     try {
+      // Send the SCENE's own duration — not the project's total target
+      // duration (the video API only accepts per-scene values like 5/10s;
+      // the backend clamps anything unsupported).
+      const scene = safeScenes.find((s) => s.id === sceneId);
       const res = await fetch(`/api/generate-video-scene`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1908,7 +1912,7 @@ function VidoraApp() {
           prompt,
           sceneId,
           projectId: currentProject.id,
-          duration: currentProject.targetDuration || 10,
+          duration: scene?.duration || 10,
         }),
       });
       const data = await res.json();
