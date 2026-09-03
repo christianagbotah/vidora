@@ -2421,3 +2421,24 @@ Work Log:
 Stage Summary:
 - Repo is now safe to `git pull` on the VPS: deployment files are back, prod security headers restored (env-gated), standalone build works again, and db:push is environment-aware (postgres passthrough / sqlite swap)
 - VPS has NO prisma schema changes since d74dad2 — no migration needed, just pull → bun install → build → restart
+
+---
+Task ID: api-constraints-1
+Agent: main (Z.ai Code)
+Task: Fix the two VPS runtime errors from the post-deploy test — video task creation 400 "The current duration value is not supported" and thumbnail generation SDK crash (TypeError reading 'map')
+
+Work Log:
+- Read the VPS pm2 logs: headers verified working (XFO DENY + HSTS present); two errors at 22:43-44 — thumbnail SDK TypeError and video 400 duration validation (proving the dual-form endpoint fix WORKS — requests now reach the public API and authenticate)
+- Root-caused the duration bug: the frontend sent the project's TOTAL targetDuration (10/30/60/120/180/300s presets) as the per-scene video duration (page.tsx handleGenerateSingle), while the official docs (docs.z.ai/api-reference/video/generate-video) define duration as an enum of exactly 5 or 10 seconds
+- Root-caused the thumbnail bug: SDK posts {prompt, size} (no model) to /images/generations expecting data[].base64 (internal gateway contract); the public API requires a model field (glm-image | cogview-4-250304) and returns data[].url — the modelless request returns HTTP 200 with an error wrapper body, crashing the SDK's result.data.map
+- Researched the official Z.ai docs via web-search + page_reader: video duration enum {5,10}; supported video sizes (1280x720…3840x2160 — the app's 1:1/4:3/21:9 sizes are NOT supported); image models and their size sets (cogview-4-250304's recommended sizes exactly match the app's THUMB_SIZE_MAP); 512-char video prompt limit; public {code,message} error wrapper shape
+- Fixed page.tsx: handleGenerateSingle now sends the scene's own duration instead of the project total
+- zai.ts createVideoCompat rewrite: duration clamped to {5,10} for the public form only (internal is permissive); size normalization via alias map + orientation fallback (1080x1080→1024x1024, 1440x1080→1024x1024, 2560x1080→2048x1080); prompt truncated to 500 chars for the public form; self-healing duration ladder (clamped → 5 → omit field) on 400 duration errors with a lastGoodVideoDuration cache (reset in resetZaiClient); ZAI_VIDEO_DURATION env forces a value
+- zai.ts new createImageCompat: attempt 1 = POST /images/generations with model (env ZAI_IMAGE_MODEL, default cogview-4-250304) → response normalized (data[].url downloaded to base64 via downloadUrlAsBase64, data[].base64 direct); attempt 2 = no-model internal/SDK form; 200-with-error-body detection via extended assertNoBodyError ({code,message} wrapper with balance/rate-limit/model classification); generateImage() rewritten to route through it (all 6 caller routes inherit the fix)
+- Verified on the internal gateway (scripts/test-image-video-compat.ts): image attempt 1 WITH model succeeded directly (internal accepts the model field), video task 202609031100152dc77e946ad645dc created with duration 37 auto-clamped to 10, single poll confirmed the task exists
+- Verified normalization logic for every app size/duration combination (pure-function eval); ESLint 0 errors; tsc error count identical to baseline (72 before = 72 after); browser smoke test clean
+- Committed 4c97576 and pushed
+
+Stage Summary:
+- Both VPS failures fixed at the compat layer: duration/size/prompt normalized to documented public constraints with self-healing fallbacks, and image generation now speaks the public API's dialect (model + url→base64) while remaining internal-gateway compatible
+- VPS needs a pull + rebuild to pick this up; no DB changes
