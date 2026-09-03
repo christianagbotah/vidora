@@ -791,6 +791,39 @@ function SortableSceneCard({
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [narrationVoice, setNarrationVoice] = useState(scene.narrationVoice || "tongtong");
 
+  // ── Scene voice ↔ video sync ──
+  // Generated scenes carry an AI voice (narrationUrl). The studio player
+  // plays it ALONGSIDE the clip so users actually hear the characters
+  // speak: play/pause/seek/volume on the video drive the narration audio.
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const syncNarrationTime = () => {
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio) return;
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = Math.min(Math.max(video.currentTime, 0), Math.max(audio.duration - 0.05, 0));
+    }
+  };
+  const playNarrationWithVideo = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    mirrorVideoVolume();
+    syncNarrationTime();
+    void audio.play().catch(() => { /* autoplay policy — user can still preview the audio row */ });
+  };
+  const stopNarration = () => {
+    audioRef.current?.pause();
+  };
+  const mirrorVideoVolume = () => {
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio) return;
+    audio.muted = video.muted;
+    audio.volume = video.volume;
+  };
+
   const generating = isGeneratingScene || scene.status === "generating" || scene.status === "queued";
 
   const statusColor = scene.status === "completed"
@@ -898,6 +931,21 @@ function SortableSceneCard({
                           controls
                           className="w-full rounded-lg bg-black"
                           preload="metadata"
+                          ref={videoRef}
+                          onPlay={playNarrationWithVideo}
+                          onPause={stopNarration}
+                          onEnded={() => {
+                            stopNarration();
+                            const audio = audioRef.current;
+                            if (audio) audio.currentTime = 0;
+                          }}
+                          onSeeked={() => {
+                            // Keep the voice glued to the video while playing;
+                            // a paused seek just moves the audio cursor.
+                            syncNarrationTime();
+                            if (videoRef.current?.paused) stopNarration();
+                          }}
+                          onVolumeChange={mirrorVideoVolume}
                         />
                       ) : scene.imageUrl ? (
                         /* Clickable thumbnail preview */
@@ -929,11 +977,23 @@ function SortableSceneCard({
                         </a>
                       )}
 
-                      {/* Narration audio player */}
+                      {/* Narration audio — the scene's AI voice. It also plays
+                          automatically IN SYNC with the video above. */}
                       {scene.narrationUrl && (
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                          <audio controls src={scene.narrationUrl} className="h-7 w-full" preload="none" />
+                        <div className="mt-2">
+                          <div className="flex items-center gap-1.5">
+                            <Volume2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <audio
+                              controls
+                              src={scene.narrationUrl}
+                              className="h-7 w-full"
+                              preload="none"
+                              ref={audioRef}
+                            />
+                          </div>
+                          <p className="text-[10px] text-emerald-600 mt-0.5">
+                            AI voice — plays along with the video above
+                          </p>
                         </div>
                       )}
                       {/* Progress spinner */}

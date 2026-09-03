@@ -10,6 +10,7 @@ import { getEngineChargeInfo } from "@/lib/storefront";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
 import { resolveModelForRequest } from "@/lib/video-models";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
+import { autoNarrateScene } from "@/lib/narration";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -102,13 +103,17 @@ async function createSceneTask(
   // Create video generation task via centralized wrapper.
   // The model is resolved per-scene: image-dependent models gracefully
   // substitute their text-capable sibling when no reference image exists.
+  // withAudio: CogVideoX-3 renders native ambient sound for the prompt
+  // (Vidu models simply omit the flag — their clips stay silent and the
+  // scene's TTS voice is layered on top instead). Character DIALOGUE is
+  // always the TTS narration (correct voice), never the raw video track.
   const model = resolveModelForRequest(ctx.videoModel, Boolean(referenceImage));
   const taskId = await zai.generateVideo({
     prompt: videoPrompt,
     size: videoSize,
     duration: 10,
     quality: "quality",
-    withAudio: false,
+    withAudio: true,
     ...(referenceImage ? { imageUrl: referenceImage } : {}),
     model,
     aspectRatio: ctx.aspectRatio,
@@ -178,6 +183,12 @@ async function pollTaskUntilDone(
       data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
     });
     console.log(`Scene ${sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
+    // Auto-generate the character's voice for this scene's dialogue right
+    // away, so the studio has sound the moment the user plays the clip —
+    // and the export reuses it instead of generating from scratch.
+    // Fire-and-forget + non-fatal: a flaky TTS call must never hold up
+    // the remaining scenes' polling loop.
+    void autoNarrateScene(sceneId);
     return result.videoUrl;
   }
 

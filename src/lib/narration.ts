@@ -14,6 +14,7 @@
  */
 
 import { zai } from "@/lib/zai";
+import { db } from "@/lib/db";
 import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 import { unlink } from "fs/promises";
@@ -153,5 +154,86 @@ export async function generateSceneNarration(opts: {
       await unlink(p).catch(() => {});
     }
     throw err;
+  }
+}
+
+// ─── Auto-narration (generation flow) ────────────────────────────────────────
+
+/** The scene fields the voice picker needs. */
+export interface NarratableScene {
+  id: string;
+  dialogue?: string | null;
+  narrationUrl?: string | null;
+  narrationVoice?: string | null;
+  characterIds?: string | null;
+}
+
+/**
+ * Pick the best TTS voice for a scene: explicit scene voice → any linked
+ * character's assigned voice → the default narrator. Shared by the
+ * generation flow (auto-voices right after a scene renders) and the final
+ * export (fallback for scenes that never got a voice).
+ */
+export async function pickSceneNarrationVoice(scene: NarratableScene): Promise<string> {
+  if (scene.narrationVoice) return scene.narrationVoice;
+  try {
+    const ids: unknown = JSON.parse(scene.characterIds || "[]");
+    if (Array.isArray(ids) && ids.length > 0) {
+      const chars = await db.character.findMany({
+        where: { id: { in: ids.filter((i): i is string => typeof i === "string") } },
+      });
+      const withVoice = chars.find((c) => c.voiceId);
+      if (withVoice?.voiceId) return withVoice.voiceId;
+    }
+  } catch { /* ignore bad JSON */ }
+  return DEFAULT_TTS_VOICE;
+}
+
+export interface AutoNarrateResult {
+  ok: boolean;
+  /** Public /api/audio/... URL when a voice was generated (or already existed). */
+  url?: string;
+  /** Why nothing was generated — useful for logs, never user-facing. */
+  reason?: string;
+}
+
+/**
+ * Ensure a scene with dialogue has a voice: if it has no narrationUrl yet,
+ * generate the TTS with the best-matching voice and persist it. Called by
+ * the generation routes the moment a scene's video completes, so character
+ * voices exist in the studio immediately — the export then simply reuses
+ * them instead of generating from scratch.
+ *
+ * NON-FATAL by contract: never throws. A failed TTS just leaves the scene
+ * voiceless (the export's auto-voice pass is the safety net).
+ */
+export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResult> {
+  try {
+    const scene = await db.videoScene.findUnique({
+      where: { id: sceneId },
+      select: { id: true, dialogue: true, narrationUrl: true, narrationVoice: true, characterIds: true },
+    });
+    if (!scene) return { ok: false, reason: "scene not found" };
+    if (scene.narrationUrl) return { ok: true, url: scene.narrationUrl };
+    if (!scene.dialogue || scene.dialogue.trim().length === 0) {
+      return { ok: false, reason: "no dialogue" };
+    }
+
+    const voice = await pickSceneNarrationVoice(scene);
+    console.log(`[autoNarrate] scene=${sceneId} generating voice (voice=${voice})…`);
+    const result = await generateSceneNarration({
+      sceneId: scene.id,
+      text: scene.dialogue,
+      voice,
+    });
+    await db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationUrl: result.url, narrationVoice: voice },
+    });
+    console.log(`[autoNarrate] scene=${sceneId} voice ready: ${result.url}`);
+    return { ok: true, url: result.url };
+  } catch (err) {
+    console.warn(`[autoNarrate] scene=${sceneId} voice generation failed (non-fatal):`, err);
+    return { ok: false, reason: "tts failed" };
   }
 }

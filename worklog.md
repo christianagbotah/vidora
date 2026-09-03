@@ -2800,3 +2800,35 @@ Stage Summary:
 - Export is now a background job: the API returns in <200ms (Cloudflare 524 impossible), progress is visible within a second, and the full pipeline (voices → encode → save) streams live percentages
 - Users can close the dialog, browse elsewhere, or refresh the page — the chip + re-attach keep them informed, and the download gate opens itself when the video is ready
 - Failures (OOM, timeouts, interrupted server) surface as friendly, actionable messages with a Retry path instead of a silent hang or a raw 524
+
+---
+Task ID: gen-audio-1
+Agent: main
+Task: Fix "video generated but no sound at all" — sound at every stage of the pipeline (generation, studio playback, export)
+
+User report: "video generated but no sound at all" (following the earlier export-audio fix — voices existed only at export; the generated scene clips themselves were always silent)
+
+Root causes found:
+1. BOTH generation routes (`/api/generate-video`, `/api/generate-video-scene`) called zai.generateVideo with `withAudio: false` — CogVideoX-3 clips were generated WITHOUT their native ambient audio track (the lib default is true; the routes overrode it)
+2. Character dialogue voices (TTS narration) only existed if the user manually clicked "Narrate" per scene — during/after generation the studio was completely silent; the export auto-generated voices, but the user never hears them while previewing scenes
+3. The studio scene card played the video and the narration as two SEPARATE elements — pressing play on the video did not start the voice
+4. Gap: with the new withAudio clips, a dialogue-free project would preview WITH ambience in the studio but export SILENT (the export graph mixed only narration+music files, discarding clip audio streams)
+
+Fixes:
+- src/lib/narration.ts: NEW shared helpers — `pickSceneNarrationVoice` (scene voice → linked character's voiceId → default; extracted from the export route) and `autoNarrateScene(sceneId)` (ensure a scene with dialogue has a voice: loads the scene, picks the voice, runs TTS, persists narrationUrl+narrationVoice; NON-FATAL by contract — never throws, the export's auto-voice pass remains the safety net)
+- /api/generate-video: `withAudio: true` (CogVideoX-3 renders native ambient sound; Vidu models omit the flag by design — their clips stay silent and rely on the TTS layer); after each scene's video completes, `void autoNarrateScene(sceneId)` fires (fire-and-forget, non-fatal) so voices exist the moment clips land
+- /api/generate-video-scene: same two changes for single-scene generation/regeneration
+- /api/export-video: local voice picker replaced by the shared pickSceneNarrationVoice (behavior identical); NEW clip-ambience mixing — `getHasAudioStream` ffprobe helper; per-input audio flags threaded into `assembleAudioGraph` (new `videoInputAudio` param, title-card aware); scenes whose clip carries audio get an ambience layer at their exact timeline start (volume 0.6, trimmed to the on-screen span, 0.6s fade-out) mixed via the existing amix graph — no extra ffmpeg inputs (references the existing video input's `[i:a]` stream); silent clips/old clips → no layer (fully backward compatible); includeAudio=false → no ambience (the Voices & Music switch stays authoritative)
+- page.tsx SceneCard: the scene's AI voice now plays IN SYNC with the video — video play/pause/ended/seeked events drive the narration audio (time-glued, volume/mute mirrored); the audio row got an "AI voice — plays along with the video above" hint
+
+Verification (sandbox, live ZAI APIs):
+- Batch generation (POST /api/generate-video, CogVideoX-3): task created with audio → dev.log `Scene 1: video ready!` → `[autoNarrate] ... voice ready` fired AUTOMATICALLY → scene completed with videoUrl (aigc-files.bigmodel.cn) + narrationUrl persisted; ffprobe of the downloaded clip: h264 video + **aac audio** (mean −24.2 dB — real ambient sound, not a silent track); narration wav mean −19.9 dB
+- Export w/ REAL clip (single scene): job done 100%; ffprobe final = h264+aac; log `Audio mix: 1 layer(s) + 1 clip-ambience layer(s)`; audio summary `voices: 1, voicesGenerated: 0` (the export REUSED the generation-time voice instead of regenerating — exactly as designed)
+- Export w/ synthetic clips (2 scenes: one 220 Hz tone track, one silent, both with dialogue): final = aac; tone present in scene 1's window only (bandpass: −29.1 dB vs −51.1 dB in scene 2's window); 2 voices auto-generated (TTS live), timeline offsets correct (9s = 2×5s − 1s crossfade)
+- Studio UI (agent-browser, admin session): scene card shows video player + narration row + "AI voice — plays along with the video above"; JS-driven playback test: video.play() → audio playing in sync; video.pause() → audio paused (verified via element state); resume works; console/page errors clean; mobile 390px: card audio/video right edge 330px (fits; the only overflow is the pre-existing header brand button, unrelated)
+- ESLint 0 errors across all changed files; test artifacts fully cleaned (projects, jobs, scenes, clips, finals, wavs, thumbnails, screenshots, temp scripts), admin tokens reset to 1000, DB back to 0 projects, stale agent-browser sessions closed (they were the source of the orphan 404 polling noise in dev.log)
+
+Stage Summary:
+- Sound now exists at EVERY stage: generated CogVideoX clips carry native ambient audio; character dialogue voices are auto-generated the moment each scene finishes rendering (correct voice via character casting); the studio plays voice + video together in sync; the export mixes voices + music + the clips' own ambience at the correct timeline positions
+- Export can no longer be silent for dialogue-free projects (ambience layer), and the export reuses generation-time voices (no duplicate TTS, no wasted quota)
+- Old projects are unaffected: silent clips simply get no ambience layer, and their missing voices are still auto-generated at export

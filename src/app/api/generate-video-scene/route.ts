@@ -10,6 +10,7 @@ import {
   toAbsoluteUrl,
 } from "@/lib/generated-store";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
+import { autoNarrateScene } from "@/lib/narration";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -226,13 +227,16 @@ async function runSceneGeneration(opts: {
   try {
     // Per-scene model resolution: image-dependent models substitute their
     // text-capable sibling when no reference image is available.
+    // withAudio: CogVideoX-3 renders native ambient sound (Vidu models
+    // omit the flag); character dialogue voices come from the TTS
+    // narration auto-generated right after the clip completes.
     const model = resolveModelForRequest(videoModel, Boolean(referenceImage));
     taskId = await zai.generateVideo({
       prompt,
       size: videoSize,
       duration,
       quality: "quality",
-      withAudio: false,
+      withAudio: true,
       ...(referenceImage ? { imageUrl: referenceImage } : {}),
       model,
       ...(aspectRatio ? { aspectRatio } : {}),
@@ -301,6 +305,9 @@ async function runSceneGeneration(opts: {
       data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
     });
     console.log(`[generate-video-scene] video ready: ${result.videoUrl.slice(0, 80)}...`);
+    // Auto-generate the character voice for the dialogue (non-fatal,
+    // fire-and-forget) so the studio clip has sound right away.
+    void autoNarrateScene(sceneId);
     return;
   }
 

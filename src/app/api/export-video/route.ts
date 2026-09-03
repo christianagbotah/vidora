@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
-import { generateSceneNarration, DEFAULT_TTS_VOICE } from "@/lib/narration";
+import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { getAudioPath, audioFileExists } from "@/lib/audio-storage";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
@@ -16,6 +16,11 @@ const execFileAsync = promisify(execFile);
 // If an active job's updatedAt is older than this, it is considered dead
 // (server restart, crash, hot reload) and is surfaced as failed.
 const STALE_JOB_MS = 3 * 60 * 1000;
+
+// Clip-ambience volume: how loud the scenes' native sound (e.g. CogVideoX
+// with_audio) sits in the final mix — under the TTS voices (1.0) but clearly
+// audible, so dialogue-free exports are not silent.
+const AMBIENCE_VOLUME = 0.6;
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
@@ -122,21 +127,9 @@ function existingNarrationPath(narrationUrl: string): string | null {
   return null;
 }
 
-/** Pick the best TTS voice for a scene: explicit → linked character → default. */
-async function pickNarrationVoice(scene: AudioScene): Promise<string> {
-  if (scene.narrationVoice) return scene.narrationVoice;
-  try {
-    const ids: unknown = JSON.parse(scene.characterIds || "[]");
-    if (Array.isArray(ids) && ids.length > 0) {
-      const chars = await db.character.findMany({
-        where: { id: { in: ids.filter((i): i is string => typeof i === "string") } },
-      });
-      const withVoice = chars.find((c) => c.voiceId);
-      if (withVoice?.voiceId) return withVoice.voiceId;
-    }
-  } catch { /* ignore bad JSON */ }
-  return DEFAULT_TTS_VOICE;
-}
+// Voice selection is shared with the generation flow via
+// pickSceneNarrationVoice (src/lib/narration.ts) — explicit scene voice →
+// linked character's assigned voice → default narrator.
 
 /**
  * Collect (and if missing, auto-generate) narration audio for each scene,
@@ -174,7 +167,7 @@ async function collectSceneAudio(
     }
 
     if (!narrationPath && scene.dialogue && scene.dialogue.trim().length > 0) {
-      const voice = await pickNarrationVoice(scene);
+      const voice = await pickSceneNarrationVoice(scene);
       try {
         console.log(`[Export] Auto-generating voice for scene ${scene.id} (voice=${voice})…`);
         onSceneProgress?.({ index: i + 1, total: scenes.length, phase: "voice" });
@@ -356,6 +349,24 @@ async function getVideoDuration(filePath: string): Promise<number> {
     return parseFloat(stdout.trim()) || 10;
   } catch {
     return 10;
+  }
+}
+
+/**
+ * Probe whether a media file carries an audio stream (clip ambience).
+ * CogVideoX clips generated with with_audio=true have one; Vidu clips and
+ * title cards don't. Never throws — a failed probe just means "no audio".
+ */
+async function getHasAudioStream(filePath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      ["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", filePath],
+      { timeout: 15000 }
+    );
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -606,17 +617,23 @@ function runFfmpegWithProgress(
 /**
  * Assemble the audio inputs / layers / filter for the export.
  *
- * @param durations   per video input durations (title card first, if present)
- * @param sceneAudio  per-completed-scene audio info (aligned with scenes)
- * @param td          transition duration (0 for cut)
- * @param isCut       whether the transition is a hard cut
+ * @param durations       per video input durations (title card first, if present)
+ * @param sceneAudio      per-completed-scene audio info (aligned with scenes)
+ * @param td              transition duration (0 for cut)
+ * @param isCut           whether the transition is a hard cut
+ * @param videoInputAudio per video input: does that FILE carry an audio
+ *                        stream (clip ambience)? When true and audio is
+ *                        included, the clip's own sound is layered in at its
+ *                        timeline position so exports stay audible even for
+ *                        dialogue-free scenes. Title cards are always false.
  * @returns audioPaths, audioFilter (null when no audio), plus per-layer debug info
  */
 function assembleAudioGraph(
   durations: number[],
   sceneAudio: SceneAudioInfo[],
   td: number,
-  isCut: boolean
+  isCut: boolean,
+  videoInputAudio: boolean[] = []
 ): { audioPaths: string[]; audioFilter: string | null } {
   // Video input count (title card included in durations)
   const V = durations.length;
@@ -628,6 +645,7 @@ function assembleAudioGraph(
 
   const audioPaths: string[] = [];
   const layers: AudioLayerSpec[] = [];
+  let ambienceLayers = 0;
 
   sceneAudio.forEach((a, i) => {
     const videoIdx = sceneOffset + i;
@@ -656,12 +674,28 @@ function assembleAudioGraph(
       });
       audioPaths.push(a.musicPath);
     }
+
+    // Clip ambience: the scene video's own audio track (present on
+    // CogVideoX clips generated with sound). Layered quietly under the
+    // voice so dialogue stays dominant. The video input is ALREADY an
+    // ffmpeg input (index videoIdx < V) — no extra -i is appended.
+    if (videoInputAudio[videoIdx]) {
+      const span = sceneSpan(durations, videoIdx, td);
+      layers.push({
+        inputIndex: videoIdx,
+        volume: AMBIENCE_VOLUME,
+        startMs: Math.round(starts[videoIdx] * 1000),
+        trimTo: span,
+        fadeOut: true,
+      });
+      ambienceLayers++;
+    }
   });
 
   if (layers.length === 0) return { audioPaths: [], audioFilter: null };
 
   console.log(
-    `[Export] Audio mix: ${audioPaths.length} layer(s) — ` +
+    `[Export] Audio mix: ${audioPaths.length} layer(s)${ambienceLayers ? ` + ${ambienceLayers} clip-ambience layer(s)` : ""} — ` +
     layers.map((l) => `input#${l.inputIndex} vol=${l.volume.toFixed(2)} start=${(l.startMs / 1000).toFixed(2)}s${l.trimTo ? ` trim=${l.trimTo.toFixed(2)}s` : ""}`).join(" | ")
   );
 
@@ -771,7 +805,7 @@ async function runSingleSceneExport(
       allDurations = [await getVideoDuration(sceneVideoPath)];
     }
 
-    // ── Audio: narration + music for the single scene ──
+    // ── Audio: narration + music (+ the clip's own ambience) for the scene ──
     const { audio: sceneAudio, summary } = await collectSceneAudio(
       [scene],
       includeAudio,
@@ -779,7 +813,10 @@ async function runSingleSceneExport(
     );
     const td = inputPaths.length > 1 ? transitionDef.duration : 0;
     const isCut = td === 0;
-    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
+    // Ambience flags aligned with inputPaths: [titleCard?, sceneClip]
+    const sceneHasAudio = includeAudio ? await getHasAudioStream(sceneVideoPath) : false;
+    const videoInputAudio = inputPaths.length > 1 ? [false, sceneHasAudio] : [sceneHasAudio];
+    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut, videoInputAudio);
 
     let transitionFilter = "";
     if (inputPaths.length > 1) {
@@ -925,14 +962,16 @@ async function runMultiSceneExport(
       throw new Error("Not enough video clips downloaded. Need at least 2 for multi-scene export.");
     }
 
-    // ── Step 2: Probe durations ──────────────────────────────────────────
+    // ── Step 2: Probe durations (+ clip ambience presence) ────────────────
     await onProgress(26, "Analyzing scene clips…");
     console.log("[Export] Probing video durations...");
     const durations: number[] = [];
+    const clipHasAudio: boolean[] = [];
     for (let i = 0; i < localPaths.length; i++) {
       const dur = await getVideoDuration(localPaths[i]);
       durations.push(dur);
-      console.log(`[Export] Scene ${i + 1} duration: ${dur.toFixed(2)}s`);
+      clipHasAudio.push(includeAudio ? await getHasAudioStream(localPaths[i]) : false);
+      console.log(`[Export] Scene ${i + 1} duration: ${dur.toFixed(2)}s${clipHasAudio[i] ? " (has audio)" : ""}`);
     }
 
     // ── Step 3: Collect / auto-generate scene audio (voices + music) ─────
@@ -950,6 +989,7 @@ async function runMultiSceneExport(
 
     let inputPaths = [...localPaths];
     let allDurations = [...durations];
+    let videoInputAudio = [...clipHasAudio];
 
     // All inputs are normalized to the first scene's resolution (see
     // buildTransitionFilter) — the title card is rendered at that size too.
@@ -962,6 +1002,8 @@ async function runMultiSceneExport(
         const titleDur = await getVideoDuration(titleCardPath);
         inputPaths = [titleCardPath, ...localPaths];
         allDurations = [titleDur, ...durations];
+        // Title cards are silent — shift the ambience flags to match inputs
+        videoInputAudio = [false, ...clipHasAudio];
         console.log(`[Export] Title card added (${titleDur.toFixed(2)}s)`);
       }
     }
@@ -971,7 +1013,7 @@ async function runMultiSceneExport(
     const transitionFilter = buildTransitionFilter(allDurations, transitionDef, targetSize);
     const td = transitionDef.duration;
     const isCut = td === 0;
-    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
+    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut, videoInputAudio);
 
     // ── Step 6: Build & run ffmpeg ──────────────────────────────────────
     const ffmpegCmd = buildFfmpegCommand({
