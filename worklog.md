@@ -2764,3 +2764,39 @@ Stage Summary:
 - Export flow fixed end-to-end: the button now actually renders the video (with chosen quality/transition/format/title card) BEFORE the token-gated download — the 400 is gone
 - Sound IS now added: scene dialogue gets AI voices automatically (missing ones are generated at export with the character's assigned voice), existing narrations and per-scene music are mixed at the correct timeline offsets, AAC/Opus muxed
 - Bonus fixes: multi-scene export no longer fake-fails after success (ReferenceError), title card actually renders (was always broken), mixed-resolution scenes merge cleanly, local URLs no longer waste retry cycles
+---
+Task ID: export-job-1
+Agent: main
+Task: Fix export 524 timeout (/api/export-video behind Cloudflare) and "no progress while exporting" — convert export to a background job with live progress
+
+User report: "/api/export-video:1 Failed to load resource: the server responded with a status of 524 (). also when i confirm the export button, there is no progress or anything showing that it is downloading in the background"
+
+Root cause: the export route (downloads + auto TTS voices + ffmpeg encode) was a single synchronous POST that can easily run >100s — Cloudflare kills it with 524 before the browser ever sees a response. The only UI feedback was a toast + button spinner, no live progress.
+
+Fixes:
+- Prisma: new ExportJob model (projectId, userId, status queued/running/done/failed, progress 0-100, step text, params/result/error JSON) in BOTH schema.prisma + schema.prisma.local; db:push run
+- POST /api/export-video: validates fast (<200ms in practice), creates an ExportJob row, kicks the pipeline via `void runExportJob(jobId)` (floating promise — safe on the long-running PM2/dev process), returns { jobId } immediately → gateway/proxy timeouts can never kill an export. Double-click protection: a fresh active job for the project is RETURNED (resumed:true) instead of starting a duplicate; stale actives get reaped
+- runExportJob: heartbeats the job row every 10s (keeps updatedAt fresh); throttled progress writes thread an onProgress(pct, step) callback through the whole pipeline: per-scene clip fetch (5-25%), duration probe, per-scene voice generation ("Generating AI voice for scene i of n…", 30-55%), title card, encoding, saving; all failures land in job.error via friendlyExportError (download/encode/timeout/OOM-signal mappings); project status still driven generating→completed/failed
+- NEW runFfmpegWithProgress: spawns ffmpeg via bash, parses `time=` from stderr against the expected timeline duration (sum − transition overlaps) → live encoding % during the longest phase; kills on timeout; reports signal kills distinctly (OOM)
+- GET /api/export-video?jobId= | ?projectId=: auth-checked job status (owner/admin/guest rules via requireProjectAccess); reaps zombie jobs — active with heartbeat older than 3 min → failed "Export was interrupted (the server may have restarted). Please try again."; projectId variant returns the latest job for refresh re-attachment
+- page.tsx: handleExport now starts the job + opens a NEW "Exporting Your Video" progress dialog (live step text, big %, progress bar, mm:ss elapsed ticker, Prepare/Voices/Encode/Save phase legend, "Keep Browsing"); polling effect (1.5s) runs regardless of dialog state; on done → toast + refreshProject + download gate AUTO-OPENS; on failed → destructive toast + Retry (reopens settings) / Close; on terminal the job stays viewable in the dialog for 1.6s
+- NEW floating chip (bottom-right, above mobile nav): "Exporting video · N%" + mini bar while a job runs and the dialog is hidden — click reopens the dialog; survives page REFRESH via the re-attach effect (GET ?projectId= on studio open)
+- Export settings button: disabled while exporting ("Exporting…"); gate no longer chained synchronously (opens from the poll completion)
+- isExporting is now derived from exportJob state (removed the stale useState); exportQualityRef keeps the download-gate quality accurate
+
+Verification (agent-browser, admin session, live ZAI TTS working):
+- POST /api/export-video 200 in 158ms (was 100s+ sync → the 524 class of failure is gone)
+- 3-scene export: progress dialog appeared instantly (Queued… 0% → Fetching scene clips → Generating AI voice 1/3… → Building transitions 58% → …), 2 voices auto-generated LIVE (TTS not rate-limited this session), final mp4 = h264+aac, 7s (3×3s − 2×1s crossfades, timeline math correct), job row done/100/Complete with result message
+- Completion flow: toast + project refresh (Final Video card played the mp4) + download gate auto-opened → "Use My Tokens" → 1000→998 tokens + new tab with the video
+- Background UX: "Keep Browsing" → floating chip at 65%…81% live; page REFRESH mid-export → studio re-attach → completion gate opened without user action
+- Failure path (real): 4K Ultra encode OOM-killed by the kernel → dialog showed friendly "Video encoding was stopped (server memory limit reached). Please use 1080p Standard or 720p Draft" + Retry (reopened settings with previous selection); signal now reported distinctly (code null → "terminated by signal")
+- Zombie reaper: seeded a "running" job with 10-min-old heartbeat → GET returned failed "Export was interrupted (the server may have restarted)"
+- Mobile 390px: dialog + chip fully visible, zero horizontal overflow (VLM-verified screenshots); browser console + page errors clean after full reload; ESLint 0 errors
+- Test artifacts cleaned: project/scenes/jobs deleted, clips + final files removed, admin tokens reset to 1000, DB back to 0 projects
+
+Note: sandbox ops — dev server restarts must use a double-fork daemon `(( setsid bun run dev >/dev/null 2>&1 </dev/null & ))` or the sandbox reaps the process between tool calls.
+
+Stage Summary:
+- Export is now a background job: the API returns in <200ms (Cloudflare 524 impossible), progress is visible within a second, and the full pipeline (voices → encode → save) streams live percentages
+- Users can close the dialog, browse elsewhere, or refresh the page — the chip + re-attach keep them informed, and the download gate opens itself when the video is ready
+- Failures (OOM, timeouts, interrupted server) surface as friendly, actionable messages with a Retry path instead of a silent hang or a raw 524

@@ -66,6 +66,7 @@ model VideoProject {
   characters     Character[]
   views          VideoView[]
   socialPosts    SocialPublish[]
+  exportJobs     ExportJob[]
   @@index([userId])
   @@index([shareSlug])
 }
@@ -402,4 +403,22 @@ model ContactMessage {
   updatedAt DateTime @updatedAt
   @@index([status])
   @@index([createdAt])
+}
+
+// ── Video Export Jobs (background export pipeline, see /api/export-video) ──
+model ExportJob {
+  id        String       @id @default(cuid())
+  projectId String
+  project   VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String?                          // owner who started it (null = guest demo project)
+  status    String       @default("queued")  // "queued" | "running" | "done" | "failed"
+  progress  Int          @default(0)         // 0-100
+  step      String       @default("Queued")  // human-readable current step
+  params    String?                          // JSON: { quality, transition, format, withTitleCard, includeAudio }
+  result    String?                          // JSON: success payload (finalVideoUrl, message, audio, …)
+  error     String?                          // friendly failure message
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  @@index([projectId, createdAt])
+  @@index([status, updatedAt])
 }

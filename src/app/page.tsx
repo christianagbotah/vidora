@@ -370,6 +370,27 @@ function formatElapsedSeconds(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Live state of a background video export job (see /api/export-video). */
+interface ExportJobState {
+  jobId: string;
+  projectId: string;
+  status: "queued" | "running" | "done" | "failed";
+  progress: number;          // 0-100
+  step: string;              // human-readable current step
+  error: string | null;
+  message: string | null;    // success summary once done
+  finalVideoUrl: string | null;
+  startedAt: number;         // ms epoch — drives the elapsed timer
+}
+
+/** Phase legend shown in the export progress dialog. */
+const EXPORT_PHASES: { label: string; upTo: number }[] = [
+  { label: "Prepare", upTo: 30 },
+  { label: "Voices", upTo: 58 },
+  { label: "Encode", upTo: 94 },
+  { label: "Save", upTo: 101 },
+];
+
 function GenerationLockOverlay({
   phase,
   projectTitle,
@@ -1604,13 +1625,27 @@ function VidoraApp() {
   const [generationPhase, setGenerationPhase] = useState<"idle" | "starting" | "generating" | "completed" | "failed">("idle");
   // Timestamp (ms) when the current generation run started — drives elapsed timer
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
+  /* ── Background export job (/api/export-video runs the ffmpeg pipeline
+     server-side while the UI polls progress; survives page refresh) ── */
+  const [exportJob, setExportJob] = useState<ExportJobState | null>(null);
+  const [exportProgressDialogOpen, setExportProgressDialogOpen] = useState(false);
+  const [exportElapsed, setExportElapsed] = useState(0);
+  // Latest job snapshot for callbacks (polling, tickers) that outlive renders
+  const exportJobRef = useRef<ExportJobState | null>(null);
+  // jobId whose terminal state was already handled (toast + download gate)
+  const exportNotifiedRef = useRef<string | null>(null);
+  // Quality preset chosen when the job started (used by the download gate)
+  const exportQualityRef = useRef("standard");
+  const isExporting =
+    !!exportJob && (exportJob.status === "queued" || exportJob.status === "running");
   const [exportQuality, setExportQuality] = useState("standard");
   const [exportTransition, setExportTransition] = useState("fade");
   const [exportFormat, setExportFormat] = useState("mp4");
   const [exportTitleCard, setExportTitleCard] = useState(false);
   // Mix scene voices (auto-generated when missing) + scene music into the export
   const [exportIncludeAudio, setExportIncludeAudio] = useState(true);
+  // Keep the ref in sync with the chosen quality for the download-gate call
+  exportQualityRef.current = exportQuality;
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [galleryCategory, setGalleryCategory] = useState("All");
   const [gallerySearch, setGallerySearch] = useState("");
@@ -2990,14 +3025,25 @@ function VidoraApp() {
 
   const handleExport = async (): Promise<boolean> => {
     if (!currentProject) return false;
-    setIsExporting(true);
+    // Already exporting this project? Just show the live progress dialog.
+    const running = exportJobRef.current;
+    if (
+      running &&
+      running.projectId === currentProject.id &&
+      (running.status === "queued" || running.status === "running")
+    ) {
+      setExportProgressDialogOpen(true);
+      return true;
+    }
     toast({
-      title: "Exporting final video…",
+      title: "Starting export…",
       description: exportIncludeAudio
-        ? "Merging scenes, transitions, AI voices and music — this can take a minute or two."
-        : "Merging scenes and transitions — this can take a minute or two.",
+        ? "Scenes, transitions, AI voices and music will be merged in the background — you can keep browsing."
+        : "Scenes and transitions will be merged in the background — you can keep browsing.",
     });
     try {
+      // Returns almost instantly with a jobId — the heavy ffmpeg/TTS pipeline
+      // runs server-side while we poll progress (no more gateway 524s).
       const res = await fetch("/api/export-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3011,21 +3057,143 @@ function VidoraApp() {
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        toast({ title: "Export complete!", description: data.message });
-        refreshProject();
+      if (data.success && data.jobId) {
+        const job: ExportJobState = {
+          jobId: data.jobId,
+          projectId: currentProject.id,
+          status: data.resumed ? "running" : "queued",
+          progress: data.progress ?? 0,
+          step: data.step ?? "Queued…",
+          error: null,
+          message: null,
+          finalVideoUrl: null,
+          startedAt: Date.now(),
+        };
+        exportJobRef.current = job;
+        setExportJob(job);
+        setExportElapsed(0);
+        setExportProgressDialogOpen(true);
         return true;
-      } else {
-        toast({ title: "Export failed", description: getApiError(data), variant: "destructive" });
-        return false;
       }
-    } catch {
-      toast({ title: "Export error", variant: "destructive" });
+      toast({ title: "Export failed", description: getApiError(data), variant: "destructive" });
       return false;
-    } finally {
-      setIsExporting(false);
+    } catch {
+      toast({ title: "Export error", description: "Could not reach the server. Please try again.", variant: "destructive" });
+      return false;
     }
   };
+
+  /* ── Export job polling — runs while the background export is active.
+     Survives closing the dialog / switching views (only the view hides). ── */
+  const exportJobId = exportJob?.jobId;
+  const exportJobActive = isExporting;
+  useEffect(() => {
+    if (!exportJobId || !exportJobActive) return;
+    let cancelled = false;
+
+    const pollExport = async () => {
+      try {
+        const res = await fetch(`/api/export-video?jobId=${exportJobId}`);
+        const data = await res.json();
+        if (cancelled || !data.success || !data.job) return;
+        const j = data.job;
+        const prev = exportJobRef.current;
+        if (!prev || prev.jobId !== j.jobId) return;
+
+        const next: ExportJobState = {
+          ...prev,
+          status: j.status,
+          progress: typeof j.progress === "number" ? j.progress : prev.progress,
+          step: j.step || prev.step,
+          error: j.error ?? null,
+          message: j.message ?? null,
+          finalVideoUrl: j.finalVideoUrl ?? null,
+        };
+        exportJobRef.current = next;
+        setExportJob(next);
+
+        // Terminal handling — exactly once per job
+        if (
+          (next.status === "done" || next.status === "failed") &&
+          exportNotifiedRef.current !== j.jobId
+        ) {
+          exportNotifiedRef.current = j.jobId;
+          if (next.status === "done") {
+            toast({
+              title: "Export complete!",
+              description: next.message || "Your final video is ready to download.",
+            });
+            refreshProject();
+            // Open the token-gated download for the freshly exported file
+            openDownloadGate(next.projectId, exportQualityRef.current);
+            setTimeout(() => setExportProgressDialogOpen(false), 1600);
+          } else {
+            toast({
+              title: "Export failed",
+              description: next.error || "The export could not be completed.",
+              variant: "destructive",
+            });
+            refreshProject();
+          }
+        }
+      } catch {
+        /* transient network error — the next tick retries */
+      }
+    };
+
+    void pollExport();
+    const interval = setInterval(pollExport, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [exportJobId, exportJobActive]);
+
+  /* Elapsed timer for the export progress dialog */
+  useEffect(() => {
+    if (!exportJobActive) return;
+    const tick = () => {
+      const cur = exportJobRef.current;
+      if (cur) setExportElapsed(Math.floor((Date.now() - cur.startedAt) / 1000));
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [exportJobActive, exportJobId]);
+
+  /* Re-attach to an in-flight export when the studio (re)opens a project —
+     covers page refreshes and navigation during a long export. */
+  useEffect(() => {
+    const pid = currentProject?.id;
+    if (!pid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/export-video?projectId=${pid}`);
+        const data = await res.json();
+        if (cancelled || !data.success || !data.job) return;
+        const j = data.job;
+        if (j.status !== "queued" && j.status !== "running") return;
+        const job: ExportJobState = {
+          jobId: j.jobId,
+          projectId: j.projectId,
+          status: j.status,
+          progress: j.progress ?? 0,
+          step: j.step || "Working…",
+          error: j.error ?? null,
+          message: j.message ?? null,
+          finalVideoUrl: j.finalVideoUrl ?? null,
+          startedAt: new Date(j.createdAt).getTime(),
+        };
+        exportJobRef.current = job;
+        setExportJob(job);
+        // Don't force the dialog open — the floating chip signals progress
+      } catch { /* ignore */ }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject?.id]);
 
   const handleAnalyzeScript = async () => {
     const text = inputMode === "script" ? scriptText : textPrompt;
@@ -9756,22 +9924,131 @@ function VidoraApp() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setExportDialogOpen(false)}>Cancel</Button>
             <Button
-              onClick={async () => {
+              onClick={() => {
                 setExportDialogOpen(false);
-                // Render the final video FIRST (ffmpeg merge + voices/music),
-                // then open the token-gated download for the finished file.
-                const ok = await handleExport();
-                if (ok) openDownloadGate(currentProject.id, exportQuality);
+                // handleExport starts the background job and opens the live
+                // progress dialog; the download gate opens automatically when
+                // the export finishes (see the polling effect).
+                void handleExport();
               }}
               disabled={isExporting}
               className="btn-gradient"
             >
               {isExporting ? (
-                <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Exporting...</>
+                <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Exporting…</>
               ) : (
                 <><Download className="h-4 w-4 mr-1.5" />Export Full Video</>
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Export Progress Dialog — live status of the background export job */}
+      <Dialog open={exportProgressDialogOpen} onOpenChange={setExportProgressDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white">
+                <Clapperboard className="h-4 w-4" />
+              </div>
+              Exporting Your Video
+            </DialogTitle>
+            <DialogDescription>
+              Your final video is being rendered in the background — you can close this dialog and keep browsing.
+            </DialogDescription>
+          </DialogHeader>
+
+          {exportJob && (
+            <div className="space-y-4 py-1">
+              {exportJob.status === "done" ? (
+                <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40 p-4">
+                  <CheckCircle className="h-5 w-5 text-emerald-500 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Export complete!</p>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{exportJob.message || "Your final video is ready to download."}</p>
+                  </div>
+                </div>
+              ) : exportJob.status === "failed" ? (
+                <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
+                  <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-red-700 dark:text-red-300">Export failed</p>
+                    <p className="text-xs text-muted-foreground">{exportJob.error || "The export could not be completed. Please try again."}</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-end justify-between gap-2">
+                    <p className="text-sm font-medium leading-snug">{exportJob.step}</p>
+                    <p className="text-2xl font-bold tabular-nums text-violet-600 dark:text-violet-400 shrink-0">
+                      {exportJob.progress}
+                      <span className="text-sm text-muted-foreground font-medium">%</span>
+                    </p>
+                  </div>
+                  <Progress value={exportJob.progress} className="h-2.5" />
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatElapsedSeconds(exportElapsed)} elapsed</span>
+                    <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />Rendering in the background</span>
+                  </div>
+                  {/* Phase legend */}
+                  <div className="flex items-center justify-between gap-1 pt-1">
+                    {EXPORT_PHASES.map((phase, i) => {
+                      const prevUpTo = i === 0 ? 0 : EXPORT_PHASES[i - 1].upTo;
+                      const isDone = exportJob.progress >= phase.upTo;
+                      const isActive = !isDone && exportJob.progress >= prevUpTo;
+                      return (
+                        <div key={phase.label} className="flex items-center gap-1.5 min-w-0">
+                          {isDone ? (
+                            <CheckCircle className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          ) : isActive ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-500 shrink-0" />
+                          ) : (
+                            <span className="h-3.5 w-3.5 rounded-full border-2 border-muted shrink-0" />
+                          )}
+                          <span
+                            className={`text-[11px] font-medium truncate ${isDone ? "text-emerald-600 dark:text-emerald-400" : isActive ? "text-violet-600 dark:text-violet-400" : "text-muted-foreground"}`}
+                          >
+                            {phase.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            {exportJob?.status === "done" ? (
+              <Button
+                className="btn-gradient"
+                onClick={() => {
+                  setExportProgressDialogOpen(false);
+                  openDownloadGate(exportJob.projectId, exportQualityRef.current);
+                }}
+              >
+                <Download className="h-4 w-4 mr-1.5" />Get My Video
+              </Button>
+            ) : exportJob?.status === "failed" ? (
+              <>
+                <Button variant="outline" onClick={() => setExportProgressDialogOpen(false)}>Close</Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setExportProgressDialogOpen(false);
+                    setExportDialogOpen(true);
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4 mr-1.5" />Retry Export
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" onClick={() => setExportProgressDialogOpen(false)}>
+                Keep Browsing
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -11242,7 +11519,32 @@ function VidoraApp() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Global floating widgets: AI chat + scroll-to-top ── */}
+      {/* ── Global floating widgets: export status chip + AI chat + scroll-to-top ── */}
+      {/* Floating export-progress chip — visible whenever a background export
+          is running but the progress dialog is hidden (user clicked "Keep
+          Browsing" or refreshed mid-export). Click to reopen the dialog. */}
+      {isExporting && !exportProgressDialogOpen && exportJob && (
+        <button
+          type="button"
+          onClick={() => setExportProgressDialogOpen(true)}
+          className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-[60] flex items-center gap-2.5 rounded-full border border-violet-200 dark:border-violet-900 bg-white dark:bg-slate-900 shadow-lg hover:shadow-xl transition-shadow pl-3 pr-4 py-2.5 min-h-11"
+          aria-label={`Export in progress — ${exportJob.progress}% done. Show details.`}
+        >
+          <span className="relative flex items-center justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+          </span>
+          <span className="flex items-center gap-2 text-xs font-semibold text-violet-700 dark:text-violet-300">
+            <span className="hidden sm:inline">Exporting video</span>
+            <span className="tabular-nums">{exportJob.progress}%</span>
+          </span>
+          <span className="h-1 w-10 sm:w-14 rounded-full bg-violet-100 dark:bg-violet-950 overflow-hidden">
+            <span
+              className="block h-full bg-gradient-to-r from-violet-500 to-purple-600 transition-all duration-500"
+              style={{ width: `${Math.max(4, exportJob.progress)}%` }}
+            />
+          </span>
+        </button>
+      )}
       <AIAssistant />
       <ScrollToTop />
 

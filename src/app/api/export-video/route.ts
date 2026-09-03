@@ -7,15 +7,15 @@ import { getAudioPath, audioFileExists } from "@/lib/audio-storage";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import path from "path";
-import { execFile, exec } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
-// NOTE: execAsync is used for complex ffmpeg commands that require shell
-// quoting (filter expressions with special chars). All paths are server-generated
-// from UUIDs — no user-controlled path injection risk. The only user input in
-// commands is the project title, which is escaped in generateTitleCard().
-const execAsync = promisify(exec);
+
+// A live job heartbeats every ~10s (progress writes + heartbeat timer).
+// If an active job's updatedAt is older than this, it is considered dead
+// (server restart, crash, hot reload) and is surfaced as failed.
+const STALE_JOB_MS = 3 * 60 * 1000;
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
@@ -105,6 +105,13 @@ export interface ExportAudioSummary {
   musicScenes: number;        // scenes with music in the mix
 }
 
+/** Progress notification from inside the audio collector (drives the job UI). */
+interface AudioProgressInfo {
+  index: number;   // 1-based scene number
+  total: number;
+  phase: "collect" | "voice";
+}
+
 /** Resolve an existing narration file from its /api/audio/<file> URL. */
 function existingNarrationPath(narrationUrl: string): string | null {
   try {
@@ -138,7 +145,8 @@ async function pickNarrationVoice(scene: AudioScene): Promise<string> {
  */
 async function collectSceneAudio(
   scenes: AudioScene[],
-  includeAudio: boolean
+  includeAudio: boolean,
+  onSceneProgress?: (info: AudioProgressInfo) => void
 ): Promise<{ audio: SceneAudioInfo[]; summary: ExportAudioSummary }> {
   const audio: SceneAudioInfo[] = scenes.map(() => ({
     narrationPath: null,
@@ -157,6 +165,7 @@ async function collectSceneAudio(
 
   for (let i = 0; i < scenes.length; i++) {
     const scene = scenes[i];
+    onSceneProgress?.({ index: i + 1, total: scenes.length, phase: "collect" });
 
     // ── Narration: reuse existing file, else auto-generate from dialogue ──
     let narrationPath: string | null = null;
@@ -168,6 +177,7 @@ async function collectSceneAudio(
       const voice = await pickNarrationVoice(scene);
       try {
         console.log(`[Export] Auto-generating voice for scene ${scene.id} (voice=${voice})…`);
+        onSceneProgress?.({ index: i + 1, total: scenes.length, phase: "voice" });
         const result = await generateSceneNarration({
           sceneId: scene.id,
           text: scene.dialogue,
@@ -231,6 +241,12 @@ function sceneStartTimes(durations: number[], td: number, isCut: boolean): numbe
 function sceneSpan(durations: number[], i: number, td: number): number {
   const isLast = i === durations.length - 1;
   return Math.max(0.5, isLast ? durations[i] : durations[i] - td);
+}
+
+/** Expected output length given per-input durations + transition overlap. */
+function expectedTimelineDuration(durations: number[], td: number): number {
+  const sum = durations.reduce((a, b) => a + b, 0);
+  return Math.max(1, sum - Math.max(0, durations.length - 1) * td);
 }
 
 // ─── Audio filter graph ────────────────────────────────────────────────────────
@@ -506,7 +522,7 @@ function buildFfmpegCommand(opts: {
               : 6;
 
     return [
-      `ffmpeg -y`,
+      `ffmpeg -nostdin -y`,
       inputs,
       `-filter_complex "${filterComplex}"`,
       `-map "[final]"`,
@@ -518,7 +534,7 @@ function buildFfmpegCommand(opts: {
 
   // Default: mp4 with libx264 + AAC audio
   return [
-    `ffmpeg -y`,
+    `ffmpeg -nostdin -y`,
     inputs,
     `-filter_complex "${filterComplex}"`,
     `-map "[final]"`,
@@ -529,10 +545,68 @@ function buildFfmpegCommand(opts: {
 }
 
 /**
+ * Run an ffmpeg shell command while streaming its stderr progress and
+ * reporting 0-100 encoding progress based on the known total duration.
+ * Replaces the old blind `execAsync` so the UI can show live encoding %.
+ */
+function runFfmpegWithProgress(
+  cmd: string,
+  totalSec: number,
+  onPct: (pct: number) => void,
+  timeoutMs = 600000
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Paths in the command are server-generated (UUID-based store paths);
+    // the only interpolated user text (title) goes through a textfile, so
+    // shell execution stays safe. Same trust model as the previous exec.
+    const child = spawn("bash", ["-c", cmd], { stdio: ["ignore", "ignore", "pipe"] });
+    let lastPct = -1;
+    let stderrTail = "";
+    let settled = false;
+
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
+
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      finish(new Error("ffmpeg timed out"));
+    }, timeoutMs);
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stderrTail = (stderrTail + text).slice(-4000);
+      if (totalSec > 0) {
+        const re = /time=(\d+):(\d+):(\d+(?:\.\d+)?)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          const sec = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3]);
+          const pct = Math.min(99, Math.max(0, Math.round((sec / totalSec) * 100)));
+          if (pct > lastPct) {
+            lastPct = pct;
+            try { onPct(pct); } catch { /* progress must never break encoding */ }
+          }
+        }
+      }
+    });
+
+    child.on("error", (err) => finish(err));
+    child.on("close", (code, signal) => {
+      if (code === 0) finish();
+      else if (signal) finish(new Error(`ffmpeg was terminated by signal ${signal}`));
+      else finish(new Error(`ffmpeg exited with code ${code}: ${stderrTail.slice(-600)}`));
+    });
+  });
+}
+
+/**
  * Assemble the audio inputs / layers / filter for the export.
  *
  * @param durations   per video input durations (title card first, if present)
- * @param videoInputCount number of video inputs (durations.length)
  * @param sceneAudio  per-completed-scene audio info (aligned with scenes)
  * @param td          transition duration (0 for cut)
  * @param isCut       whether the transition is a hard cut
@@ -594,11 +668,523 @@ function assembleAudioGraph(
   return { audioPaths, audioFilter: buildAudioFilter(layers) };
 }
 
-// ─── Main POST Handler ────────────────────────────────────────────────────────
+// ─── Export payload types ──────────────────────────────────────────────────────
+
+interface ExportSuccessPayload {
+  success: true;
+  finalVideoUrl: string;
+  sceneCount: number;
+  fileSize: number;
+  duration: string;
+  quality: string;
+  transition: string;
+  format: string;
+  withTitleCard: boolean;
+  audio: ExportAudioSummary;
+  message: string;
+}
+
+/** Progress reporter threaded through the pipeline (writes the ExportJob row). */
+type ProgressFn = (pct: number, step: string) => Promise<void>;
+
+interface AudioWindow { from: number; to: number }
+
+function audioProgressMapper(
+  onProgress: ProgressFn,
+  window: AudioWindow
+): (info: AudioProgressInfo) => void {
+  return (info) => {
+    const pct = window.from + (window.to - window.from) * (info.index / info.total);
+    const step =
+      info.phase === "voice"
+        ? `Generating AI voice for scene ${info.index} of ${info.total}…`
+        : `Preparing audio for scene ${info.index} of ${info.total}…`;
+    void onProgress(pct, step);
+  };
+}
+
+// ─── Single-Scene pipeline (returns a payload; throws on failure) ─────────────
+
+async function runSingleSceneExport(
+  project: { id: string; title: string },
+  scene: { id: string; videoUrl: string | null; duration: number } & AudioScene,
+  qualityPreset: QualityPreset,
+  transitionDef: TransitionDef,
+  format: string,
+  withTitleCard: boolean,
+  includeAudio: boolean,
+  onProgress: ProgressFn
+): Promise<ExportSuccessPayload> {
+  const projectId = project.id;
+
+  await db.videoProject.update({
+    where: { id: projectId },
+    data: { status: "generating" },
+  });
+
+  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
+  await mkdir(workDir, { recursive: true });
+
+  try {
+    await onProgress(5, "Fetching your scene clip…");
+    const localPath = path.join(workDir, "scene_001.mp4");
+    // Local-first for app-relative URLs (/generated/...): node fetch can't
+    // fetch a relative path, so probe the file store directly instead of
+    // burning 3 retry cycles on unparseable URLs.
+    let sceneVideoPath = localPath;
+    if (scene.videoUrl!.startsWith("/")) {
+      const storeFile = resolvePublicAssetPath(scene.videoUrl!);
+      if (existsSync(storeFile)) {
+        sceneVideoPath = storeFile;
+        console.log("[Export] Using local file for scene 1");
+      }
+    }
+    if (sceneVideoPath === localPath) {
+      await downloadWithRetry(scene.videoUrl!, localPath);
+    }
+
+    const ext = format === "webm" ? "webm" : "mp4";
+    const timestamp = Date.now();
+    const outputFileName = `final_${projectId}_${timestamp}.${ext}`;
+    const outputPath = path.join(workDir, outputFileName);
+
+    // For single scene, xfade is not applicable — use simple re-encode
+    // Optionally prepend a title card via concat filter
+    let inputPaths = [sceneVideoPath];
+    let allDurations: number[] = [];
+
+    // Title card is rendered at the scene's own resolution; the transition
+    // graph normalizes both to that size.
+    const targetSize = await getVideoSize(sceneVideoPath);
+
+    if (withTitleCard && project.title) {
+      await onProgress(20, "Creating title card…");
+      const titleCardPath = await generateTitleCard(workDir, project.title, targetSize);
+      if (titleCardPath) {
+        const titleDur = await getVideoDuration(titleCardPath);
+        const sceneDur = await getVideoDuration(sceneVideoPath);
+        allDurations = [titleDur, sceneDur];
+        inputPaths = [titleCardPath, sceneVideoPath];
+      }
+    }
+    if (allDurations.length === 0) {
+      allDurations = [await getVideoDuration(sceneVideoPath)];
+    }
+
+    // ── Audio: narration + music for the single scene ──
+    const { audio: sceneAudio, summary } = await collectSceneAudio(
+      [scene],
+      includeAudio,
+      audioProgressMapper(onProgress, { from: 25, to: 48 })
+    );
+    const td = inputPaths.length > 1 ? transitionDef.duration : 0;
+    const isCut = td === 0;
+    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
+
+    let transitionFilter = "";
+    if (inputPaths.length > 1) {
+      transitionFilter = buildTransitionFilter(allDurations, transitionDef, targetSize);
+    }
+
+    await onProgress(50, "Encoding final video…");
+    const cmd = buildFfmpegCommand({
+      inputPaths,
+      audioPaths,
+      transitionFilter,
+      audioFilter,
+      quality: qualityPreset,
+      format,
+      outputPath,
+    });
+
+    console.log("[Export] Single scene. FFmpeg:", cmd.slice(0, 300));
+    const expectedTotal = expectedTimelineDuration(allDurations, td);
+    await runFfmpegWithProgress(
+      cmd,
+      expectedTotal,
+      (p) => { void onProgress(50 + 42 * (p / 100), "Encoding final video…"); },
+      300000
+    );
+
+    if (!existsSync(outputPath)) {
+      throw new Error("ffmpeg produced no output file");
+    }
+
+    // Copy final to the persistent generated store
+    await onProgress(94, "Saving final video…");
+    const finalPath = generatedFilePath(outputFileName);
+    const finalData = await readFile(outputPath);
+    await mkdir(path.dirname(finalPath), { recursive: true });
+    await writeFile(finalPath, finalData);
+
+    const finalVideoUrl = `/generated/${outputFileName}`;
+    const fileSize = statSync(finalPath).size;
+    const outputDuration = await getVideoDuration(outputPath);
+    const durationStr = formatDuration(outputDuration);
+
+    await db.videoProject.update({
+      where: { id: projectId },
+      data: { finalVideoUrl, status: "completed" },
+    });
+
+    try { await rm(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+
+    const audioNote = audioSummaryNote(summary);
+    return {
+      success: true,
+      finalVideoUrl,
+      sceneCount: 1,
+      fileSize,
+      duration: durationStr,
+      quality: qualityPreset.label,
+      transition: transitionDef.label,
+      format,
+      withTitleCard,
+      audio: summary,
+      message: `Single scene exported with ${qualityPreset.label} quality${audioNote}`,
+    };
+  } catch (err) {
+    try { await rm(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
+// ─── Multi-Scene pipeline (returns a payload; throws on failure) ──────────────
+
+async function runMultiSceneExport(
+  project: { id: string; title: string },
+  completedScenes: ({ id: string; videoUrl: string | null; duration: number } & AudioScene)[],
+  qualityPreset: QualityPreset,
+  transitionDef: TransitionDef,
+  format: string,
+  withTitleCard: boolean,
+  includeAudio: boolean,
+  onProgress: ProgressFn
+): Promise<ExportSuccessPayload> {
+  const projectId = project.id;
+
+  await db.videoProject.update({
+    where: { id: projectId },
+    data: { status: "generating" },
+  });
+
+  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
+  await mkdir(workDir, { recursive: true });
+
+  try {
+    // ── Step 1: Download all scene videos ─────────────────────────────────
+    console.log(`[Export] Downloading ${completedScenes.length} scene videos...`);
+    const localPaths: string[] = [];
+
+    for (let i = 0; i < completedScenes.length; i++) {
+      const scene = completedScenes[i];
+      const paddedNum = String(i + 1).padStart(3, "0");
+      const localPath = path.join(workDir, `scene_${paddedNum}.mp4`);
+
+      await onProgress(
+        5 + 20 * (i / completedScenes.length),
+        `Fetching scene clip ${i + 1} of ${completedScenes.length}…`
+      );
+
+      // Local-first for app-relative URLs (/generated/...): node fetch can't
+      // fetch a relative path, so probe the file store directly instead of
+      // burning 3 retry cycles on unparseable URLs.
+      const isRelativeUrl = scene.videoUrl!.startsWith("/");
+      if (isRelativeUrl) {
+        const storeFile = resolvePublicAssetPath(scene.videoUrl!);
+        if (existsSync(storeFile)) {
+          localPaths.push(storeFile);
+          console.log(`[Export] Using local file for scene ${i + 1}`);
+          continue;
+        }
+      }
+
+      try {
+        await downloadWithRetry(scene.videoUrl!, localPath);
+        localPaths.push(localPath);
+        console.log(`[Export] Downloaded scene ${i + 1}/${completedScenes.length}`);
+      } catch (dlErr) {
+        // Fallback: check for local file
+        const localFile = resolvePublicAssetPath(scene.videoUrl!);
+        if (existsSync(localFile)) {
+          localPaths.push(localFile);
+          console.log(`[Export] Using local file for scene ${i + 1}`);
+        } else {
+          console.error(`[Export] Failed to download scene ${i + 1}:`, dlErr);
+          throw new Error(`Could not download scene ${i + 1} video after retries`);
+        }
+      }
+
+      // Brief pause between downloads to reduce rate limiting
+      if (i < completedScenes.length - 1) {
+        await sleep(500);
+      }
+    }
+
+    if (localPaths.length < 2) {
+      throw new Error("Not enough video clips downloaded. Need at least 2 for multi-scene export.");
+    }
+
+    // ── Step 2: Probe durations ──────────────────────────────────────────
+    await onProgress(26, "Analyzing scene clips…");
+    console.log("[Export] Probing video durations...");
+    const durations: number[] = [];
+    for (let i = 0; i < localPaths.length; i++) {
+      const dur = await getVideoDuration(localPaths[i]);
+      durations.push(dur);
+      console.log(`[Export] Scene ${i + 1} duration: ${dur.toFixed(2)}s`);
+    }
+
+    // ── Step 3: Collect / auto-generate scene audio (voices + music) ─────
+    const { audio: sceneAudio, summary } = await collectSceneAudio(
+      completedScenes,
+      includeAudio,
+      audioProgressMapper(onProgress, { from: 30, to: 55 })
+    );
+
+    // ── Step 4: Optionally generate title card ────────────────────────────
+    const ext = format === "webm" ? "webm" : "mp4";
+    const timestamp = Date.now();
+    const outputFileName = `final_${projectId}_${timestamp}.${ext}`;
+    const outputPath = path.join(workDir, outputFileName);
+
+    let inputPaths = [...localPaths];
+    let allDurations = [...durations];
+
+    // All inputs are normalized to the first scene's resolution (see
+    // buildTransitionFilter) — the title card is rendered at that size too.
+    const targetSize = await getVideoSize(localPaths[0]);
+
+    if (withTitleCard && project.title) {
+      await onProgress(56, "Creating title card…");
+      const titleCardPath = await generateTitleCard(workDir, project.title, targetSize);
+      if (titleCardPath) {
+        const titleDur = await getVideoDuration(titleCardPath);
+        inputPaths = [titleCardPath, ...localPaths];
+        allDurations = [titleDur, ...durations];
+        console.log(`[Export] Title card added (${titleDur.toFixed(2)}s)`);
+      }
+    }
+
+    // ── Step 5: Build transition + audio filters ─────────────────────────
+    await onProgress(58, "Building transitions…");
+    const transitionFilter = buildTransitionFilter(allDurations, transitionDef, targetSize);
+    const td = transitionDef.duration;
+    const isCut = td === 0;
+    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
+
+    // ── Step 6: Build & run ffmpeg ──────────────────────────────────────
+    const ffmpegCmd = buildFfmpegCommand({
+      inputPaths,
+      audioPaths,
+      transitionFilter,
+      audioFilter,
+      quality: qualityPreset,
+      format,
+      outputPath,
+    });
+
+    console.log("[Export] Running ffmpeg command...");
+    console.log("[Export] Command:", ffmpegCmd.slice(0, 500));
+    const expectedTotal = expectedTimelineDuration(allDurations, td);
+    await runFfmpegWithProgress(
+      ffmpegCmd,
+      expectedTotal,
+      (p) => { void onProgress(60 + 32 * (p / 100), "Encoding final video…"); },
+      600000
+    );
+
+    if (!existsSync(outputPath)) {
+      throw new Error("ffmpeg export produced no output file");
+    }
+
+    // ── Step 7: Copy to the persistent generated store ───────────────
+    await onProgress(94, "Saving final video…");
+    const finalPath = generatedFilePath(outputFileName);
+    const finalData = await readFile(outputPath);
+    await mkdir(path.dirname(finalPath), { recursive: true });
+    await writeFile(finalPath, finalData);
+
+    const finalVideoUrl = `/generated/${outputFileName}`;
+
+    // ── Step 8: Gather output stats ──────────────────────────────────
+    const fileSize = statSync(finalPath).size;
+    const outputDuration = await getVideoDuration(outputPath);
+    const durationStr = formatDuration(outputDuration);
+
+    // ── Step 9: Update project ───────────────────────────────────────
+    await db.videoProject.update({
+      where: { id: projectId },
+      data: { finalVideoUrl, status: "completed" },
+    });
+
+    // ── Step 10: Cleanup ───────────────────────────────────────────────
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+
+    // ── Step 11: Return success ──────────────────────────────────────
+    const audioNote = audioSummaryNote(summary);
+    return {
+      success: true,
+      finalVideoUrl,
+      sceneCount: completedScenes.length,
+      fileSize,
+      duration: durationStr,
+      quality: qualityPreset.label,
+      transition: transitionDef.label,
+      format,
+      withTitleCard,
+      audio: summary,
+      message: `Video exported successfully! (${completedScenes.length} scenes, ${durationStr}, ${qualityPreset.label}, ${transitionDef.label}${audioNote})`,
+    };
+  } catch (err) {
+    try {
+      await rm(workDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+}
+
+// ─── Background job orchestration ──────────────────────────────────────────────
+
+function friendlyExportError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/download scene|clips? downloaded/i.test(msg)) {
+    return "Couldn't download one of the scene clips after several retries. Please wait a moment and try exporting again.";
+  }
+  if (/not enough video clips/i.test(msg)) {
+    return "Not enough scene clips were available to merge. Please try exporting again.";
+  }
+  if (/title card/i.test(msg)) {
+    return "Failed to create the title card. Try exporting without it.";
+  }
+  if (/terminated by signal/i.test(msg)) {
+    // Typically the OOM killer — 4K/veryslow encodes are memory-hungry
+    return "Video encoding was stopped (server memory limit reached). Please use the 1080p Standard or 720p Draft quality preset.";
+  }
+  if (/timed out/i.test(msg)) {
+    return "Video encoding timed out. Try a lower quality preset (1080p Standard or 720p Draft).";
+  }
+  if (/ffmpeg|encoding|exited with code|produced no output/i.test(msg)) {
+    return "Video encoding failed. Try a lower quality preset, or re-export in a minute.";
+  }
+  return "Export failed unexpectedly. Please try again.";
+}
+
+/**
+ * Execute an export job in the background. All errors are captured into the
+ * job row — this function never rejects.
+ */
+async function runExportJob(jobId: string): Promise<void> {
+  let projectId = "";
+  try {
+    const job = await db.exportJob.findUnique({ where: { id: jobId } });
+    if (!job || job.status === "done" || job.status === "failed") return;
+    projectId = job.projectId;
+
+    const params: Record<string, unknown> = job.params
+      ? (() => { try { return JSON.parse(job.params); } catch { return {}; } })()
+      : {};
+
+    const qualityPreset = QUALITY_PRESETS[String(params.quality ?? "standard")] ?? QUALITY_PRESETS.standard;
+    const transitionDef = TRANSITIONS[String(params.transition ?? "fade")] ?? TRANSITIONS.fade;
+    const format = String(params.format ?? "mp4") === "webm" ? "webm" : "mp4";
+    const withTitleCard = params.withTitleCard === true;
+    const includeAudio = params.includeAudio !== false; // default true
+
+    const project = await db.videoProject.findUnique({
+      where: { id: job.projectId },
+      include: { scenes: { orderBy: { sceneNumber: "asc" } } },
+    });
+    if (!project) throw new Error("Project not found");
+
+    const completedScenes = project.scenes.filter((s) => s.videoUrl);
+    if (completedScenes.length === 0) throw new Error("No completed video scenes to export");
+
+    // Heartbeat: keeps updatedAt fresh so the status endpoint can tell a live
+    // job from a dead one (server restart / crash) even during long ffmpeg runs.
+    const heartbeat = setInterval(() => {
+      db.exportJob
+        .update({ where: { id: jobId }, data: { updatedAt: new Date() } })
+        .catch(() => { /* heartbeat failures are non-fatal */ });
+    }, 10_000);
+
+    // Throttled progress writer — only persist when the numbers actually move.
+    let lastPct = -1;
+    let lastStep = "";
+    const onProgress: ProgressFn = async (pct, step) => {
+      const rounded = Math.max(0, Math.min(99, Math.round(pct)));
+      if (rounded === lastPct && step === lastStep) return;
+      lastPct = rounded;
+      lastStep = step;
+      try {
+        await db.exportJob.update({
+          where: { id: jobId },
+          data: { status: "running", progress: rounded, step, updatedAt: new Date() },
+        });
+      } catch { /* progress writes must never kill the export */ }
+    };
+
+    try {
+      await db.exportJob.update({
+        where: { id: jobId },
+        data: { status: "running", progress: 2, step: "Preparing export…", updatedAt: new Date() },
+      });
+
+      const payload = completedScenes.length === 1
+        ? await runSingleSceneExport(
+            { id: project.id, title: project.title },
+            completedScenes[0],
+            qualityPreset, transitionDef, format, withTitleCard, includeAudio,
+            onProgress
+          )
+        : await runMultiSceneExport(
+            { id: project.id, title: project.title },
+            completedScenes,
+            qualityPreset, transitionDef, format, withTitleCard, includeAudio,
+            onProgress
+          );
+
+      await db.exportJob.update({
+        where: { id: jobId },
+        data: {
+          status: "done",
+          progress: 100,
+          step: "Complete",
+          result: JSON.stringify(payload),
+          error: null,
+          updatedAt: new Date(),
+        },
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
+  } catch (err) {
+    console.error(`[Export] Job ${jobId} failed:`, err);
+    const friendly = friendlyExportError(err);
+    try {
+      await db.exportJob.update({
+        where: { id: jobId },
+        data: { status: "failed", step: "Failed", error: friendly, updatedAt: new Date() },
+      });
+    } catch { /* ignore */ }
+    if (projectId) {
+      await db.videoProject
+        .update({ where: { id: projectId }, data: { status: "failed" } })
+        .catch(() => { /* ignore */ });
+    }
+  }
+}
+
+// ─── Route: POST — validate fast, create job, run in background ───────────────
 
 export async function POST(req: NextRequest) {
   try {
-    // ── Auth check ─────────────────────────────────────────────────────
     const body = await req.json();
     const { projectId } = body;
     if (!projectId) {
@@ -678,361 +1264,178 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Single-scene shortcut ────────────────────────────────────────────
-    if (completedScenes.length === 1) {
-      return await handleSingleSceneExport(
-        project,
-        completedScenes[0],
-        qualityPreset,
-        transitionDef,
-        format,
-        withTitleCard,
-        includeAudio
+    // ── Reuse / clean up a previous active job for this project ──────────
+    const activeJob = await db.exportJob.findFirst({
+      where: { projectId, status: { in: ["queued", "running"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (activeJob) {
+      const isFresh = Date.now() - activeJob.updatedAt.getTime() < STALE_JOB_MS;
+      if (isFresh) {
+        // An export is already running — attach to it instead of starting a
+        // second one (double-click / retry protection).
+        return NextResponse.json({
+          success: true,
+          jobId: activeJob.id,
+          resumed: true,
+          progress: activeJob.progress,
+          step: activeJob.step,
+        });
+      }
+      // Stale: the server likely restarted mid-export. Mark it failed so the
+      // UI can show a clean error instead of polling forever.
+      await db.exportJob
+        .update({
+          where: { id: activeJob.id },
+          data: {
+            status: "failed",
+            step: "Failed",
+            error: "Export was interrupted (the server may have restarted). Please try again.",
+            updatedAt: new Date(),
+          },
+        })
+        .catch(() => { /* ignore */ });
+    }
+
+    // ── Create the job and kick off the pipeline in the background ───────
+    // The response returns immediately (~<1s) so gateway/proxy timeouts
+    // (Cloudflare 524, nginx proxy_read_timeout) can never kill an export.
+    const job = await db.exportJob.create({
+      data: {
+        projectId,
+        userId:
+          authResult.session.userId && authResult.session.userId !== "guest"
+            ? authResult.session.userId
+            : null,
+        status: "queued",
+        progress: 0,
+        step: "Queued",
+        params: JSON.stringify({ quality, transition, format, withTitleCard, includeAudio }),
+      },
+    });
+
+    void runExportJob(job.id);
+
+    return NextResponse.json({ success: true, jobId: job.id });
+  } catch (error) {
+    console.error("[Export] Failed to start export:", error);
+    return NextResponse.json(
+      { success: false, error: "Failed to start export" },
+      { status: 500 }
+    );
+  }
+}
+
+// ─── Route: GET — poll job status ──────────────────────────────────────────────
+
+function serializeJob(job: {
+  id: string; projectId: string; status: string; progress: number; step: string;
+  error: string | null; result: string | null; createdAt: Date; updatedAt: Date;
+}) {
+  let message: string | null = null;
+  let finalVideoUrl: string | null = null;
+  let audio: ExportAudioSummary | null = null;
+  if (job.result) {
+    try {
+      const parsed = JSON.parse(job.result) as Partial<ExportSuccessPayload>;
+      message = parsed.message ?? null;
+      finalVideoUrl = parsed.finalVideoUrl ?? null;
+      audio = parsed.audio ?? null;
+    } catch { /* corrupt result JSON — treat as no payload */ }
+  }
+  return {
+    jobId: job.id,
+    projectId: job.projectId,
+    status: job.status,
+    progress: job.progress,
+    step: job.step,
+    error: job.error,
+    message,
+    finalVideoUrl,
+    audio,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Mark a job as failed if its heartbeat went silent (server restart, crash,
+ * dev hot reload) — otherwise the client would poll a zombie forever.
+ */
+async function reapStaleJob(job: {
+  id: string; status: string; updatedAt: Date;
+}): Promise<{ status: string; step: string; error: string | null }> {
+  const error = "Export was interrupted (the server may have restarted). Please try again.";
+  const failed = { status: "failed", step: "Failed", error };
+  try {
+    await db.exportJob.update({
+      where: { id: job.id },
+      data: { ...failed, updatedAt: new Date() },
+    });
+  } catch { /* ignore */ }
+  return failed;
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const jobId = searchParams.get("jobId");
+    const projectIdParam = searchParams.get("projectId");
+
+    let projectId = projectIdParam;
+    let job = null;
+
+    if (jobId) {
+      job = await db.exportJob.findUnique({ where: { id: jobId } });
+      if (!job) {
+        return NextResponse.json(
+          { success: false, error: "Export job not found" },
+          { status: 404 }
+        );
+      }
+      projectId = job.projectId;
+    }
+
+    if (!projectId) {
+      return NextResponse.json(
+        { success: false, error: "jobId or projectId is required" },
+        { status: 400 }
       );
     }
 
-    // ── Multi-scene export ───────────────────────────────────────────────
-    return await handleMultiSceneExport(
-      project,
-      completedScenes,
-      qualityPreset,
-      transitionDef,
-      format,
-      withTitleCard,
-      includeAudio
-    );
+    const authResult = await requireProjectAccess(projectId, false);
+    if (!authResult.ok) return authResult.response;
+
+    if (!job) {
+      job = await db.exportJob.findFirst({
+        where: { projectId },
+        orderBy: { createdAt: "desc" },
+      });
+    }
+
+    if (!job) {
+      return NextResponse.json({ success: true, job: null });
+    }
+
+    let { status, step, error } = job;
+    if (
+      (status === "queued" || status === "running") &&
+      Date.now() - job.updatedAt.getTime() > STALE_JOB_MS
+    ) {
+      const failed = await reapStaleJob(job);
+      status = failed.status;
+      step = failed.step;
+      error = failed.error;
+    }
+
+    return NextResponse.json({
+      success: true,
+      job: { ...serializeJob(job), status, step, error },
+    });
   } catch (error) {
-    console.error("[Export] Unhandled error:", error);
+    console.error("[Export] Status check failed:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to export video" },
-      { status: 500 }
-    );
-  }
-}
-
-// ─── Single-Scene Export ────────────────────────────────────────────────────────
-
-async function handleSingleSceneExport(
-  project: { id: string; title: string },
-  scene: { id: string; videoUrl: string | null; duration: number } & AudioScene,
-  qualityPreset: QualityPreset,
-  transitionDef: TransitionDef,
-  format: string,
-  withTitleCard: boolean,
-  includeAudio: boolean
-) {
-  const projectId = project.id;
-
-  await db.videoProject.update({
-    where: { id: projectId },
-    data: { status: "generating" },
-  });
-
-  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
-  await mkdir(workDir, { recursive: true });
-
-  try {
-    const localPath = path.join(workDir, "scene_001.mp4");
-    // Local-first for app-relative URLs (/generated/...): node fetch can't
-    // fetch a relative path, so probe the file store directly instead of
-    // burning 3 retry cycles on unparseable URLs.
-    let sceneVideoPath = localPath;
-    if (scene.videoUrl!.startsWith("/")) {
-      const storeFile = resolvePublicAssetPath(scene.videoUrl!);
-      if (existsSync(storeFile)) {
-        sceneVideoPath = storeFile;
-        console.log("[Export] Using local file for scene 1");
-      }
-    }
-    if (sceneVideoPath === localPath) {
-      await downloadWithRetry(scene.videoUrl!, localPath);
-    }
-
-    const ext = format === "webm" ? "webm" : "mp4";
-    const timestamp = Date.now();
-    const outputFileName = `final_${projectId}_${timestamp}.${ext}`;
-    const outputPath = path.join(workDir, outputFileName);
-
-    // For single scene, xfade is not applicable — use simple re-encode
-    // Optionally prepend a title card via concat filter
-    let inputPaths = [sceneVideoPath];
-    let allDurations: number[] = [];
-
-    // Title card is rendered at the scene's own resolution; the transition
-    // graph normalizes both to that size.
-    const targetSize = await getVideoSize(sceneVideoPath);
-
-    if (withTitleCard && project.title) {
-      const titleCardPath = await generateTitleCard(workDir, project.title, targetSize);
-      if (titleCardPath) {
-        const titleDur = await getVideoDuration(titleCardPath);
-        const sceneDur = await getVideoDuration(sceneVideoPath);
-        allDurations = [titleDur, sceneDur];
-        inputPaths = [titleCardPath, sceneVideoPath];
-      }
-    }
-    if (allDurations.length === 0) {
-      allDurations = [await getVideoDuration(sceneVideoPath)];
-    }
-
-    // ── Audio: narration + music for the single scene ──
-    const { audio: sceneAudio, summary } = await collectSceneAudio([scene], includeAudio);
-    const td = inputPaths.length > 1 ? transitionDef.duration : 0;
-    const isCut = td === 0;
-    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
-
-    let transitionFilter = "";
-    if (inputPaths.length > 1) {
-      transitionFilter = buildTransitionFilter(allDurations, transitionDef, targetSize);
-    }
-
-    const cmd = buildFfmpegCommand({
-      inputPaths,
-      audioPaths,
-      transitionFilter,
-      audioFilter,
-      quality: qualityPreset,
-      format,
-      outputPath,
-    });
-
-    console.log("[Export] Single scene. FFmpeg:", cmd.slice(0, 300));
-    await execAsync(cmd, { timeout: 300000 });
-
-    if (!existsSync(outputPath)) {
-      throw new Error("ffmpeg produced no output file");
-    }
-
-    // Copy final to the persistent generated store
-    const finalPath = generatedFilePath(outputFileName);
-    const finalData = await readFile(outputPath);
-    await mkdir(path.dirname(finalPath), { recursive: true });
-    await writeFile(finalPath, finalData);
-
-    const finalVideoUrl = `/generated/${outputFileName}`;
-    const fileSize = statSync(finalPath).size;
-    const outputDuration = await getVideoDuration(outputPath);
-    const durationStr = formatDuration(outputDuration);
-
-    await db.videoProject.update({
-      where: { id: projectId },
-      data: { finalVideoUrl, status: "completed" },
-    });
-
-    try { await rm(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
-
-    const audioNote = audioSummaryNote(summary);
-    return NextResponse.json({
-      success: true,
-      finalVideoUrl,
-      sceneCount: 1,
-      fileSize,
-      duration: durationStr,
-      quality: qualityPreset.label,
-      transition: transitionDef.label,
-      format,
-      withTitleCard,
-      audio: summary,
-      message: `Single scene exported with ${qualityPreset.label} quality${audioNote}`,
-    });
-  } catch (err) {
-    console.error("[Export] Single-scene export failed:", err);
-    try { await rm(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
-    return NextResponse.json(
-      { success: false, error: "Failed to export video" },
-      { status: 500 }
-    );
-  }
-}
-
-// ─── Multi-Scene Export ─────────────────────────────────────────────────────────
-
-async function handleMultiSceneExport(
-  project: { id: string; title: string },
-  completedScenes: ({ id: string; videoUrl: string | null; duration: number } & AudioScene)[],
-  qualityPreset: QualityPreset,
-  transitionDef: TransitionDef,
-  format: string,
-  withTitleCard: boolean,
-  includeAudio: boolean
-) {
-  const projectId = project.id;
-
-  await db.videoProject.update({
-    where: { id: projectId },
-    data: { status: "generating" },
-  });
-
-  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
-  await mkdir(workDir, { recursive: true });
-
-  try {
-    // ── Step 1: Download all scene videos ─────────────────────────────────
-    console.log(`[Export] Downloading ${completedScenes.length} scene videos...`);
-    const localPaths: string[] = [];
-
-    for (let i = 0; i < completedScenes.length; i++) {
-      const scene = completedScenes[i];
-      const paddedNum = String(i + 1).padStart(3, "0");
-      const localPath = path.join(workDir, `scene_${paddedNum}.mp4`);
-
-      // Local-first for app-relative URLs (/generated/...): node fetch can't
-      // fetch a relative path, so probe the file store directly instead of
-      // burning 3 retry cycles on unparseable URLs.
-      const isRelativeUrl = scene.videoUrl!.startsWith("/");
-      if (isRelativeUrl) {
-        const storeFile = resolvePublicAssetPath(scene.videoUrl!);
-        if (existsSync(storeFile)) {
-          localPaths.push(storeFile);
-          console.log(`[Export] Using local file for scene ${i + 1}`);
-          continue;
-        }
-      }
-
-      try {
-        await downloadWithRetry(scene.videoUrl!, localPath);
-        localPaths.push(localPath);
-        console.log(`[Export] Downloaded scene ${i + 1}/${completedScenes.length}`);
-      } catch (dlErr) {
-        // Fallback: check for local file
-        const localFile = resolvePublicAssetPath(scene.videoUrl!);
-        if (existsSync(localFile)) {
-          localPaths.push(localFile);
-          console.log(`[Export] Using local file for scene ${i + 1}`);
-        } else {
-          console.error(`[Export] Failed to download scene ${i + 1}:`, dlErr);
-          throw new Error(`Could not download scene ${i + 1} video after retries`);
-        }
-      }
-
-      // Brief pause between downloads to reduce rate limiting
-      if (i < completedScenes.length - 1) {
-        await sleep(500);
-      }
-    }
-
-    if (localPaths.length < 2) {
-      throw new Error("Not enough video clips downloaded. Need at least 2 for multi-scene export.");
-    }
-
-    // ── Step 2: Probe durations ──────────────────────────────────────────
-    console.log("[Export] Probing video durations...");
-    const durations: number[] = [];
-    for (let i = 0; i < localPaths.length; i++) {
-      const dur = await getVideoDuration(localPaths[i]);
-      durations.push(dur);
-      console.log(`[Export] Scene ${i + 1} duration: ${dur.toFixed(2)}s`);
-    }
-
-    // ── Step 3: Collect / auto-generate scene audio (voices + music) ─────
-    const { audio: sceneAudio, summary } = await collectSceneAudio(completedScenes, includeAudio);
-
-    // ── Step 4: Optionally generate title card ────────────────────────────
-    const ext = format === "webm" ? "webm" : "mp4";
-    const timestamp = Date.now();
-    const outputFileName = `final_${projectId}_${timestamp}.${ext}`;
-    const outputPath = path.join(workDir, outputFileName);
-
-    let inputPaths = [...localPaths];
-    let allDurations = [...durations];
-
-    // All inputs are normalized to the first scene's resolution (see
-    // buildTransitionFilter) — the title card is rendered at that size too.
-    const targetSize = await getVideoSize(localPaths[0]);
-
-    if (withTitleCard && project.title) {
-      const titleCardPath = await generateTitleCard(workDir, project.title, targetSize);
-      if (titleCardPath) {
-        const titleDur = await getVideoDuration(titleCardPath);
-        inputPaths = [titleCardPath, ...localPaths];
-        allDurations = [titleDur, ...durations];
-        console.log(`[Export] Title card added (${titleDur.toFixed(2)}s)`);
-      }
-    }
-
-    // ── Step 5: Build transition + audio filters ─────────────────────────
-    const transitionFilter = buildTransitionFilter(allDurations, transitionDef, targetSize);
-    const td = transitionDef.duration;
-    const isCut = td === 0;
-    const { audioPaths, audioFilter } = assembleAudioGraph(allDurations, sceneAudio, td, isCut);
-
-    // ── Step 6: Build & run ffmpeg ──────────────────────────────────────
-    const ffmpegCmd = buildFfmpegCommand({
-      inputPaths,
-      audioPaths,
-      transitionFilter,
-      audioFilter,
-      quality: qualityPreset,
-      format,
-      outputPath,
-    });
-
-    console.log("[Export] Running ffmpeg command...");
-    console.log("[Export] Command:", ffmpegCmd.slice(0, 500));
-    await execAsync(ffmpegCmd, { timeout: 600000 });
-
-    if (!existsSync(outputPath)) {
-      throw new Error("ffmpeg export produced no output file");
-    }
-
-    // ── Step 7: Copy to the persistent generated store ───────────────
-    const finalPath = generatedFilePath(outputFileName);
-    const finalData = await readFile(outputPath);
-    await mkdir(path.dirname(finalPath), { recursive: true });
-    await writeFile(finalPath, finalData);
-
-    const finalVideoUrl = `/generated/${outputFileName}`;
-
-    // ── Step 8: Gather output stats ──────────────────────────────────
-    const fileSize = statSync(finalPath).size;
-    const outputDuration = await getVideoDuration(outputPath);
-    const durationStr = formatDuration(outputDuration);
-
-    // ── Step 9: Update project ───────────────────────────────────────
-    await db.videoProject.update({
-      where: { id: projectId },
-      data: { finalVideoUrl, status: "completed" },
-    });
-
-    // ── Step 10: Cleanup ───────────────────────────────────────────────
-    try {
-      await rm(workDir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-
-    // ── Step 11: Return success ──────────────────────────────────────
-    const audioNote = audioSummaryNote(summary);
-    return NextResponse.json({
-      success: true,
-      finalVideoUrl,
-      sceneCount: completedScenes.length,
-      fileSize,
-      duration: durationStr,
-      quality: qualityPreset.label,
-      transition: transitionDef.label,
-      format,
-      withTitleCard,
-      audio: summary,
-      message: `Video exported successfully! (${completedScenes.length} scenes, ${durationStr}, ${qualityPreset.label}, ${transitionDef.label}${audioNote})`,
-    });
-  } catch (err) {
-    try {
-      await rm(workDir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-
-    console.error("[Export] Export failed:", err);
-
-    await db.videoProject.update({
-      where: { id: projectId },
-      data: { status: "failed" },
-    });
-
-    return NextResponse.json(
-      { success: false, error: "Failed to export video" },
+      { success: false, error: "Failed to check export status" },
       { status: 500 }
     );
   }
