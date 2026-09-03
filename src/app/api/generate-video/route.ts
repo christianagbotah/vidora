@@ -42,28 +42,13 @@ async function createSceneTask(
     imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null;
   },
   videoSize: string,
-  thumbSize: string,
   origin: string
 ): Promise<string | null> {
   const scenePrompt = scene.enhancedPrompt || scene.prompt;
 
-  // Generate thumbnail only if scene doesn't have one
-  if (!scene.imageUrl) {
-    try {
-      const imageBase64 = await zai.generateImage({
-        prompt: scenePrompt,
-        size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
-        retry: { label: `Scene ${scene.sceneNumber} thumbnail`, timeoutMs: 120_000, maxRetries: 4 },
-      });
-      const buffer = Buffer.from(imageBase64, "base64");
-      const filename = `thumb_${Date.now()}_${scene.sceneNumber}.png`;
-      const imageUrl = await saveGeneratedFile(filename, buffer);
-      await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl } });
-      console.log(`Scene ${scene.sceneNumber}: thumbnail saved`);
-    } catch (imgErr) {
-      console.error(`Scene ${scene.sceneNumber}: thumbnail failed (non-fatal)`, imgErr);
-    }
-  }
+  // NOTE: thumbnails are generated AFTER task creation (in a parallel
+  // background pass) — the video task does not depend on them, and
+  // generating them inline delayed each task by 30-60s.
 
   // Determine reference image URL — must be absolute so the ZAI API
   // can fetch it (local /generated/... paths are unreachable).
@@ -102,6 +87,31 @@ async function createSceneTask(
   });
   console.log(`Scene ${scene.sceneNumber}: video task ${taskId} created`);
   return taskId;
+}
+
+/** Generate thumbnails for scenes that are missing one — runs in parallel
+ * with the polling phase (non-fatal on failure). */
+async function generateMissingThumbnails(
+  scenes: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; imageUrl?: string | null }[],
+  thumbSize: string
+): Promise<void> {
+  for (const scene of scenes) {
+    if (scene.imageUrl) continue;
+    try {
+      const imageBase64 = await zai.generateImage({
+        prompt: scene.enhancedPrompt || scene.prompt,
+        size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
+        retry: { label: `Scene ${scene.sceneNumber} thumbnail`, timeoutMs: 120_000, maxRetries: 4 },
+      });
+      const buffer = Buffer.from(imageBase64, "base64");
+      const filename = `thumb_${Date.now()}_${scene.sceneNumber}.png`;
+      const imageUrl = await saveGeneratedFile(filename, buffer);
+      await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl } });
+      console.log(`Scene ${scene.sceneNumber}: thumbnail saved`);
+    } catch (imgErr) {
+      console.error(`Scene ${scene.sceneNumber}: thumbnail failed (non-fatal)`, imgErr);
+    }
+  }
 }
 
 async function pollTaskUntilDone(
@@ -274,7 +284,7 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < scenesToProcess.length; i++) {
           const scene = scenesToProcess[i];
           try {
-            const taskId = await createSceneTask(scene, videoSize, thumbSize, origin);
+            const taskId = await createSceneTask(scene, videoSize, origin);
             if (taskId) {
               taskIds.push({ sceneId: scene.id, sceneNumber: scene.sceneNumber, taskId });
             }
@@ -309,6 +319,12 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // Phase 1.5: Generate missing thumbnails IN PARALLEL with polling —
+        // the video tasks are already running, so the thumbnails just fill
+        // in the scene previews while we wait.
+        const thumbnailPromise = generateMissingThumbnails(scenesToProcess, thumbSize)
+          .catch((e) => console.error("Thumbnail pass crashed (non-fatal):", e));
+
         // Phase 2: Poll for completion sequentially
         console.log(`Project ${projectId}: ${taskIds.length} tasks created, polling...`);
         for (const entry of taskIds) {
@@ -324,6 +340,10 @@ export async function POST(req: NextRequest) {
           }
           await sleep(3_000);
         }
+
+        // Make sure the parallel thumbnail pass finished before the
+        // final status updates below (it's non-fatal either way).
+        await thumbnailPromise;
 
         // Phase 3: Update project status
         const allScenes = await db.videoScene.findMany({ where: { projectId } });

@@ -142,7 +142,8 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Background worker: thumbnail → video task → poll → DB updates. */
+/** Background worker: video task FIRST (starts generating in seconds),
+ * then thumbnail in parallel while the video renders, then poll. */
 async function runSceneGeneration(opts: {
   prompt: string;
   sceneId: string;
@@ -153,31 +154,10 @@ async function runSceneGeneration(opts: {
 }): Promise<void> {
   const { prompt, sceneId, duration, videoSize, thumbSize, referenceImage } = opts;
 
-  // Step 1: Generate thumbnail image if scene doesn't have one
-  let imageUrl: string | null = null;
-  const sceneData = await db.videoScene.findUnique({
-    where: { id: sceneId },
-    select: { imageUrl: true },
-  });
-  if (!sceneData?.imageUrl) {
-    try {
-      const imageBase64 = await zai.generateImage({
-        prompt,
-        size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
-        retry: { label: "Thumbnail generation", timeoutMs: 120_000, maxRetries: 4 },
-      });
-      const buffer = Buffer.from(imageBase64, "base64");
-      const filename = `thumb_${Date.now()}_${sceneId.slice(0, 8)}.png`;
-      imageUrl = await saveGeneratedFile(filename, buffer);
-      await db.videoScene.update({ where: { id: sceneId }, data: { imageUrl } });
-    } catch (imgErr) {
-      console.error("Thumbnail generation failed (non-fatal):", imgErr);
-    }
-  } else {
-    imageUrl = sceneData.imageUrl;
-  }
-
-  // Step 2: Create video generation task
+  // Step 1: Create the video generation task FIRST — this is the moment
+  // "generation actually starts" (a few seconds). The thumbnail is NOT an
+  // input to the video task, so it runs in parallel below instead of
+  // blocking task creation for 30-60s.
   let taskId: string;
   try {
     taskId = await zai.generateVideo({
@@ -209,6 +189,30 @@ async function runSceneGeneration(opts: {
     where: { id: sceneId },
     data: { taskId, status: "generating", errorMessage: null },
   });
+
+  // Step 2: Generate thumbnail in parallel (fire-and-forget) — it fills in
+  // the scene preview while the video renders. Non-fatal on failure.
+  const sceneData = await db.videoScene.findUnique({
+    where: { id: sceneId },
+    select: { imageUrl: true },
+  });
+  if (!sceneData?.imageUrl) {
+    void (async () => {
+      try {
+        const imageBase64 = await zai.generateImage({
+          prompt,
+          size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
+          retry: { label: "Thumbnail generation", timeoutMs: 120_000, maxRetries: 4 },
+        });
+        const buffer = Buffer.from(imageBase64, "base64");
+        const filename = `thumb_${Date.now()}_${sceneId.slice(0, 8)}.png`;
+        const imageUrl = await saveGeneratedFile(filename, buffer);
+        await db.videoScene.update({ where: { id: sceneId }, data: { imageUrl } });
+      } catch (imgErr) {
+        console.error("Thumbnail generation failed (non-fatal):", imgErr);
+      }
+    })();
+  }
 
   // Step 3: Poll for video result (background — no HTTP timeout applies)
   const result = await zai.pollVideoTask({

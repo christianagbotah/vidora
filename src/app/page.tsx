@@ -531,7 +531,7 @@ function SortableSceneCard({
   scene, sceneIndex, totalScenes, projectStyle,
   onPreview, onGenerate, onRetry, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
-  isGeneratingNarration,
+  isGeneratingNarration, isGeneratingScene,
   onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
@@ -546,6 +546,7 @@ function SortableSceneCard({
   onCameraChange: (id: string, camera: string) => void;
   onLightingChange: (id: string, lighting: string) => void;
   isGeneratingNarration: boolean;
+  isGeneratingScene: boolean;
   onSetMusic: (sceneId: string, trackUrl: string | null, volume: number) => void;
   onGenerateSubtitles: (sceneId: string) => void;
   onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
@@ -563,6 +564,8 @@ function SortableSceneCard({
 
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [narrationVoice, setNarrationVoice] = useState(scene.narrationVoice || "tongtong");
+
+  const generating = isGeneratingScene || scene.status === "generating";
 
   const statusColor = scene.status === "completed"
     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -674,11 +677,14 @@ function SortableSceneCard({
                         /* Clickable thumbnail preview */
                         <button
                           onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
-                          className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors"
+                          disabled={generating}
+                          className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors disabled:cursor-default"
                         >
                           <img src={scene.imageUrl} alt="" className="w-full aspect-video object-cover" />
                           <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/preview:bg-black/40 transition-colors">
-                            <Play className="h-8 w-8 text-white drop-shadow-lg" />
+                            {generating
+                              ? <Loader2 className="h-8 w-8 text-white drop-shadow-lg animate-spin" />
+                              : <Play className="h-8 w-8 text-white drop-shadow-lg" />}
                           </div>
                         </button>
                       ) : (
@@ -705,7 +711,7 @@ function SortableSceneCard({
                         </div>
                       )}
                       {/* Progress spinner */}
-                      {scene.status === "generating" && (
+                      {generating && (
                         <div className="mt-2 flex items-center gap-2 text-xs text-violet-500">
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           <span>Generating video...</span>
@@ -717,7 +723,7 @@ function SortableSceneCard({
                     <div className="flex-1 min-w-0">
                       {/* Actions */}
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {!scene.videoUrl && scene.status !== "generating" && (
+                        {!scene.videoUrl && !generating && (
                           <Button
                             size="sm" variant="outline" className="h-7 text-xs px-2.5"
                             onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
@@ -725,7 +731,12 @@ function SortableSceneCard({
                             <Play className="h-3.5 w-3.5 mr-1" />Generate Video
                           </Button>
                         )}
-                        {scene.status === "failed" && (
+                        {generating && !scene.videoUrl && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs px-2.5" disabled>
+                            <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Generating...
+                          </Button>
+                        )}
+                        {scene.status === "failed" && !generating && (
                           <div className="flex items-center gap-1">
                             <Button
                               size="sm" variant="outline" className="h-7 text-xs px-2.5"
@@ -1625,14 +1636,15 @@ function VidoraApp() {
     } catch { /* silent */ }
   }, [currentProject, setCurrentProject]);
 
-  // Auto-refresh project data — every 5s while videos are generating (so the
-  // lock overlay progress stays live), otherwise every 15s
+  // Auto-refresh project data — every 5s while videos are generating (batch
+  // lock OR any single scene in "generating" state, so the timeline cards
+  // stay live), otherwise every 15s
   useEffect(() => {
     if (currentView !== "studio" || !currentProject) return;
-    const intervalMs = generationActive ? 5_000 : 15_000;
+    const intervalMs = generationActive || isAnyGenerating ? 5_000 : 15_000;
     const interval = setInterval(refreshProject, intervalMs);
     return () => clearInterval(interval);
-  }, [currentView, currentProject, refreshProject, generationActive]);
+  }, [currentView, currentProject, refreshProject, generationActive, isAnyGenerating]);
 
   // Load projects on mount — then signal the global preloader that the
   // initial critical data fetch has resolved so it can dismiss.
@@ -1900,6 +1912,15 @@ function VidoraApp() {
   const handleGenerateSingle = async (sceneId: string, prompt: string) => {
     if (!currentProject) return;
     setGeneratingScenes((prev) => new Set(prev).add(sceneId));
+    // Optimistic flip — the scene badge + spinner react instantly instead
+    // of waiting for the next project refresh.
+    setCurrentProject({
+      ...currentProject,
+      scenes: currentProject.scenes.map((s) =>
+        s.id === sceneId ? { ...s, status: "generating", errorMessage: null } : s
+      ),
+    });
+    toast({ title: "Starting generation...", description: "Creating your video task now." });
     try {
       // Send the SCENE's own duration — not the project's total target
       // duration (the video API only accepts per-scene values like 5/10s;
@@ -1917,8 +1938,11 @@ function VidoraApp() {
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: "Generating video...", description: data.videoUrl ? "Video ready!" : "This may take a few minutes." });
+        // Sync immediately — the backend marks the scene "generating"
+        // before responding, so the card reflects the real state.
+        await refreshProject();
         if (!data.videoUrl) {
+          toast({ title: "Generating video...", description: "This may take a few minutes." });
           // Start polling for this scene's video
           const pollScene = async () => {
             try {
@@ -1957,9 +1981,12 @@ function VidoraApp() {
         }
       } else {
         toast({ title: "Failed", description: getApiError(data), variant: "destructive" });
+        // Revert the optimistic flip — refresh pulls the real DB state
+        await refreshProject();
       }
     } catch {
       toast({ title: "Error", variant: "destructive" });
+      await refreshProject().catch(() => {});
     } finally {
       setGeneratingScenes((prev) => { const n = new Set(prev); n.delete(sceneId); return n; });
     }
@@ -5816,6 +5843,7 @@ function VidoraApp() {
                               projectStyle={currentProject.style}
                               onPreview={openVideoPreview}
                               onGenerate={handleGenerateSingle}
+                              isGeneratingScene={generatingScenes.has(scene.id)}
                               onRetry={handleRetryScene}
                               onDelete={handleDeleteClick}
                               onNarrate={handleNarrateScene}
