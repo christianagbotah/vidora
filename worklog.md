@@ -2380,3 +2380,26 @@ Stage Summary:
 - Root cause: SDK v0.0.18 video endpoints only exist on the internal Z.ai gateway; the public api.z.ai uses different routes, so every create/poll on the VPS 404'd
 - Fix: dual-form compat layer in src/lib/zai.ts that works on both infrastructures (404-triggered fallback), with clear error surfacing
 - The user's stuck scenes can be re-generated after deploying this fix; ZAI_VIDEO_MODEL env optionally overrides the default CogVideoX-3
+
+---
+Task ID: create-ux-1
+Agent: main (Z.ai Code)
+Task: Audit and professionalize the video creation process — proper multi-step navigation (details → parameters → generation) and a full-page interaction lock while videos are being generated
+
+Work Log:
+- Audited the existing flow: Create view was one long scroll page (settings + input tabs + characters + preview + CTA) and generation was triggered via a fire-and-forget setTimeout with no error handling; during generation the whole page stayed fully interactive (nav, delete, settings) with only a disabled button
+- Restructured the Create view into a guided 3-step wizard with an animated stepper (Details → Parameters → Generate): Step 1 = title, project type, content tabs (script/text/voice/image), script analysis + characters; Step 2 = duration, style, aspect ratio, free preview tools; Step 3 = review summary, token cost (sceneCount × 4 tokens), balance check with Buy Tokens CTA when insufficient
+- Wizard has Back/Continue navigation, per-step validation (empty content blocks advance with a toast), clickable completed steps, "Step X of 3" indicator, framer-motion step-slide transitions
+- Built GenerationLockOverlay (new component in page.tsx): fixed inset-0 z-[200] full-screen lock with live per-scene progress (complete/rendering/queued/failed), progress bar, elapsed timer, ETA, rotating status messages, skeleton rows during the starting phase; NO dismiss control while active
+- Phase state machine: idle → starting → generating → completed/failed; transitions driven by scene statuses with a seenGeneratingRef guard against stale-local-data races and a 25-minute safety valve so the user can never be locked forever
+- Rewrote handleCreateAndGenerate: scenes created with per-scene error checks, generation API now awaited with full error surfacing (tokens/auth/network), enters studio with the lock already engaged
+- handleGenerateAll now drives the overlay (completed/failed phases incl. alreadyDone); auto-trigger effect is ref-guarded per project id (no double-fire); polling is 5s while generating, 15s otherwise
+- Escape key is blocked while generating; reload recovery re-locks the page when scenes are still generating server-side, with a 30-min freshness guard so zombie scenes from old sessions never lock the user out
+- Failed state offers one-click "Retry Failed Scenes" (resets failed scenes to pending via scene PUT, then restarts generation) and "Back to Project"
+- E2E browser-verified (agent-browser): login → wizard steps 1-3 with real token cost box → Create & Generate → overlay locked the page (clicks physically blocked by the fixed overlay, Escape inert) → backend created task + thumbnail → video rendered (13 min CogVideoX-3) → overlay flipped to green "Your Video is Ready!" → Continue → studio with playable MP4 (verified playing at 8.2/10.2s) → page fully interactive again; empty-content validation toast verified; mobile 390px wizard layout VLM-verified
+- ESLint 0 errors; tsc: no new errors (22 pre-existing baseline, unchanged); dev server OOM-killed once by the sandbox (env memory pressure from long-running generation jobs — restarted, not a code issue); committed as 2fdb03d
+
+Stage Summary:
+- Video creation is now a professional 3-step wizard with validation and a cost review
+- The entire page is hard-locked during video generation with live progress feedback, and releases only via the completed/failed overlay states
+- Generation handoff is robust: awaited, error-handled, double-fire-proof, reload-recoverable, and zombie-scene-safe
