@@ -1609,6 +1609,8 @@ function VidoraApp() {
   const [exportTransition, setExportTransition] = useState("fade");
   const [exportFormat, setExportFormat] = useState("mp4");
   const [exportTitleCard, setExportTitleCard] = useState(false);
+  // Mix scene voices (auto-generated when missing) + scene music into the export
+  const [exportIncludeAudio, setExportIncludeAudio] = useState(true);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [galleryCategory, setGalleryCategory] = useState("All");
   const [gallerySearch, setGallerySearch] = useState("");
@@ -2986,9 +2988,15 @@ function VidoraApp() {
     }
   };
 
-  const handleExport = async () => {
-    if (!currentProject) return;
+  const handleExport = async (): Promise<boolean> => {
+    if (!currentProject) return false;
     setIsExporting(true);
+    toast({
+      title: "Exporting final video…",
+      description: exportIncludeAudio
+        ? "Merging scenes, transitions, AI voices and music — this can take a minute or two."
+        : "Merging scenes and transitions — this can take a minute or two.",
+    });
     try {
       const res = await fetch("/api/export-video", {
         method: "POST",
@@ -2999,17 +3007,21 @@ function VidoraApp() {
           transition: exportTransition,
           format: exportFormat,
           withTitleCard: exportTitleCard,
+          includeAudio: exportIncludeAudio,
         }),
       });
       const data = await res.json();
       if (data.success) {
         toast({ title: "Export complete!", description: data.message });
         refreshProject();
+        return true;
       } else {
         toast({ title: "Export failed", description: getApiError(data), variant: "destructive" });
+        return false;
       }
     } catch {
       toast({ title: "Export error", variant: "destructive" });
+      return false;
     } finally {
       setIsExporting(false);
     }
@@ -9678,7 +9690,9 @@ function VidoraApp() {
             <DialogTitle className="flex items-center gap-2">
               <Download className="h-5 w-5" />Export Video
             </DialogTitle>
-            <DialogDescription>Configure export settings for your final video.</DialogDescription>
+            <DialogDescription>
+              Configure export settings for your final video. The export renders your scenes with the chosen transition, mixes in AI voices for scene dialogue and any scene music, then unlocks the download.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
@@ -9727,10 +9741,31 @@ function VidoraApp() {
               </div>
               <Switch checked={exportTitleCard} onCheckedChange={setExportTitleCard} />
             </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-medium flex items-center gap-1.5">
+                  <Volume2 className="h-4 w-4 text-violet-500" />Voices &amp; Music
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Mix scene dialogue (AI voices — auto-generated when missing) and scene music into the final video
+                </p>
+              </div>
+              <Switch checked={exportIncludeAudio} onCheckedChange={setExportIncludeAudio} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setExportDialogOpen(false)}>Cancel</Button>
-            <Button onClick={() => { setExportDialogOpen(false); openDownloadGate(currentProject.id, exportQuality); }} disabled={isExporting} className="btn-gradient">
+            <Button
+              onClick={async () => {
+                setExportDialogOpen(false);
+                // Render the final video FIRST (ffmpeg merge + voices/music),
+                // then open the token-gated download for the finished file.
+                const ok = await handleExport();
+                if (ok) openDownloadGate(currentProject.id, exportQuality);
+              }}
+              disabled={isExporting}
+              className="btn-gradient"
+            >
               {isExporting ? (
                 <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Exporting...</>
               ) : (

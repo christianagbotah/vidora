@@ -2722,3 +2722,45 @@ Verification (script + agent-browser, admin session):
 Stage Summary:
 - Portrait projects now stay portrait end-to-end: new portraits are generated at the project's aspect, and any mismatched reference (legacy square portraits, uploads) is auto-cropped before the video API call
 - Content-filter rejections are user-friendly and actionable, with an in-studio Edit Prompt → regenerate loop instead of raw "API request failed with status 400: System detected…"
+---
+Task ID: export-audio-1
+Agent: main
+Task: Fix (1) /api/download/request 400 "failed to export video" and (2) character voices not heard in exported videos ("is sound added?" — no, audio was never muxed)
+
+User report: `/api/download/request:1 Failed to load resource: 400` + "failed to export video"; also "characters voices are not being heard, is sound added?"
+
+Root causes found:
+1. THE 400: the Export dialog's "Export Full Video" button called openDownloadGate() DIRECTLY — it never called handleExport() (/api/export-video, the ffmpeg merge). finalVideoUrl was therefore always null when the token gate fired → download/request 400 "Video has not been exported yet". The dialog's quality/transition/format/title-card settings were silently ignored too.
+2. NO AUDIO: the export ffmpeg command mapped ONLY the video stream (`-map "[final]"`, `-an` for webm) — every export was silent. Scene narration (narrationUrl, TTS) and per-scene music existed in the schema but were never mixed in. Narration audio also only existed if the user manually clicked "Narrate" per scene.
+3. LATENT 500 BUG: handleMultiSceneExport's success response used `quality,`/`transition,` object shorthand referencing variables that DON'T EXIST in that scope → ReferenceError AFTER ffmpeg succeeded → project marked failed + 500 returned even though the final file was written (inherited from the old code — every successful multi-scene export still "failed"!).
+4. TITLE CARD NEVER WORKED: generateTitleCard ran `execFileAsync("ffmpeg", cmd.split(" "))` — the split mangled quoted args (and included a stray leading "ffmpeg" arg) → title card generation always failed silently → withTitleCard was a no-op.
+5. ROBUSTNESS: xfade/concat require uniform inputs; scenes with mixed resolutions/fps (e.g. the earlier portrait/landscape substitution bug) would crash the export.
+
+Fixes:
+- src/lib/narration.ts (NEW): shared TTS narration lib — splitTextIntoChunks, concatWavChunks, generateSceneNarration (Z.ai TTS → wav chunks → concat → /tmp/vidora-audio, returns url+path; throws on failure, callers decide degradation)
+- generate-narration route: refactored to use the shared lib (behavior identical, voices GET unchanged)
+- export-video route (major rewrite):
+  * collectSceneAudio: per completed scene — reuse existing narrationUrl file; if missing and scene has dialogue → AUTO-GENERATE the voice via TTS (voice preference: scene.narrationVoice → linked character's voiceId → default) and persist it; resolve scene music (musicTrackUrl × musicVolume). TTS failures are NON-FATAL (scene exports without voice, reported in response)
+  * Audio graph: per-layer aresample/aformat/volume/atrim(+fade-out for music)/adelay(startMs) → amix(inputs, duration=longest, normalize=0)[aout]; narration placed at each scene's xfade-aware timeline start (+half-transition lead), music trimmed to the scene's on-screen span with 0.6s fade-out
+  * Muxed output: mp4 → `-map "[final]" -map "[aout]" -c:a aac -b:a 192k`; webm → libopus; no-audio fallback keeps old video-only mapping
+  * `includeAudio` request flag (default true) toggles the whole audio path
+  * Title card FIXED: array-args execFileAsync + drawtext textfile (no escaping pitfalls, expansion=none) + rendered at the first scene's resolution; sizes dynamically (portrait projects get portrait cards)
+  * Per-input normalization (scale+pad+setsar+fps=24+format) before xfade/concat → mixed-resolution/fps scenes merge cleanly, output normalized to scene 1's size
+  * Response: `audio` summary {voices, voicesGenerated, voiceFailures, musicScenes} + human note in message; fixed the ReferenceError (quality/transition → preset labels)
+  * Local-first downloads for app-relative /generated/... URLs (previously burned 3 fetch retries × backoff per scene before the file fallback)
+- download/request route: 400 message now actionable ("hasn't been exported yet. Open it in the Studio and click Export Video first…")
+- page.tsx: handleExport returns boolean; Export dialog button now chains export() → on success openDownloadGate(); NEW "Voices & Music" switch (default on) in the export dialog + description copy; initial "Exporting final video… Merging scenes, transitions, AI voices and music" toast
+
+Verification (scripts + agent-browser, admin session; ZAI TTS/VLM were 429 rate-limited during the session):
+- 3-scene export w/ pre-made narration + music: success; final mp4 = h264 video 16s + AAC audio 7.5s; volumedetect segments confirm narration 1 at 0-3s (-24dB), music 3.5-4.5s (-57dB @ 0.36 vol), narration 2 EXACTLY at 5.5-7.5s (-24dB), silence after — timeline math verified
+- Auto-narration failure isolation: scene with dialogue + rate-limited TTS → export still 200, `voiceFailures: 1`, honest message "1 voice generation failed — try re-exporting" (code path shares generateSceneNarration with the production-verified narration route)
+- Variants: cut+title card → 15s (3+6+6) with audio shifted correctly; dissolve+webm → 10.5s w/ opus; fade no-audio → video-only "(no audio)"
+- Mixed resolutions (1280x720 + 720x1280 portrait + 1920x1080@30fps) → unified 1280x720@24 output, both voices present (previously xfade would fail)
+- Title card: renders (frame pixel check: 6,636 bright text pixels), sized to scene resolution; title with quotes/percent ("GiannisBD's Big Day: 100% Fun") safe via textfile
+- Browser E2E (desktop 1280 + mobile 390px): login → dashboard → studio → Export dialog (Voices & Music switch checked by default) → Export Full Video → export ran (log: Audio mix 3 layers, local-first downloads) → download gate opened → Use My Tokens → 1000→998 tokens + tx logged → final video opened in new tab with AUDIO (ffprobe: h264+aac) → studio shows Final Video card + Download Video button; mobile dialog no overflow; zero console/page errors
+- ESLint 0 errors; test artifacts cleaned; DB back to 0 projects, admin tokens reset to 1000
+
+Stage Summary:
+- Export flow fixed end-to-end: the button now actually renders the video (with chosen quality/transition/format/title card) BEFORE the token-gated download — the 400 is gone
+- Sound IS now added: scene dialogue gets AI voices automatically (missing ones are generated at export with the character's assigned voice), existing narrations and per-scene music are mixed at the correct timeline offsets, AAC/Opus muxed
+- Bonus fixes: multi-scene export no longer fake-fails after success (ReferenceError), title card actually renders (was always broken), mixed-resolution scenes merge cleanly, local URLs no longer waste retry cycles

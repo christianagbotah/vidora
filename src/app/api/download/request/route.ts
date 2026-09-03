@@ -47,7 +47,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (!project.finalVideoUrl) {
-      return NextResponse.json({ success: false, error: "Video has not been exported yet" }, { status: 400 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "This video hasn't been exported yet. Open it in the Studio and click \"Export Video\" first — the export renders the final video (with voices and music) before download.",
+        },
+        { status: 400 }
+      );
     }
 
     // Calculate token cost
