@@ -2442,3 +2442,20 @@ Work Log:
 Stage Summary:
 - Both VPS failures fixed at the compat layer: duration/size/prompt normalized to documented public constraints with self-healing fallbacks, and image generation now speaks the public API's dialect (model + url→base64) while remaining internal-gateway compatible
 - VPS needs a pull + rebuild to pick this up; no DB changes
+
+---
+Task ID: post-deploy-1
+Agent: main (Z.ai Code)
+Task: Confirm the api-constraints-1 fix deployed on the VPS and clean up the middleware deprecation warning from the user's build output
+
+Work Log:
+- User pulled 498499a..db04d25 on the VPS: fast-forward OK, build compiled in 54s (76 routes), pm2 restart vidora online (cluster, id 38) — the duration-400 and thumbnail-map fixes are now live in production
+- Root-caused the only remaining item in the build output: the "middleware file convention is deprecated, use proxy" warning from src/middleware.ts
+- Verified nothing imports the middleware module (only zustand/middleware, unrelated)
+- Migrated src/middleware.ts -> src/proxy.ts: same logic (public page/API allowlist, session-cookie existence gate, 401 JSON for unauthenticated API calls), same matcher config, only file + exported function renamed middleware -> proxy
+- Verified: ESLint 0 errors; dev server picked up proxy.ts (curl: / 200, /api/ai/health 200, /api/projects 401 without cookie — auth gate intact); browser smoke test renders home page fully (hero, nav, AI status), no page errors
+- Committed d458888 and pushed to origin/main
+
+Stage Summary:
+- Production is running the ZAI API constraint fixes (duration enum {5,10}, image model compat) — user should test a full video generation on vidora.lightworldtech.com to confirm
+- The middleware->proxy migration removes the deprecation warning; optional pull on VPS (no functional change, no DB change): git pull && bun run build && pm2 restart vidora
