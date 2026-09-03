@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { Fragment, useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAppStore } from "@/store/useAppStore";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/sheet";
 import DeviceSimulator from "@/components/DeviceSimulator";
 import { AIStatusBadge } from "@/components/AIStatusBadge";
+import { PRICING } from "@/lib/pricing";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
@@ -225,8 +226,302 @@ const fadeUp = {
   transition: { duration: 0.35 },
 };
 
+/* Wizard step slide — used by the Create view multi-step flow */
+const stepSlide = {
+  initial: { opacity: 0, x: 32 },
+  animate: { opacity: 1, x: 0 },
+  exit: { opacity: 0, x: -32 },
+  transition: { duration: 0.25 },
+};
+
 const stagger = { animate: { transition: { staggerChildren: 0.08 } } };
 const fadeItem = { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 } };
+
+/* ════════════════════════════════════════════════════════════════
+   GENERATION LOCK OVERLAY
+   Full-screen, non-dismissible modal that blocks ALL page interaction
+   while videos are being generated. Shows live per-scene progress
+   and only releases the page once the run finishes.
+   ════════════════════════════════════════════════════════════════ */
+
+const GEN_STATUS_MESSAGES = [
+  "Analyzing your scenes…",
+  "Crafting cinematic frames…",
+  "Generating thumbnails…",
+  "Rendering video clips…",
+  "Color grading and polish…",
+  "Almost there — finishing up…",
+];
+
+function formatElapsedSeconds(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function GenerationLockOverlay({
+  phase,
+  projectTitle,
+  scenes,
+  onContinue,
+  onRetry,
+  isRetrying,
+}: {
+  phase: "starting" | "generating" | "completed" | "failed";
+  projectTitle: string;
+  scenes: VideoScene[];
+  onContinue: () => void;
+  onRetry: () => void;
+  isRetrying: boolean;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  const [msgIdx, setMsgIdx] = useState(0);
+
+  // Tick the elapsed timer while the run is active.
+  // elapsed counts continuously from mount (the overlay only mounts while
+  // a generation session is running, so no reset is needed between phases).
+  useEffect(() => {
+    if (phase !== "starting" && phase !== "generating") return;
+    const timer = setInterval(() => setElapsed((e) => e + 1), 1_000);
+    return () => clearInterval(timer);
+  }, [phase]);
+
+  // Rotate the friendly status messages
+  useEffect(() => {
+    if (phase !== "starting" && phase !== "generating") return;
+    const timer = setInterval(() => setMsgIdx((i) => (i + 1) % GEN_STATUS_MESSAGES.length), 5_000);
+    return () => clearInterval(timer);
+  }, [phase]);
+
+  const total = scenes.length;
+  const completed = scenes.filter((s) => s.videoUrl).length;
+  const failedList = scenes.filter((s) => s.status === "failed" && !s.videoUrl);
+  const failed = failedList.length;
+  const isActive = phase === "starting" || phase === "generating";
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const remainingScenes = Math.max(0, total - completed - failed);
+  const estRemainingSec = remainingScenes * 110; // ~1.8 min per scene on average
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3 }}
+      className="fixed inset-0 z-[200] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 overflow-y-auto"
+      role="alertdialog"
+      aria-modal="true"
+      aria-label={isActive ? "Video generation in progress" : phase === "completed" ? "Video generation complete" : "Video generation failed"}
+    >
+      <motion.div
+        initial={{ scale: 0.92, y: 24, opacity: 0 }}
+        animate={{ scale: 1, y: 0, opacity: 1 }}
+        exit={{ scale: 0.95, y: 12, opacity: 0 }}
+        transition={{ type: "spring", damping: 26, stiffness: 300 }}
+        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden my-auto"
+      >
+        {/* ── Header ── */}
+        <div className={`px-6 py-6 text-white relative overflow-hidden ${
+          phase === "completed"
+            ? "bg-gradient-to-br from-emerald-500 to-teal-600"
+            : phase === "failed"
+              ? "bg-gradient-to-br from-red-500 to-rose-600"
+              : "bg-gradient-to-br from-violet-600 to-fuchsia-600"
+        }`}>
+          <div className="flex items-center gap-4 relative z-10">
+            <div className="h-14 w-14 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0">
+              {phase === "completed" ? (
+                <CheckCircle className="h-8 w-8" />
+              ) : phase === "failed" ? (
+                <AlertTriangle className="h-8 w-8" />
+              ) : phase === "starting" ? (
+                <Loader2 className="h-8 w-8 animate-spin" />
+              ) : (
+                <Clapperboard className="h-8 w-8 animate-pulse" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-bold leading-tight">
+                {phase === "completed"
+                  ? "Your Video is Ready!"
+                  : phase === "failed"
+                    ? "Generation Interrupted"
+                    : phase === "starting"
+                      ? "Starting Generation…"
+                      : "Generating Your Video"}
+              </h2>
+              <p className="text-white/80 text-sm truncate mt-0.5">{projectTitle}</p>
+            </div>
+          </div>
+          {/* decorative animated glow */}
+          {isActive && (
+            <div className="absolute -top-16 -right-16 h-40 w-40 rounded-full bg-white/10 animate-pulse" aria-hidden="true" />
+          )}
+        </div>
+
+        {/* ── Body ── */}
+        <div className="p-6 space-y-5">
+          {phase === "completed" ? (
+            <>
+              <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-50 border border-emerald-200">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white shrink-0">
+                  <Film className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-emerald-800">
+                    {total} scene{total > 1 ? "s" : ""} rendered successfully
+                  </p>
+                  <p className="text-xs text-emerald-600 mt-0.5">
+                    Finished in {formatElapsedSeconds(elapsed || 1)} · {pct}% complete
+                  </p>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground text-center">
+                Your video is ready in the studio — preview scenes, add narration, then export.
+              </p>
+            </>
+          ) : phase === "failed" ? (
+            <>
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-red-50 border border-red-200">
+                <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-red-700">
+                    {completed > 0
+                      ? `${completed} of ${total} scene${total > 1 ? "s" : ""} completed — ${failed} failed`
+                      : `${failed} of ${total} scene${total > 1 ? "s" : ""} failed`}
+                  </p>
+                  <p className="text-xs text-red-600 mt-1">
+                    {failedList[0]?.errorMessage
+                      ? failedList[0].errorMessage.slice(0, 140)
+                      : "The video service could not complete the request."}
+                  </p>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden">
+                <div className="px-4 py-2.5 flex items-center justify-between bg-slate-50/60 text-xs">
+                  <span className="text-muted-foreground">Failed scenes are retried with one click — tokens for failed scenes were refunded.</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Progress */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground font-medium">
+                    {total > 0 ? `${completed} of ${total} scenes complete` : "Preparing scenes…"}
+                  </span>
+                  <span className="font-bold text-violet-600">{total > 0 ? `${pct}%` : ""}</span>
+                </div>
+                <Progress
+                  value={total > 0 ? (completed / total) * 100 : 0}
+                  className={`h-2.5 ${phase === "starting" ? "animate-pulse" : ""}`}
+                />
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatElapsedSeconds(elapsed)} elapsed</span>
+                  {remainingScenes > 0 && total > 0 && (
+                    <span>~{Math.max(1, Math.round(estRemainingSec / 60))} min remaining</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Scene list */}
+              {total > 0 ? (
+                <div className="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden max-h-64 overflow-y-auto">
+                  {scenes.map((scene) => {
+                    const isDone = !!scene.videoUrl;
+                    const isFailed = scene.status === "failed" && !scene.videoUrl;
+                    const isRendering = scene.status === "generating";
+                    return (
+                      <div key={scene.id} className="flex items-center gap-3 px-4 py-2.5 bg-white">
+                        <div className={`h-6 w-6 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${
+                          isDone ? "bg-emerald-100 text-emerald-700"
+                            : isFailed ? "bg-red-100 text-red-600"
+                            : isRendering ? "bg-violet-100 text-violet-700"
+                            : "bg-slate-100 text-slate-500"
+                        }`}>
+                          {scene.sceneNumber}
+                        </div>
+                        <p className="text-sm text-slate-600 truncate flex-1 min-w-0">
+                          {scene.title || scene.prompt?.slice(0, 60) || `Scene ${scene.sceneNumber}`}
+                        </p>
+                        <div className="shrink-0 flex items-center gap-1.5">
+                          {isDone ? (
+                            <><CheckCircle className="h-4 w-4 text-emerald-500" /><span className="text-[10px] font-semibold text-emerald-600 hidden sm:inline">Complete</span></>
+                          ) : isFailed ? (
+                            <><AlertTriangle className="h-4 w-4 text-red-500" /><span className="text-[10px] font-semibold text-red-500 hidden sm:inline">Failed</span></>
+                          ) : isRendering ? (
+                            <><Loader2 className="h-4 w-4 text-violet-500 animate-spin" /><span className="text-[10px] font-semibold text-violet-600 hidden sm:inline">Rendering</span></>
+                          ) : (
+                            <><Clock className="h-4 w-4 text-slate-400" /><span className="text-[10px] font-semibold text-slate-400 hidden sm:inline">Queued</span></>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                // Starting phase — scenes not loaded yet
+                <div className="space-y-2.5">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-slate-50 border border-slate-100 animate-pulse" style={{ animationDelay: `${i * 150}ms` }}>
+                      <div className="h-6 w-6 rounded-full bg-slate-200" />
+                      <div className="h-3 flex-1 rounded bg-slate-200" />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Live status message */}
+              <div className="flex items-center gap-2 justify-center text-sm text-slate-500">
+                <Sparkle className="h-3.5 w-3.5 text-violet-400" />
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={msgIdx}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    {phase === "starting" ? "Reserving tokens & queueing scenes…" : GEN_STATUS_MESSAGES[msgIdx]}
+                  </motion.span>
+                </AnimatePresence>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground text-center border-t border-slate-100 pt-3">
+                The page stays locked while your video renders — this usually takes a few minutes.
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* ── Footer actions ── */}
+        {phase === "completed" && (
+          <div className="px-6 pb-6">
+            <Button className="btn-gradient w-full h-12 text-base" onClick={onContinue}>
+              <Play className="h-5 w-5 mr-2" />Continue to Studio
+            </Button>
+          </div>
+        )}
+        {phase === "failed" && (
+          <div className="px-6 pb-6 flex flex-col sm:flex-row gap-2">
+            <Button
+              className="btn-gradient flex-1"
+              onClick={onRetry}
+              disabled={isRetrying}
+            >
+              {isRetrying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-1.5" />}
+              {isRetrying ? "Retrying…" : "Retry Failed Scenes"}
+            </Button>
+            <Button variant="outline" className="flex-1" onClick={onContinue}>
+              Back to Project
+            </Button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
 
 /* ════════════════════════════════════════════════════════════════
    SORTABLE SCENE CARD
@@ -1061,6 +1356,13 @@ function VidoraApp() {
   const [preCharUploadTarget, setPreCharUploadTarget] = useState<string | null>(null); // char name for upload
   const [showAddCharForm, setShowAddCharForm] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  /* ── Create wizard + generation lock ── */
+  // Wizard step for the Create view: 0 = details, 1 = parameters, 2 = review & generate
+  const [createStep, setCreateStep] = useState(0);
+  // Generation overlay phase — locks the ENTIRE page while videos render
+  const [generationPhase, setGenerationPhase] = useState<"idle" | "starting" | "generating" | "completed" | "failed">("idle");
+  // Timestamp (ms) when the current generation run started — drives elapsed timer
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportQuality, setExportQuality] = useState("standard");
   const [exportTransition, setExportTransition] = useState("fade");
@@ -1276,6 +1578,22 @@ function VidoraApp() {
   const isAnyGenerating = safeScenes.some((s) => s.status === "generating");
   const completedSceneCount = safeScenes.filter((s) => s.videoUrl).length;
   const failedSceneCount = safeScenes.filter((s) => s.status === "failed").length;
+  // True while the full-screen generation lock overlay should block the page
+  const generationActive = generationPhase === "starting" || generationPhase === "generating";
+
+  /* ── Create wizard derived values ── */
+  const wizardContentText = inputMode === "script" ? scriptText : textPrompt;
+  const hasCreateContent = wizardContentText.trim().length > 0 || parsedScenes.length > 0;
+  const createSceneCount = parsedScenes.length > 0 ? parsedScenes.length : 1;
+  const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
+  const createTokensNeeded = createSceneCount * tokensPerScene;
+  const tokensInsufficient = createTokensNeeded > userTokens;
+  const inputModeLabels: Record<InputMode, string> = {
+    script: "Script / Screenplay",
+    text: "Text description",
+    voice: "Voice recording",
+    video: "Image upload",
+  };
   const filteredScenes = sceneFilter === "all"
     ? safeScenes
     : safeScenes.filter((s) => s.status === sceneFilter);
@@ -1307,12 +1625,14 @@ function VidoraApp() {
     } catch { /* silent */ }
   }, [currentProject, setCurrentProject]);
 
-  // Auto-refresh project every 15s when in studio
+  // Auto-refresh project data — every 5s while videos are generating (so the
+  // lock overlay progress stays live), otherwise every 15s
   useEffect(() => {
     if (currentView !== "studio" || !currentProject) return;
-    const interval = setInterval(refreshProject, 15000);
+    const intervalMs = generationActive ? 5_000 : 15_000;
+    const interval = setInterval(refreshProject, intervalMs);
     return () => clearInterval(interval);
-  }, [currentView, currentProject, refreshProject]);
+  }, [currentView, currentProject, refreshProject, generationActive]);
 
   // Load projects on mount — then signal the global preloader that the
   // initial critical data fetch has resolved so it can dismiss.
@@ -1416,16 +1736,69 @@ function VidoraApp() {
   // Auto-trigger generation on entering studio if there are pending scenes
   // NOTE: we intentionally do NOT auto-retry scenes that failed due to rate
   // limits. Those need a manual retry by the user after the cooldown period.
+  const autoGenFiredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (currentView === "studio" && currentProject && safeScenes.length > 0) {
       const hasPending = safeScenes.some(
         (s) => s.status === "pending" && !s.videoUrl,
       );
-      if (hasPending && !isAnyGenerating && !isGenerating) {
+      if (
+        hasPending && !isAnyGenerating && !isGenerating && !generationActive &&
+        !autoGenFiredRef.current.has(currentProject.id)
+      ) {
+        autoGenFiredRef.current.add(currentProject.id);
         handleGenerateAll();
       }
     }
-  }, [currentView]);
+  }, [currentView, currentProject, safeScenes, isAnyGenerating, isGenerating, generationActive]);
+
+  /* ── Generation lock overlay: phase transitions ──
+     Watches live scene statuses and flips the overlay between
+     generating → completed / failed as the backend reports progress. */
+  const seenGeneratingRef = useRef(false);
+  useEffect(() => {
+    if (generationPhase !== "generating" && generationPhase !== "starting") return;
+    if (!currentProject || safeScenes.length === 0) return;
+
+    const allDone = safeScenes.every((s) => s.videoUrl);
+    const anyGenerating = safeScenes.some((s) => s.status === "generating");
+    if (anyGenerating) seenGeneratingRef.current = true;
+
+    if (allDone) {
+      setGenerationPhase("completed");
+      return;
+    }
+    // Guard against stale local data: only declare failure after we've
+    // actually observed a scene generating in THIS run. (Local scene data can
+    // still say "pending"/"failed" for a few seconds after a run starts,
+    // before the first refresh lands.)
+    if (generationPhase === "generating" && !anyGenerating && seenGeneratingRef.current) {
+      setGenerationPhase("failed");
+    }
+    // Safety valve — never lock the user in forever (25 min cap)
+    if (generationStartedAt && Date.now() - generationStartedAt > 25 * 60_000) {
+      setGenerationPhase("failed");
+    }
+  }, [generationPhase, currentProject, safeScenes, generationStartedAt]);
+
+  /* ── Generation lock overlay: reload recovery ──
+     If the user lands in the studio while scenes are already generating
+     (e.g. after a page reload — the backend keeps working), lock the page.
+     Guard: only lock for runs that still look ALIVE — a scene stuck in
+     "generating" for 30+ minutes without a DB update is a zombie from an
+     interrupted session and must not hold the user hostage. */
+  useEffect(() => {
+    if (currentView !== "studio" || !currentProject || generationPhase !== "idle") return;
+    const FRESH_RUN_MS = 30 * 60_000;
+    const anyFreshGenerating = safeScenes.some(
+      (s) => s.status === "generating" && !s.videoUrl &&
+        s.updatedAt && Date.now() - new Date(s.updatedAt).getTime() < FRESH_RUN_MS
+    );
+    if (anyFreshGenerating && safeScenes.length > 0) {
+      setGenerationStartedAt((prev) => prev ?? Date.now());
+      setGenerationPhase("generating");
+    }
+  }, [currentView, currentProject, safeScenes, generationPhase]);
 
   // ── Keyboard shortcuts for studio view ──
   const [activeSceneIdx, setActiveSceneIdx] = useState(0);
@@ -1436,6 +1809,11 @@ function VidoraApp() {
       const isTyping = tag === "input" || tag === "textarea" || tag === "select";
 
       if (e.key === "Escape") {
+        // Page is locked while videos generate — Escape must not navigate away
+        if (generationActive) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         setCurrentView("home");
       }
@@ -1460,11 +1838,12 @@ function VidoraApp() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentView, safeScenes, setCurrentView]);
+  }, [currentView, safeScenes, setCurrentView, generationActive, toast]);
 
   const handleGenerateAll = async () => {
     if (!currentProject) return;
     setIsGenerating(true);
+    seenGeneratingRef.current = false; // fresh run — reset failure guard
     try {
       const res = await fetch("/api/generate-video", {
         method: "POST",
@@ -1473,15 +1852,48 @@ function VidoraApp() {
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: "Generation started", description: data.message });
-        setTimeout(refreshProject, 5000);
+        if (data.alreadyDone) {
+          setGenerationPhase("completed");
+        } else {
+          toast({ title: "Generation started", description: data.message });
+          setGenerationStartedAt((prev) => prev ?? Date.now());
+          setGenerationPhase("generating");
+          setTimeout(refreshProject, 3000);
+        }
       } else {
+        // Generation could not start (tokens, auth, ...) — release the lock
+        setGenerationPhase("idle");
         toast({ title: "Generation failed", description: getApiError(data), variant: "destructive" });
       }
     } catch {
+      setGenerationPhase("idle");
       toast({ title: "Error", description: "Failed to start generation", variant: "destructive" });
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  /* ── Retry failed scenes from the generation lock overlay ──
+     Resets failed scenes to "pending" so the generate API picks them
+     up again, then restarts generation (locks the page again). */
+  const handleRetryFailedScenes = async () => {
+    if (!currentProject) return;
+    const failedScenes = safeScenes.filter((s) => s.status === "failed" && !s.videoUrl);
+    if (failedScenes.length === 0) return;
+    setGenerationPhase("generating"); // keep the page locked during retry
+    try {
+      await Promise.all(failedScenes.map((scene) =>
+        fetch(`/api/projects/${currentProject.id}/scenes/${scene.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "pending" }),
+        }).catch(() => { /* ignore individual resets */ })
+      ));
+      await refreshProject();
+      await handleGenerateAll();
+    } catch {
+      setGenerationPhase("idle");
+      toast({ title: "Retry failed", description: "Could not retry — try again from the studio.", variant: "destructive" });
     }
   };
 
@@ -2198,7 +2610,7 @@ function VidoraApp() {
 
       for (let i = 0; i < scenesToCreate.length; i++) {
         const s = scenesToCreate[i];
-        await fetch(`/api/projects/${project.id}/scenes`, {
+        const sceneRes = await fetch(`/api/projects/${project.id}/scenes`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2209,11 +2621,23 @@ function VidoraApp() {
             duration: Math.floor(effectiveDuration / scenesToCreate.length),
           }),
         });
+        if (!sceneRes.ok) {
+          toast({
+            title: `Scene ${i + 1} could not be created`,
+            description: "The project was created, but one scene is missing. You can add it in the studio.",
+            variant: "destructive",
+          });
+        }
       }
 
-      // Step 3: Set current project and go to studio
+      // Step 3: enter the studio with the generation lock already engaged
+      autoGenFiredRef.current.add(project.id); // we trigger generation ourselves below
+      seenGeneratingRef.current = false; // fresh run — reset failure guard
       setCurrentProject(project);
       setCurrentView("studio");
+      setGenerationStartedAt(Date.now());
+      setGenerationPhase("starting");
+      setCreateStep(0); // reset wizard for next time
       setParsedScenes([]);
       setParsedCharacters([]);
       setScriptText("");
@@ -2223,14 +2647,29 @@ function VidoraApp() {
       setPreCharImages({});
       toast({ title: "Project created!", description: "Generating videos..." });
 
-      // Step 4: Trigger generation after entering studio
-      setTimeout(async () => {
-        await fetch("/api/generate-video", {
+      // Step 4: Trigger generation (awaited, with error handling — the API
+      // returns immediately and continues in the background)
+      try {
+        const genRes = await fetch("/api/generate-video", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId: project.id }),
         });
-      }, 2000);
+        const genData = await genRes.json();
+        if (genData.success) {
+          setGenerationPhase(genData.alreadyDone ? "completed" : "generating");
+          if (!genData.alreadyDone) {
+            setTimeout(refreshProject, 3000);
+          }
+        } else {
+          // Tokens / auth / server error — surface it and release the lock
+          setGenerationPhase("idle");
+          toast({ title: "Video generation could not start", description: getApiError(genData), variant: "destructive" });
+        }
+      } catch {
+        setGenerationPhase("idle");
+        toast({ title: "Video generation could not start", description: "Network error — please try again from the studio.", variant: "destructive" });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("Error creating project:", msg);
@@ -4114,135 +4553,104 @@ function VidoraApp() {
             <motion.div key="create" {...fadeUp} className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Create New Video</h1>
-                <p className="text-muted-foreground mt-1">Write a script, describe a scene, or choose a template</p>
+                <p className="text-muted-foreground mt-1">
+                  {createStep === 0
+                    ? "Tell us what your video is about"
+                    : createStep === 1
+                      ? "Tune the look, length and format"
+                      : "Review everything and generate"}
+                </p>
               </div>
 
-              {/* Project Settings — Always at the top */}
-              <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
-                <CardHeader className="pb-4">
-                  <CardTitle className="text-base font-bold flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
-                      <Settings className="h-3.5 w-3.5" />
-                    </div>
-                    Project Settings
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">Project Title</Label>
-                    <Input placeholder="My Cinematic Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} className="h-10" />
-                  </div>
-
-                  {/* Project Type */}
-                  <div className="space-y-2">
-                    <Label className="text-sm font-medium">Project Type</Label>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                      {PROJECT_TEMPLATES.map((t) => (
-                        <button
-                          key={t.id}
-                          onClick={() => setProjectType(t.id)}
-                          className={`relative p-3 rounded-xl border-2 text-left transition-all duration-200 ${
-                            projectType === t.id
-                              ? "border-violet-400 bg-violet-50"
-                              : "border-slate-100 hover:border-slate-200"
-                          }`}
-                        >
-                          <div className={`h-8 w-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center text-white mb-2`}>
-                            <t.icon className="h-4 w-4" />
-                          </div>
-                          <p className="text-sm font-bold">{t.label}</p>
-                          <p className="text-sm text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
-                          {projectType === t.id && (
-                            <div className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-violet-500" />
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Duration */}
-                  <div className="space-y-2">
-                    <Label className="text-sm font-medium">Duration</Label>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {DURATION_PRESETS.map((d) => (
-                          <button
-                            key={d.value}
-                            onClick={() => { setSelectedDuration(d.value); setIsCustomDuration(false); }}
-                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-                              !isCustomDuration && selectedDuration === d.value
-                                ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
-                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                            }`}
-                          >
-                            {d.label}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        onClick={() => setIsCustomDuration(true)}
-                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-                          isCustomDuration
-                            ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
-                            : "bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200"
+              {/* ── Step indicator (professional wizard stepper) ── */}
+              <div className="flex items-center w-full select-none py-2" role="list" aria-label="Creation steps">
+                {([
+                  { label: "Details", icon: FileText },
+                  { label: "Parameters", icon: Settings },
+                  { label: "Generate", icon: Sparkles },
+                ] as const).map((step, i) => (
+                  <Fragment key={step.label}>
+                    {i > 0 && (
+                      <div
+                        className={`flex-1 h-0.5 mx-1.5 sm:mx-3 rounded-full transition-colors duration-300 ${i <= createStep ? "bg-gradient-to-r from-violet-400 to-fuchsia-400" : "bg-slate-200"}`}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      role="listitem"
+                      aria-current={i === createStep ? "step" : undefined}
+                      onClick={() => { if (i < createStep) { setCreateStep(i); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
+                      disabled={i > createStep}
+                      className={`flex flex-col items-center gap-1.5 transition-opacity ${i > createStep ? "opacity-50 cursor-not-allowed" : i < createStep ? "cursor-pointer" : "cursor-default"}`}
+                    >
+                      <div
+                        className={`h-9 w-9 sm:h-10 sm:w-10 rounded-full flex items-center justify-center text-white shadow-md transition-all duration-300 ${
+                          i === createStep
+                            ? "bg-gradient-to-br from-violet-500 to-fuchsia-500 shadow-violet-500/30 scale-110"
+                            : i < createStep
+                              ? "bg-gradient-to-br from-emerald-500 to-teal-500 shadow-emerald-500/25"
+                              : "bg-slate-300 shadow-slate-200"
                         }`}
                       >
-                        Custom
-                      </button>
-                      {isCustomDuration && (
-                        <div className="flex items-center gap-1.5">
-                          <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-28 h-10 text-sm" />
-                          <span className="text-xs text-muted-foreground">sec (10–300)</span>
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-xs">
-                        <Film className="h-2.5 w-2.5 mr-1" />~{effectiveSceneCount} scene{effectiveSceneCount > 1 ? "s" : ""}
-                      </Badge>
-                      <Badge variant="outline" className="text-xs">
-                        <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* Style, Aspect Ratio */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium">Visual Style</Label>
-                      <Select value={selectedStyle} onValueChange={setSelectedStyle}>
-                        <SelectTrigger className="h-10">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {STYLES.map((s) => (
-                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium">Aspect Ratio</Label>
-                      <div className="grid grid-cols-5 gap-2">
-                        {ASPECTS.map((a) => (
-                          <button
-                            key={a.value}
-                            onClick={() => setSelectedAspect(a.value)}
-                            className={`p-2 rounded-lg border-2 text-center transition-all ${
-                              selectedAspect === a.value
-                                ? "border-violet-400 bg-violet-50"
-                                : "border-slate-100 hover:border-slate-200"
-                            }`}
-                          >
-                            <a.icon className={`h-4 w-4 mx-auto ${selectedAspect === a.value ? "text-violet-600" : "text-slate-400"}`} />
-                            <p className="text-xs mt-0.5 font-bold">{a.label}</p>
-                          </button>
-                        ))}
+                        {i < createStep ? <Check className="h-4 w-4" /> : <step.icon className="h-4 w-4" />}
                       </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                      <span className={`text-[10px] sm:text-xs font-semibold ${i === createStep ? "text-violet-600" : "text-slate-400"}`}>
+                        {step.label}
+                      </span>
+                    </button>
+                  </Fragment>
+                ))}
+              </div>
+
+              <AnimatePresence mode="wait">
+                {/* ═══ STEP 1 — VIDEO DETAILS ═══ */}
+                {createStep === 0 && (
+                  <motion.div key="wizard-details" {...stepSlide} className="space-y-6">
+                    <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-base font-bold flex items-center gap-2">
+                          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                            <FileText className="h-3.5 w-3.5" />
+                          </div>
+                          Video Details
+                        </CardTitle>
+                        <CardDescription>Name your project, pick a type, and add your content</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-5">
+                        <div className="space-y-1.5">
+                          <Label className="text-sm font-medium">Project Title</Label>
+                          <Input placeholder="My Cinematic Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} className="h-10" />
+                        </div>
+
+                        {/* Project Type */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Project Type</Label>
+                          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                            {PROJECT_TEMPLATES.map((t) => (
+                              <button
+                                key={t.id}
+                                onClick={() => setProjectType(t.id)}
+                                className={`relative p-3 rounded-xl border-2 text-left transition-all duration-200 ${
+                                  projectType === t.id
+                                    ? "border-violet-400 bg-violet-50"
+                                    : "border-slate-100 hover:border-slate-200"
+                                }`}
+                              >
+                                <div className={`h-8 w-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center text-white mb-2`}>
+                                  <t.icon className="h-4 w-4" />
+                                </div>
+                                <p className="text-sm font-bold">{t.label}</p>
+                                <p className="text-sm text-muted-foreground mt-0.5 leading-tight">{t.desc}</p>
+                                {projectType === t.id && (
+                                  <div className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-violet-500" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
 
               {/* Input Tabs */}
               <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
@@ -4670,75 +5078,6 @@ function VidoraApp() {
                 </Card>
               )}
 
-              {/* ── FREE PREVIEW (try before you buy) ── */}
-              {/* Lets users see a storyboard + watermarked style image before
-                  spending tokens. Costs the owner ~$0.03 per user/day max
-                  (rate-limited), accepted as customer-acquisition cost. */}
-              <Card className="border-2 border-dashed border-emerald-300 bg-emerald-50/40 shadow-sm">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base font-bold flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
-                      <Eye className="h-3.5 w-3.5" />
-                    </div>
-                    Free Preview — try before you buy
-                    <Badge variant="outline" className="text-xs ml-1 text-emerald-600 border-emerald-300">0 tokens</Badge>
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    See exactly what your video will look like — for free. Get an AI storyboard and a watermarked style preview, then unlock the full HD video with tokens.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      onClick={handleGenerateStoryboardPreview}
-                      disabled={isGeneratingStoryboard}
-                      variant="outline"
-                      className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
-                    >
-                      {isGeneratingStoryboard ? (
-                        <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Building storyboard...</>
-                      ) : (
-                        <><FileText className="h-4 w-4 mr-1.5" />Free Storyboard</>
-                      )}
-                    </Button>
-                    <Button
-                      onClick={handleGeneratePreviewImage}
-                      disabled={isGeneratingPreviewImage || !previewStoryboard}
-                      variant="outline"
-                      className="border-violet-300 text-violet-700 hover:bg-violet-100"
-                    >
-                      {isGeneratingPreviewImage ? (
-                        <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Generating preview...</>
-                      ) : (
-                        <><ImageIcon className="h-4 w-4 mr-1.5" />Preview Visual Style</>
-                      )}
-                    </Button>
-                  </div>
-                  {/* Daily quota indicators */}
-                  {previewQuota && (
-                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <FileText className="h-3 w-3" />
-                        Storyboards: <strong className="text-slate-700">{previewQuota.storyboard.used}/{previewQuota.storyboard.limit}</strong> used today
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <ImageIcon className="h-3 w-3" />
-                        Image previews: <strong className="text-slate-700">{previewQuota.image.used}/{previewQuota.image.limit}</strong> used today
-                      </span>
-                    </div>
-                  )}
-                  {previewStoryboard && (
-                    <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs">
-                      <p className="font-bold text-emerald-700 mb-1">Storyboard ready! ✓</p>
-                      <p className="text-muted-foreground">
-                        {Array.isArray(previewStoryboard.scenes) ? (previewStoryboard.scenes as unknown[]).length : 0} scenes planned.
-                        {previewImageUrl ? " Style preview generated — view both in the preview panel." : " Now click \"Preview Visual Style\" to see how it will look."}
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
               {/* Hidden file input for pre-project character image upload */}
               <input
                 type="file"
@@ -4755,22 +5094,315 @@ function VidoraApp() {
                 }}
                 className="hidden"
               />
+                  </motion.div>
+                )}
 
-              {/* Create Button */}
-              <div className="flex items-center gap-4 pt-2">
-                <Button
-                  onClick={handleCreateAndGenerate}
-                  disabled={isCreating}
-                  size="lg"
-                  className="btn-gradient text-base px-8"
-                >
-                  {isCreating ? (
-                    <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Creating...</>
+                {/* ═══ STEP 2 — PARAMETERS ═══ */}
+                {createStep === 1 && (
+                  <motion.div key="wizard-parameters" {...stepSlide} className="space-y-6">
+                    <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-base font-bold flex items-center gap-2">
+                          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                            <Settings className="h-3.5 w-3.5" />
+                          </div>
+                          Video Parameters
+                        </CardTitle>
+                        <CardDescription>Duration, visual style and aspect ratio</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-5">
+                        {/* Duration */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">Duration</Label>
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <div className="flex gap-1.5 flex-wrap">
+                              {DURATION_PRESETS.map((d) => (
+                                <button
+                                  key={d.value}
+                                  onClick={() => { setSelectedDuration(d.value); setIsCustomDuration(false); }}
+                                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                    !isCustomDuration && selectedDuration === d.value
+                                      ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-500/25"
+                                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                  }`}
+                                >
+                                  {d.label}
+                                </button>
+                              ))}
+                            </div>
+                            <button
+                              onClick={() => setIsCustomDuration(true)}
+                              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                isCustomDuration
+                                  ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md"
+                                  : "bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200"
+                              }`}
+                            >
+                              Custom
+                            </button>
+                            {isCustomDuration && (
+                              <div className="flex items-center gap-1.5">
+                                <Input type="number" min={10} max={300} placeholder="seconds" value={customDuration} onChange={(e) => setCustomDuration(e.target.value)} className="w-28 h-10 text-sm" />
+                                <span className="text-xs text-muted-foreground">sec (10–300)</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="outline" className="text-xs">
+                              <Film className="h-2.5 w-2.5 mr-1" />~{effectiveSceneCount} scene{effectiveSceneCount > 1 ? "s" : ""}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              <Clock className="h-2.5 w-2.5 mr-1" />{formatDuration(effectiveDuration)} total
+                            </Badge>
+                          </div>
+                        </div>
+
+                        {/* Style, Aspect Ratio */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <Label className="text-sm font-medium">Visual Style</Label>
+                            <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                              <SelectTrigger className="h-10">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {STYLES.map((s) => (
+                                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-sm font-medium">Aspect Ratio</Label>
+                            <div className="grid grid-cols-5 gap-2">
+                              {ASPECTS.map((a) => (
+                                <button
+                                  key={a.value}
+                                  onClick={() => setSelectedAspect(a.value)}
+                                  className={`p-2 rounded-lg border-2 text-center transition-all ${
+                                    selectedAspect === a.value
+                                      ? "border-violet-400 bg-violet-50"
+                                      : "border-slate-100 hover:border-slate-200"
+                                  }`}
+                                >
+                                  <a.icon className={`h-4 w-4 mx-auto ${selectedAspect === a.value ? "text-violet-600" : "text-slate-400"}`} />
+                                  <p className="text-xs mt-0.5 font-bold">{a.label}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* ── FREE PREVIEW (try before you buy) ── */}
+                    {/* Lets users see a storyboard + watermarked style image before
+                        spending tokens. Costs the owner ~$0.03 per user/day max
+                        (rate-limited), accepted as customer-acquisition cost. */}
+                    <Card className="border-2 border-dashed border-emerald-300 bg-emerald-50/40 shadow-sm">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-bold flex items-center gap-2">
+                          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white">
+                            <Eye className="h-3.5 w-3.5" />
+                          </div>
+                          Free Preview — try before you buy
+                          <Badge variant="outline" className="text-xs ml-1 text-emerald-600 border-emerald-300">0 tokens</Badge>
+                        </CardTitle>
+                        <CardDescription className="text-xs">
+                          See exactly what your video will look like — for free. Get an AI storyboard and a watermarked style preview, then unlock the full HD video with tokens.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            onClick={handleGenerateStoryboardPreview}
+                            disabled={isGeneratingStoryboard}
+                            variant="outline"
+                            className="border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                          >
+                            {isGeneratingStoryboard ? (
+                              <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Building storyboard...</>
+                            ) : (
+                              <><FileText className="h-4 w-4 mr-1.5" />Free Storyboard</>
+                            )}
+                          </Button>
+                          <Button
+                            onClick={handleGeneratePreviewImage}
+                            disabled={isGeneratingPreviewImage || !previewStoryboard}
+                            variant="outline"
+                            className="border-violet-300 text-violet-700 hover:bg-violet-100"
+                          >
+                            {isGeneratingPreviewImage ? (
+                              <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Generating preview...</>
+                            ) : (
+                              <><ImageIcon className="h-4 w-4 mr-1.5" />Preview Visual Style</>
+                            )}
+                          </Button>
+                        </div>
+                        {/* Daily quota indicators */}
+                        {previewQuota && (
+                          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <FileText className="h-3 w-3" />
+                              Storyboards: <strong className="text-slate-700">{previewQuota.storyboard.used}/{previewQuota.storyboard.limit}</strong> used today
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <ImageIcon className="h-3 w-3" />
+                              Image previews: <strong className="text-slate-700">{previewQuota.image.used}/{previewQuota.image.limit}</strong> used today
+                            </span>
+                          </div>
+                        )}
+                        {previewStoryboard && (
+                          <div className="rounded-lg bg-white border border-emerald-200 p-3 text-xs">
+                            <p className="font-bold text-emerald-700 mb-1">Storyboard ready! ✓</p>
+                            <p className="text-muted-foreground">
+                              {Array.isArray(previewStoryboard.scenes) ? (previewStoryboard.scenes as unknown[]).length : 0} scenes planned.
+                              {previewImageUrl ? " Style preview generated — view both in the preview panel." : " Now click \"Preview Visual Style\" to see how it will look."}
+                            </p>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )}
+
+                {/* ═══ STEP 3 — REVIEW & GENERATE ═══ */}
+                {createStep === 2 && (
+                  <motion.div key="wizard-review" {...stepSlide} className="space-y-6">
+                    <Card className="border-0 shadow-lg shadow-black/5 bg-white card-glow">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="text-base font-bold flex items-center gap-2">
+                          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white">
+                            <Sparkles className="h-3.5 w-3.5" />
+                          </div>
+                          Review & Generate
+                        </CardTitle>
+                        <CardDescription>One last look before we render your video</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-5">
+                        {/* Summary rows */}
+                        <div className="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden">
+                          {[
+                            { icon: FileText, label: "Title", value: projectTitle || "Untitled Project" },
+                            { icon: Clapperboard, label: "Type", value: PROJECT_TEMPLATES.find((t) => t.id === projectType)?.label || "Custom / Creative" },
+                            { icon: Layers, label: "Content", value: inputModeLabels[inputMode] },
+                            { icon: Film, label: "Scenes", value: `${createSceneCount} scene${createSceneCount > 1 ? "s" : ""}${parsedScenes.length === 0 ? ` (~${effectiveSceneCount} planned)` : ""}` },
+                            { icon: Clock, label: "Duration", value: formatDuration(effectiveDuration) },
+                            { icon: Palette, label: "Style", value: STYLES.find((s) => s.value === selectedStyle)?.label || selectedStyle },
+                            { icon: LayoutGrid, label: "Aspect", value: `${selectedAspect} (${ASPECTS.find((a) => a.value === selectedAspect)?.desc || ""})` },
+                            ...(parsedCharacters.length > 0 ? [{ icon: Users, label: "Characters", value: `${parsedCharacters.length}` }] : []),
+                          ].map((row) => (
+                            <div key={row.label} className="flex items-center gap-3 px-4 py-2.5 bg-slate-50/50">
+                              <row.icon className="h-4 w-4 text-violet-500 shrink-0" />
+                              <span className="text-xs font-medium text-muted-foreground w-20 shrink-0">{row.label}</span>
+                              <span className="text-sm font-semibold truncate">{row.value}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Content preview */}
+                        <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+                          <p className="text-xs font-semibold text-muted-foreground mb-1">Content</p>
+                          <p className="text-sm text-slate-600 line-clamp-3 break-words">
+                            {(inputMode === "script" ? scriptText : textPrompt).slice(0, 220) || "—"}
+                          </p>
+                        </div>
+
+                        {/* Token cost */}
+                        <div className={`rounded-xl p-4 border ${tokensInsufficient ? "bg-amber-50 border-amber-200" : "bg-emerald-50 border-emerald-200"}`}>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white shrink-0 ${tokensInsufficient ? "bg-gradient-to-br from-amber-500 to-orange-500" : "bg-gradient-to-br from-emerald-500 to-teal-500"}`}>
+                                <Coins className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <p className="text-sm font-bold">
+                                  {createTokensNeeded} tokens
+                                  <span className="text-muted-foreground font-normal"> · {createSceneCount} scene{createSceneCount > 1 ? "s" : ""} × {tokensPerScene} tokens</span>
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Balance: {userTokens} tokens → {Math.max(0, userTokens - createTokensNeeded)} after
+                                </p>
+                              </div>
+                            </div>
+                            {tokensInsufficient ? (
+                              <Button size="sm" className="btn-amber" onClick={() => setCurrentView("buy-tokens")}>
+                                <Coins className="h-4 w-4 mr-1.5" />Buy Tokens
+                              </Button>
+                            ) : (
+                              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-xs font-semibold">✓ Ready to generate</Badge>
+                            )}
+                          </div>
+                          {tokensInsufficient && (
+                            <p className="text-xs text-amber-700 mt-2.5">
+                              You need {createTokensNeeded - userTokens} more token{createTokensNeeded - userTokens > 1 ? "s" : ""} to generate this video.
+                            </p>
+                          )}
+                        </div>
+
+                        {tokensInsufficient && (
+                          <Button size="lg" className="btn-amber w-full" onClick={() => setCurrentView("buy-tokens")}>
+                            <Coins className="h-5 w-5 mr-2" />Top Up Tokens to Generate
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── Wizard navigation ── */}
+              <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                {createStep === 0 ? (
+                  <Button variant="outline" onClick={() => setCurrentView("home")}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />Cancel
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={() => { setCreateStep((s) => s - 1); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />Back
+                  </Button>
+                )}
+
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground hidden sm:block">Step {createStep + 1} of 3</span>
+                  {createStep < 2 ? (
+                    <Button
+                      size="lg"
+                      className="btn-gradient px-8"
+                      onClick={() => {
+                        if (createStep === 0 && !hasCreateContent) {
+                          toast({
+                            title: "Add your content first",
+                            description: inputMode === "script"
+                              ? "Write or paste a script in the Script tab."
+                              : inputMode === "video"
+                                ? "Upload an image and describe how to animate it."
+                                : "Describe the scene you want to create.",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
+                        setCreateStep((s) => s + 1);
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                    >
+                      Continue<ArrowRight className="h-4 w-4 ml-1.5" />
+                    </Button>
                   ) : (
-                    <><Sparkles className="h-5 w-5 mr-2" />Create & Generate</>
+                    <Button
+                      onClick={handleCreateAndGenerate}
+                      disabled={isCreating}
+                      size="lg"
+                      className="btn-gradient text-base px-8"
+                    >
+                      {isCreating ? (
+                        <><Loader2 className="h-5 w-5 mr-2 animate-spin" />Creating...</>
+                      ) : (
+                        <><Sparkles className="h-5 w-5 mr-2" />Create & Generate</>
+                      )}
+                    </Button>
                   )}
-                </Button>
-                <Button variant="outline" onClick={() => setCurrentView("home")}>Cancel</Button>
+                </div>
               </div>
             </motion.div>
           )}
@@ -6979,6 +7611,25 @@ function VidoraApp() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* ═══════════════════════════════════════════════════════
+          GENERATION LOCK OVERLAY
+          Blocks the entire page (header, content, navs, footer) while
+          videos are being generated. Non-dismissible until done.
+          ═══════════════════════════════════════════════════════ */}
+      <AnimatePresence>
+        {generationPhase !== "idle" && currentProject && (
+          <GenerationLockOverlay
+            key="generation-lock-overlay"
+            phase={generationPhase}
+            projectTitle={currentProject.title}
+            scenes={safeScenes}
+            isRetrying={isGenerating}
+            onContinue={() => { setGenerationPhase("idle"); setGenerationStartedAt(null); }}
+            onRetry={handleRetryFailedScenes}
+          />
+        )}
+      </AnimatePresence>
 
       {/* ── Mobile Bottom Navigation (native app feel) ── */}
       {session?.user && (
