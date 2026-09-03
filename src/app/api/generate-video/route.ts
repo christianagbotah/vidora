@@ -111,7 +111,7 @@ async function createSceneTask(
     where: { id: scene.id },
     data: { taskId, status: "generating", errorMessage: null },
   });
-  console.log(`Scene ${scene.sceneNumber}: video task ${taskId} created`);
+  console.log(`Scene ${scene.sceneNumber}: video task ${taskId} created (queued → generating)`);
   return taskId;
 }
 
@@ -235,18 +235,33 @@ export async function POST(req: NextRequest) {
     }
 
     // Process pending scenes only (also retry scenes stuck in "generating" with no taskId,
-    // and scenes that failed due to rate limits — they can be retried)
+    // stale "queued" scenes from an interrupted run, and scenes that failed
+    // due to rate limits — they can be retried)
+    //
+    // "queued" = marked for this batch but its ZAI task hasn't been created
+    // yet (tasks are created sequentially ~15s apart). Freshly queued scenes
+    // belong to an ACTIVE run — reprocessing them would double-charge and
+    // duplicate tasks, so only STALE queued scenes (> 5 min without a task)
+    // are picked up (interrupted/crashed run recovery).
+    const QUEUED_STALE_MS = 5 * 60_000;
     const scenesToProcess = project.scenes.filter(
       (s) => !s.videoUrl && (
         s.status === "pending" ||
+        (s.status === "queued" && Date.now() - new Date(s.updatedAt).getTime() > QUEUED_STALE_MS) ||
         (s.status === "generating" && !s.taskId) ||
         (s.status === "failed" && s.errorMessage?.toLowerCase().includes("rate"))
       )
     );
 
+    // A run is considered ACTIVE when any scene is genuinely rendering
+    // (has a live task) or is freshly queued (inside the task-creation window).
+    const runActive = project.scenes.some(
+      (s) => (s.status === "generating" && s.taskId) ||
+        (s.status === "queued" && !s.videoUrl && Date.now() - new Date(s.updatedAt).getTime() <= QUEUED_STALE_MS)
+    );
+
     if (scenesToProcess.length === 0) {
-      const hasGenerating = project.scenes.some((s) => s.status === "generating" && s.taskId);
-      if (hasGenerating) {
+      if (runActive) {
         return NextResponse.json({
           success: true,
           message: "Generation already in progress.",
@@ -321,9 +336,12 @@ export async function POST(req: NextRequest) {
       videoModel: project.videoModel ?? null,
     };
 
-    // Mark scenes as generating immediately
+    // Mark scenes as "queued" immediately — they flip to "generating"
+    // one-by-one as their ZAI tasks are actually created (sequentially,
+    // ~15s apart), so the UI can show a real queue → rendering progression
+    // instead of everything appearing to render at once.
     for (const scene of scenesToProcess) {
-      await db.videoScene.update({ where: { id: scene.id }, data: { status: "generating", errorMessage: null } });
+      await db.videoScene.update({ where: { id: scene.id }, data: { status: "queued", errorMessage: null } });
     }
 
     // Return immediately — all work happens in background
@@ -426,7 +444,7 @@ export async function POST(req: NextRequest) {
         console.error(`Project ${projectId}: background generation crashed`, fatalErr);
         await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } }).catch(() => {});
         await db.videoScene.updateMany({
-          where: { projectId, status: "generating" },
+          where: { projectId, status: { in: ["generating", "queued"] } },
           data: { status: "failed", errorMessage: "An unexpected error occurred during generation." },
         }).catch(() => {});
 

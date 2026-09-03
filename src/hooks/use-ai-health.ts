@@ -42,28 +42,41 @@ export function useAIHealth(options: UseAIHealthOptions = {}): UseAIHealthResult
   const { intervalMs = 60_000, enabled = true } = options;
   const setAIHealth = useAppStore((s) => s.setAIHealth);
   const pollingRef = useRef(false);
+  // Transient network blips (connection reset / DNS flaps) shouldn't flash
+  // the "AI service down" badge — only mark down after 2 CONSECUTIVE
+  // failures. A successful check resets the counter.
+  const consecutiveFailuresRef = useRef(0);
 
   const check = useCallback(async () => {
     try {
       const res = await fetch("/api/ai/health", { cache: "no-store" });
       if (!res.ok) {
-        setAIHealth({
-          status: "down",
-          message: "AI service unreachable",
-        });
+        consecutiveFailuresRef.current++;
+        if (consecutiveFailuresRef.current >= 2) {
+          setAIHealth({
+            status: "down",
+            message: "AI service unreachable",
+          });
+        }
         return;
       }
       const data: HealthResponse = await res.json();
+      consecutiveFailuresRef.current = 0;
       setAIHealth({
         status: data.status,
         message: data.message,
         checkedAt: data.checkedAt,
       });
     } catch {
-      setAIHealth({
-        status: "down",
-        message: "Failed to reach AI service. Please check your connection.",
-      });
+      consecutiveFailuresRef.current++;
+      if (consecutiveFailuresRef.current >= 2) {
+        setAIHealth({
+          status: "down",
+          message: "Failed to reach AI service. Please check your connection.",
+        });
+      }
+      // Single blip: keep the previous status — the next 60s tick (or the
+      // browser's "online" event) re-checks automatically.
     }
   }, [setAIHealth]);
 

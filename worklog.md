@@ -2657,3 +2657,39 @@ Work Log:
 Stage Summary:
 - Sandbox admin credential: admin@vidora.local / Admin@123 (role=admin, 1000 tokens)
 - Login flow re-verified working against live dev server on port 3000
+
+---
+Task ID: gen-overlay-1
+Agent: main
+Task: Fix "Generating Your Video" overlay — progress bar stuck at 0%, frozen ETA, all rows "Rendering"; harden portrait/health polling against network errors
+
+User report: ticker texts rotate but the progress bar shows nothing for minutes; "~11 min remaining" never changes after 4 min; all 6 scenes showed "Rendering" at once instead of one-by-one. Console showed portrait-status + ai/health poll errors (ERR_CONNECTION_RESET / ERR_NAME_NOT_RESOLVED).
+
+Root causes found:
+1. Overlay progress counted ONLY scenes with a videoUrl — with parallel ZAI renders (2-6 min each) the bar sat at 0% for minutes
+2. ETA was a static remainingScenes×110s — never ticked, didn't model parallel rendering
+3. Backend marked ALL scenes "generating" upfront before tasks existed (tasks are created sequentially ~15s apart)
+4. BONUS BUG discovered during verification: when task creation failed FAST (rate limit within ~2s), scenes went pending→queued→failed between 5s refreshes, the failure guard (seenGeneratingRef) never armed, and the overlay hung on "Generating Your Video" with Failed rows until the 25-min safety valve
+
+Fixes (src/app/page.tsx, api/generate-video/route.ts, hooks/use-ai-health.ts, components/AIStatusBadge.tsx):
+- Estimated (soft) progress: each rendering scene contributes task-age/expected-duration (capped 85%, monotonic clamp vs updatedAt bumps) — the bar visibly creeps within seconds, pct labeled "~" until exact
+- Adaptive ETA (parallel model): remaining ≈ slowest scene's expected finish; expectation stretches when scenes run long so the ETA counts down then creeps up slowly instead of freezing
+- Per-scene rows: "Rendering · ~N%" (staggered by task-creation age) and "Queued" states; mobile shows compact ~N%
+- Backend now marks scenes "queued" upfront; createSceneTask flips to "generating" when the ZAI task actually exists; scenesToProcess includes stale (>5min) queued scenes (interrupted-run recovery); fresh-queued guard returns alreadyRunning (double-POST protection); crash cleanup covers queued+generating
+- Fast-fail overlay detection: all scenes terminal (done/failed) continuously > 5s → "Generation Interrupted" immediately (time-based to survive the retry flow's brief all-failed window); fresh runs reset the timer
+- Frontend "queued" handling everywhere: isAnyGenerating, phase transitions, reload-recovery lock, SceneCard spinner/badge, scene filter dropdown (Queued option)
+- Portrait polling: network errors no longer burn the 70-poll budget (only successful polls count), backoff 3s→15s on consecutive failures, 6-min wall-clock cap, 404 task-expiry handled, console spam reduced to 1-in-5
+- AI health (hook + badge): "down" only after 2 consecutive failures — single network blips no longer flash the badge
+
+Verification (agent-browser, admin session):
+- Live rate-limited runs: overlay correctly fast-fails to "Generation Interrupted" with the rate-limit message + refund note + Retry button (previously would hang 25 min); retry loop completes queued→failed→retry; browser caught real "Queued" rows from the live route; 8 tokens charged/refunded correctly (balance 1000 restored)
+- Simulated in-flight run (DB scene statuses generating/queued): bar crept 13%→20%→32%→40% across ~2 min, scene estimate 26%→41%→64%→80%, ETA counted down ~3→~2→~1 min, Queued vs Rendering distinct, monotonic (no backwards jumps)
+- Mobile 390px: compact per-scene % labels render, no overflow
+- ESLint 0 errors; dev.log + browser console clean; test project deleted, DB back to 0 projects
+
+Note: ZAI sandbox API is under a persistent 429 rate limit today (user's earlier 6-scene run consumed the window), so a full real queued→generating→completed cycle could not run during this session — the queued marking, fast-fail, retry, and progress math were all verified against the live route with real DB states.
+
+Stage Summary:
+- The generation overlay now shows visible, honest progress within seconds (estimated, marked with ~), a ticking ETA, and a real queue→render progression per scene
+- Fast-fail bug fixed: rate-limited runs surface the failure + retry path immediately instead of hanging for 25 minutes
+- Portrait + health polling survive network outages gracefully (backoff, no budget burn, no badge flapping)

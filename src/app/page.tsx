@@ -388,9 +388,21 @@ function GenerationLockOverlay({
   const [elapsed, setElapsed] = useState(0);
   const [msgIdx, setMsgIdx] = useState(0);
 
+  // Monotonic per-scene render ESTIMATE (0..1), keyed by scene id.
+  // The estimate is derived from task age; a scene's `updatedAt` can bump
+  // mid-render (e.g. thumbnail save), which would make the age look younger —
+  // the map clamps the estimate so progress never visibly goes backwards.
+  // Cleared on phase changes (a retry run starts fresh estimates).
+  const softFracRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (phase === "completed") softFracRef.current.clear();
+  }, [phase]);
+
   // Tick the elapsed timer while the run is active.
   // elapsed counts continuously from mount (the overlay only mounts while
   // a generation session is running, so no reset is needed between phases).
+  // The 1s tick also drives the estimated-progress + ETA recompute below,
+  // so the bar visibly creeps forward every second.
   useEffect(() => {
     if (phase !== "starting" && phase !== "generating") return;
     const timer = setInterval(() => setElapsed((e) => e + 1), 1_000);
@@ -410,8 +422,53 @@ function GenerationLockOverlay({
   const failed = failedList.length;
   const isActive = phase === "starting" || phase === "generating";
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  /* ── Estimated (soft) progress ───────────────────────────────
+     All scene tasks render in PARALLEL on the video engine and each takes
+     ~2-6 minutes, so the hard count (scenes with videoUrl) can sit at 0%
+     for minutes. To keep the user encouraged, each rendering scene
+     contributes an OPTIMISTIC estimate: task age / expected duration,
+     capped at 85% so a scene never looks finished before it is. A "~"
+     prefix marks the number as an estimate until it becomes exact. */
+  const EXPECTED_SCENE_SEC = 240; // typical ZAI clip render: 2-6 min
+  const nowMs = Date.now();
+  const renderingScenes = scenes.filter((s) => s.status === "generating" && !s.videoUrl);
+  const sceneAgeSec = (s: VideoScene) =>
+    Math.max(0, (nowMs - new Date(s.updatedAt).getTime()) / 1000);
+  const maxAgeSec = renderingScenes.length > 0
+    ? Math.max(...renderingScenes.map(sceneAgeSec))
+    : 0;
+  // Stretch the expectation when scenes run long, so the ETA creeps up
+  // slowly ("taking longer than usual") instead of freezing or lying:
+  const expectedSec = Math.max(EXPECTED_SCENE_SEC, maxAgeSec * 1.15);
+
+  const softFrac = new Map<string, number>();
+  for (const s of renderingScenes) {
+    const est = Math.min(0.85, sceneAgeSec(s) / expectedSec);
+    const val = Math.max(softFracRef.current.get(s.id) ?? 0, est);
+    softFracRef.current.set(s.id, val);
+    softFrac.set(s.id, val);
+  }
+  const sumSoft = renderingScenes.reduce((acc, s) => acc + (softFrac.get(s.id) ?? 0), 0);
   const remainingScenes = Math.max(0, total - completed - failed);
-  const estRemainingSec = remainingScenes * 110; // ~1.8 min per scene on average
+
+  // Bar during an active run shows hard + estimated progress; the
+  // completed/failed phases show the exact number.
+  const displayPct = isActive && total > 0
+    ? Math.min(100, ((completed + sumSoft) / total) * 100)
+    : pct;
+  const isEstimated = isActive && sumSoft > 0 && completed < total;
+
+  /* ── ETA (parallel model) ─────────────────────────────────
+     Scenes render concurrently, so the remaining time ≈ the slowest
+     scene's expected finish — NOT scenes × duration. Floors at 45s so it
+     never promises "done" while work remains. */
+  const anyQueued = scenes.some((s) => s.status === "queued" && !s.videoUrl);
+  const estRemainingSec: number = renderingScenes.length > 0
+    ? Math.max(45, expectedSec - maxAgeSec)
+    : anyQueued
+      ? EXPECTED_SCENE_SEC + 60
+      : remainingScenes * 110;
 
   return (
     <motion.div
@@ -522,16 +579,20 @@ function GenerationLockOverlay({
                   <span className="text-muted-foreground font-medium">
                     {total > 0 ? `${completed} of ${total} scenes complete` : "Preparing scenes…"}
                   </span>
-                  <span className="font-bold text-violet-600">{total > 0 ? `${pct}%` : ""}</span>
+                  <span className="font-bold text-violet-600">
+                    {total > 0 ? `${isEstimated ? "~" : ""}${Math.round(displayPct)}%` : ""}
+                  </span>
                 </div>
                 <Progress
-                  value={total > 0 ? (completed / total) * 100 : 0}
-                  className={`h-2.5 ${phase === "starting" ? "animate-pulse" : ""}`}
+                  value={displayPct}
+                  className={`h-2.5 ${phase === "starting" && total === 0 ? "animate-pulse" : ""}`}
                 />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatElapsedSeconds(elapsed)} elapsed</span>
                   {remainingScenes > 0 && total > 0 && (
-                    <span>~{Math.max(1, Math.round(estRemainingSec / 60))} min remaining</span>
+                    <span aria-live="polite">
+                      ~{Math.max(1, Math.ceil(estRemainingSec / 60))} min remaining
+                    </span>
                   )}
                 </div>
               </div>
@@ -543,6 +604,11 @@ function GenerationLockOverlay({
                     const isDone = !!scene.videoUrl;
                     const isFailed = scene.status === "failed" && !scene.videoUrl;
                     const isRendering = scene.status === "generating";
+                    // Estimated per-scene render progress (0-100) — ticks up
+                    // every second while the task runs so each row visibly moves:
+                    const renderEst = isRendering
+                      ? Math.round((softFrac.get(scene.id) ?? 0) * 100)
+                      : 0;
                     return (
                       <div key={scene.id} className="flex items-center gap-3 px-4 py-2.5 bg-white">
                         <div className={`h-6 w-6 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${
@@ -562,7 +628,14 @@ function GenerationLockOverlay({
                           ) : isFailed ? (
                             <><AlertTriangle className="h-4 w-4 text-red-500" /><span className="text-[10px] font-semibold text-red-500 hidden sm:inline">Failed</span></>
                           ) : isRendering ? (
-                            <><Loader2 className="h-4 w-4 text-violet-500 animate-spin" /><span className="text-[10px] font-semibold text-violet-600 hidden sm:inline">Rendering</span></>
+                            <>
+                              <Loader2 className="h-4 w-4 text-violet-500 animate-spin" />
+                              <span className="text-[10px] font-semibold text-violet-600 hidden sm:inline">
+                                {renderEst >= 2 ? `Rendering · ~${Math.min(99, renderEst)}%` : "Rendering…"}
+                              </span>
+                              {/* Mobile: compact % always visible */}
+                              <span className="text-[10px] font-semibold text-violet-600 sm:hidden">~{Math.min(99, Math.max(1, renderEst))}%</span>
+                            </>
                           ) : (
                             <><Clock className="h-4 w-4 text-slate-400" /><span className="text-[10px] font-semibold text-slate-400 hidden sm:inline">Queued</span></>
                           )}
@@ -594,13 +667,21 @@ function GenerationLockOverlay({
                     exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.25 }}
                   >
-                    {phase === "starting" ? "Reserving tokens & queueing scenes…" : GEN_STATUS_MESSAGES[msgIdx]}
+                    {phase === "starting"
+                      ? "Reserving tokens & queueing scenes…"
+                      : completed > 0
+                        ? GEN_STATUS_MESSAGES[msgIdx]
+                        : maxAgeSec > EXPECTED_SCENE_SEC
+                          ? "The video engine is busy — your clips are still rendering…"
+                          : GEN_STATUS_MESSAGES[msgIdx]}
                   </motion.span>
                 </AnimatePresence>
               </div>
 
               <p className="text-[11px] text-muted-foreground text-center border-t border-slate-100 pt-3">
-                The page stays locked while your video renders — this usually takes a few minutes.
+                {isEstimated
+                  ? "Progress is estimated in real time and updates as each clip finishes."
+                  : "The page stays locked while your video renders — this usually takes a few minutes."}
               </p>
             </>
           )}
@@ -676,11 +757,11 @@ function SortableSceneCard({
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [narrationVoice, setNarrationVoice] = useState(scene.narrationVoice || "tongtong");
 
-  const generating = isGeneratingScene || scene.status === "generating";
+  const generating = isGeneratingScene || scene.status === "generating" || scene.status === "queued";
 
   const statusColor = scene.status === "completed"
     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-    : scene.status === "generating"
+    : scene.status === "generating" || scene.status === "queued"
     ? "bg-violet-50 text-violet-700 border-violet-200"
     : scene.status === "failed"
     ? "bg-red-50 text-red-700 border-red-200"
@@ -1727,7 +1808,10 @@ function VidoraApp() {
     ? currentProject.scenes : [];
   const safeCharacters = currentProject?.characters && Array.isArray(currentProject.characters)
     ? currentProject.characters : [];
-  const isAnyGenerating = safeScenes.some((s) => s.status === "generating");
+  // A scene counts as "generating" while it is queued for this batch
+  // (task not created yet) OR actively rendering — both block duplicate
+  // runs and drive the fast 5s refresh cadence.
+  const isAnyGenerating = safeScenes.some((s) => s.status === "generating" || s.status === "queued");
   const completedSceneCount = safeScenes.filter((s) => s.videoUrl).length;
   const failedSceneCount = safeScenes.filter((s) => s.status === "failed").length;
   // True while the full-screen generation lock overlay should block the page
@@ -1977,12 +2061,19 @@ function VidoraApp() {
      Watches live scene statuses and flips the overlay between
      generating → completed / failed as the backend reports progress. */
   const seenGeneratingRef = useRef(false);
+  // Timestamp when ALL scenes were first observed in terminal states
+  // (done/failed) during an active run — the fast-fail path only triggers
+  // after this persists > 5s (survives the retry flow's brief all-failed
+  // window while scenes are being reset to pending).
+  const allTerminalSinceRef = useRef<number | null>(null);
   useEffect(() => {
     if (generationPhase !== "generating" && generationPhase !== "starting") return;
     if (!currentProject || safeScenes.length === 0) return;
 
     const allDone = safeScenes.every((s) => s.videoUrl);
-    const anyGenerating = safeScenes.some((s) => s.status === "generating");
+    // "queued" scenes belong to the active run (task creation is staggered
+    // ~15s apart) — they must not be mistaken for a dead run.
+    const anyGenerating = safeScenes.some((s) => s.status === "generating" || s.status === "queued");
     if (anyGenerating) seenGeneratingRef.current = true;
 
     if (allDone) {
@@ -1995,6 +2086,22 @@ function VidoraApp() {
     // before the first refresh lands.)
     if (generationPhase === "generating" && !anyGenerating && seenGeneratingRef.current) {
       setGenerationPhase("failed");
+    }
+    // Fast-fail case: if EVERY scene is in a terminal state (has a video or
+    // failed) continuously for > 5s, the run is definitively over — e.g. task
+    // creation was rate-limited within ~2s of starting, so no refresh will
+    // ever observe a "generating" state. Without this, the overlay would
+    // hang on "Generating…" with Failed rows until the 25-min valve. The 5s
+    // persistence requirement keeps the retry flow safe (scenes stay
+    // locally "failed" for a few seconds while being reset to pending).
+    const allTerminal = safeScenes.every((s) => !!s.videoUrl || s.status === "failed");
+    if (generationPhase === "generating" && allTerminal && !allDone) {
+      allTerminalSinceRef.current ??= Date.now();
+      if (Date.now() - allTerminalSinceRef.current > 5_000) {
+        setGenerationPhase("failed");
+      }
+    } else {
+      allTerminalSinceRef.current = null;
     }
     // Safety valve — never lock the user in forever (25 min cap)
     if (generationStartedAt && Date.now() - generationStartedAt > 25 * 60_000) {
@@ -2012,7 +2119,7 @@ function VidoraApp() {
     if (currentView !== "studio" || !currentProject || generationPhase !== "idle") return;
     const FRESH_RUN_MS = 30 * 60_000;
     const anyFreshGenerating = safeScenes.some(
-      (s) => s.status === "generating" && !s.videoUrl &&
+      (s) => (s.status === "generating" || s.status === "queued") && !s.videoUrl &&
         s.updatedAt && Date.now() - new Date(s.updatedAt).getTime() < FRESH_RUN_MS
     );
     if (anyFreshGenerating && safeScenes.length > 0) {
@@ -2065,6 +2172,7 @@ function VidoraApp() {
     if (!currentProject) return;
     setIsGenerating(true);
     seenGeneratingRef.current = false; // fresh run — reset failure guard
+    allTerminalSinceRef.current = null; // …and the fast-fail timer
     try {
       const res = await fetch("/api/generate-video", {
         method: "POST",
@@ -2460,14 +2568,26 @@ function VidoraApp() {
         return;
       }
 
-      // 2. Poll for result every 3 seconds (avoids gateway timeouts)
+      // 2. Poll for result. Network hiccups (connection reset, DNS blips,
+      //    dev-server restarts) must NOT eat the poll budget — only
+      //    SUCCESSFUL polls count toward the max, and failures back off
+      //    (3s → 6s → 9s → 12s → 15s) so an outage doesn't spam the console.
+      //    A 6-minute wall-clock cap guarantees the loop always terminates.
       const POLL_INTERVAL = 3000;
-      const MAX_POLLS = 70; // 3s × 70 = 210s max wait
-      for (let i = 0; i < MAX_POLLS; i++) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      const MAX_POLLS = 70;            // 3s × 70 = 210s of healthy polling
+      const MAX_WALL_CLOCK_MS = 360_000; // 6 min hard cap
+      const startedAt = Date.now();
+      let polls = 0;
+      let consecutiveErrors = 0;
+
+      while (polls < MAX_POLLS && Date.now() - startedAt < MAX_WALL_CLOCK_MS) {
+        const delay = POLL_INTERVAL * (1 + Math.min(consecutiveErrors, 4));
+        await new Promise((r) => setTimeout(r, delay));
         try {
           const pollRes = await fetch(`/api/generate-character-portrait/status?taskId=${startData.taskId}`);
           const pollData = await pollRes.json();
+          consecutiveErrors = 0; // connection is healthy again
+          polls++;
 
           if (pollData.status === "complete" && pollData.base64) {
             const dataUrl = `data:image/png;base64,${pollData.base64}`;
@@ -2479,13 +2599,23 @@ function VidoraApp() {
             toast({ title: `${charName}'s portrait failed`, description: pollData.error || "Generation failed", variant: "destructive" });
             return;
           }
-          // Still "generating" — continue polling
+          // Still "generating" — continue polling. A 404 (task expired,
+          // e.g. after a very long outage) ends the wait cleanly:
+          if (pollRes.status === 404) {
+            toast({ title: `${charName}'s portrait timed out`, description: "The generation task expired. Please try again.", variant: "destructive" });
+            return;
+          }
         } catch (err) {
-          console.warn(`[portrait] Poll error for ${charName}:`, err);
-          // Don't fail on a single poll error — retry next iteration
+          consecutiveErrors++;
+          // Transient network error — log once per 5 failures instead of
+          // spamming the console on every retry:
+          if (consecutiveErrors === 1 || consecutiveErrors % 5 === 0) {
+            console.warn(`[portrait] Poll error for ${charName} (retrying with backoff):`, err);
+          }
+          // Don't fail on network errors — the server task keeps running.
         }
       }
-      // Exceeded max polls
+      // Exceeded max polls / wall clock
       toast({ title: `${charName}'s portrait timed out`, description: "Generation is taking too long. Please try again.", variant: "destructive" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -2952,6 +3082,7 @@ function VidoraApp() {
       // Step 3: enter the studio with the generation lock already engaged
       autoGenFiredRef.current.add(project.id); // we trigger generation ourselves below
       seenGeneratingRef.current = false; // fresh run — reset failure guard
+      allTerminalSinceRef.current = null;
       setCurrentProject(project);
       setCurrentView("studio");
       setGenerationStartedAt(Date.now());
@@ -6604,7 +6735,8 @@ function VidoraApp() {
                         <SelectContent>
                           <SelectItem value="all"><span className="text-xs">All</span></SelectItem>
                           <SelectItem value="pending"><span className="text-xs">Pending</span></SelectItem>
-                          <SelectItem value="generating"><span className="text-xs">Generating</span></SelectItem>
+                          <SelectItem value="queued"><span className="text-xs">Queued</span></SelectItem>
+                          <SelectItem value="generating"><span className="text-xs">Rendering</span></SelectItem>
                           <SelectItem value="completed"><span className="text-xs">Completed</span></SelectItem>
                           <SelectItem value="failed"><span className="text-xs">Failed</span></SelectItem>
                         </SelectContent>

@@ -31,12 +31,16 @@ export function AIStatusBadge({ compact = false }: { compact?: boolean }) {
 
   useEffect(() => {
     let mounted = true;
+    // Single transient network blips shouldn't flash the badge red —
+    // only show "down" after 2 consecutive failed checks.
+    let consecutiveFailures = 0;
 
     async function check() {
       try {
         const res = await fetch("/api/ai/health", { cache: "no-store" });
         if (!res.ok) {
-          if (mounted) {
+          consecutiveFailures++;
+          if (mounted && consecutiveFailures >= 2) {
             setStatus("down");
             setMessage("AI service unreachable");
           }
@@ -44,13 +48,17 @@ export function AIStatusBadge({ compact = false }: { compact?: boolean }) {
         }
         const data: HealthResponse = await res.json();
         if (!mounted) return;
+        consecutiveFailures = 0;
         setStatus(data.status);
         setMessage(data.message);
       } catch {
-        if (mounted) {
+        consecutiveFailures++;
+        if (mounted && consecutiveFailures >= 2) {
           setStatus("down");
           setMessage("Failed to reach AI service");
         }
+        // Single blip: keep the previous status; the next 5-min tick
+        // (or the badge remounting) re-checks automatically.
       }
     }
 
