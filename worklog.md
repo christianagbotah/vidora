@@ -2459,3 +2459,24 @@ Work Log:
 Stage Summary:
 - Production is running the ZAI API constraint fixes (duration enum {5,10}, image model compat) — user should test a full video generation on vidora.lightworldtech.com to confirm
 - The middleware->proxy migration removes the deprecation warning; optional pull on VPS (no functional change, no DB change): git pull && bun run build && pm2 restart vidora
+
+---
+Task ID: cloudflare-524-1
+Agent: main (Z.ai Code)
+Task: Fix the two browser-console errors from the VPS production test — POST /api/generate-video-scene returning 524 and an unidentified 404
+
+Work Log:
+- Diagnosed the 524: Cloudflare cuts origin connections at ~100s; the single-scene route polled the ZAI task inline (up to 80x15s = 20 min) inside the HTTP request. The batch /api/generate-video route already had the right architecture (immediate return + background work)
+- Diagnosed the 404 class: ALL generated media (thumbnails, portraits, exports, previews, brand logos) was written into public/generated, which for the standalone server lives inside .next/standalone and is wiped by every `bun run build` — any scene thumbnail generated before a rebuild 404s afterwards (the user rebuilt 3x today)
+- Created src/lib/generated-store.ts: persistent store OUTSIDE the build output (GENERATED_DIR env override; auto-detects standalone cwd -> repo root), save/read helpers with legacy public/generated fallback, sanitizeRelPath traversal guard, publicOrigin/toAbsoluteUrl/resolvePublicAssetPath helpers
+- Created src/app/generated/[...path]/route.ts: serves store + legacy files with correct MIME, immutable cache, and HTTP Range support (206 Partial Content) for video seeking / iOS Safari
+- Rewrote /api/generate-video-scene: marks scene generating, fires thumbnail -> task creation -> polling as a background task, responds in <1s with {success, status:"generating"}; failures/timeout write status+errorMessage to DB (client polling surfaces them); reference image resolved to absolute URL
+- Migrated all 9 writer routes to the store: generate-video (batch), generate-video-scene, generate-scene, projects (character imageBase64), characters/[characterId]/generate-image, preview/image, export-video (both paths + workDirs), concatenate-video, export-branded (reads via resolver), brand-kit (uploads no longer wiped)
+- Frontend handleGenerateSingle: poll window 40x15s -> 80x15s (20 min, matching server) + final refreshProject() sync
+- Fixed latent 400: scene/character reference images were sent to the ZAI video API as local /generated/... paths (unreachable) — now resolved to absolute URLs via x-forwarded-host/proto (nginx sets Host + X-Forwarded-Proto)
+- Verified in sandbox: /api/generate-video-scene returns in 337ms (was minutes); background task 20260903121054e5657a2171db4835 created, polled, scene completed with real video URL; /api/video-status 200 authed in 66ms; /generated route tests: 404 missing, 400 traversal, 200 from store, 206 + Content-Range for Range requests, 200 legacy fallback; ESLint 0 errors; browser smoke test clean on freshly restarted dev server
+- Committed 8674336 and pushed
+
+Stage Summary:
+- 524 eliminated (337ms response, background generation, client polls DB status) and generated media now survives rebuilds in generated-store/ — both the reported errors are addressed
+- VPS redeploy: git pull && bun run build && pm2 restart vidora (no DB changes, no env changes needed; optional GENERATED_DIR env to relocate the store)
