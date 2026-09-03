@@ -6,8 +6,7 @@ import { zai, ZAIError } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
 
@@ -43,11 +42,10 @@ async function createSceneTask(
     imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null;
   },
   videoSize: string,
-  thumbSize: string
+  thumbSize: string,
+  origin: string
 ): Promise<string | null> {
   const scenePrompt = scene.enhancedPrompt || scene.prompt;
-  const outputDir = path.join(process.cwd(), "public", "generated");
-  await mkdir(outputDir, { recursive: true });
 
   // Generate thumbnail only if scene doesn't have one
   if (!scene.imageUrl) {
@@ -59,20 +57,21 @@ async function createSceneTask(
       });
       const buffer = Buffer.from(imageBase64, "base64");
       const filename = `thumb_${Date.now()}_${scene.sceneNumber}.png`;
-      await writeFile(path.join(outputDir, filename), buffer);
-      await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl: `/generated/${filename}` } });
+      const imageUrl = await saveGeneratedFile(filename, buffer);
+      await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl } });
       console.log(`Scene ${scene.sceneNumber}: thumbnail saved`);
     } catch (imgErr) {
       console.error(`Scene ${scene.sceneNumber}: thumbnail failed (non-fatal)`, imgErr);
     }
   }
 
-  // Determine reference image URL
+  // Determine reference image URL — must be absolute so the ZAI API
+  // can fetch it (local /generated/... paths are unreachable).
   let referenceImage: string | undefined;
   if (scene.referenceImageUrl) {
     // Skip base64 data URLs — too large for the API
     if (!scene.referenceImageUrl.startsWith("data:")) {
-      referenceImage = scene.referenceImageUrl;
+      referenceImage = toAbsoluteUrl(scene.referenceImageUrl, origin);
     }
   } else if (scene.characterIds) {
     try {
@@ -80,7 +79,7 @@ async function createSceneTask(
       if (charIds.length > 0) {
         const firstChar = await db.character.findUnique({ where: { id: charIds[0] } });
         if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
-          referenceImage = firstChar.imageUrl;
+          referenceImage = toAbsoluteUrl(firstChar.imageUrl, origin);
         }
       }
     } catch { /* ignore parse errors */ }
@@ -256,6 +255,9 @@ export async function POST(req: NextRequest) {
 
     const videoSize = VIDEO_SIZE_MAP[project.aspectRatio] || "1920x1080";
     const thumbSize = THUMB_SIZE_MAP[project.aspectRatio] || "1344x768";
+    // Capture the public origin while we still have the request — the
+    // background task needs it to build absolute reference-image URLs.
+    const origin = publicOrigin(req);
 
     // Mark scenes as generating immediately
     for (const scene of scenesToProcess) {
@@ -272,7 +274,7 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < scenesToProcess.length; i++) {
           const scene = scenesToProcess[i];
           try {
-            const taskId = await createSceneTask(scene, videoSize, thumbSize);
+            const taskId = await createSceneTask(scene, videoSize, thumbSize, origin);
             if (taskId) {
               taskIds.push({ sceneId: scene.id, sceneNumber: scene.sceneNumber, taskId });
             }

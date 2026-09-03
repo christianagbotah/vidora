@@ -1941,11 +1941,17 @@ function VidoraApp() {
               return false;
             }
           };
-          for (let i = 0; i < 40; i++) {
+          // Poll until done — 80 × 15s = 20 min, matching the server's
+          // background polling window (the API route returns immediately
+          // and works in the background; Cloudflare 524s anything longer
+          // than ~100s, so we must not hold the request open).
+          for (let i = 0; i < 80; i++) {
             await new Promise((r) => setTimeout(r, 15000));
             const done = await pollScene();
             if (done) break;
           }
+          // Sync final scene state even if polling timed out
+          await refreshProject();
         } else {
           await refreshProject();
         }

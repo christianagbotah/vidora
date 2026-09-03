@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { resolvePublicAssetPath, generatedStoreDir } from "@/lib/generated-store";
 import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -50,8 +51,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "No final video. Generate or export first." }, { status: 400 });
     }
 
-    const inputPath = path.join(process.cwd(), "public", inputVideo.replace(/^\//, ""));
-    const outputDir = path.join(process.cwd(), "public", "generated", "exports");
+    const inputPath = resolvePublicAssetPath(inputVideo);
+    const outputDir = path.join(generatedStoreDir(), "exports");
     await mkdir(outputDir, { recursive: true });
     const outputFilename = `export_${projectId.slice(-8)}_${Date.now()}.mp4`;
     const outputPath = path.join(outputDir, outputFilename);
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
     if (addMusic) {
       const scene = project.scenes.find((s) => s.musicTrackUrl);
       if (scene?.musicTrackUrl) {
-        const musicPath = path.join(process.cwd(), "public", scene.musicTrackUrl.replace(/^\//, ""));
+        const musicPath = resolvePublicAssetPath(scene.musicTrackUrl);
         try {
           await readFile(musicPath);
           // We'd need a complex filter to mix audio; for now, skip if no existing audio
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
     if (addWatermark) {
       const brandKit = await db.brandKit.findUnique({ where: { userId } });
       if (brandKit?.logoUrl) {
-        watermarkPath = path.join(process.cwd(), "public", brandKit.logoUrl.replace(/^\//, ""));
+        watermarkPath = resolvePublicAssetPath(brandKit.logoUrl);
         try {
           await readFile(watermarkPath);
         } catch { watermarkPath = null; }

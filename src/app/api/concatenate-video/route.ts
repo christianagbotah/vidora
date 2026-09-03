@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
     // Mark as generating
     await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
 
-    const workDir = path.join(process.cwd(), "public", "generated", "concat_" + projectId);
+    const workDir = path.join(generatedStoreDir(), "concat_" + projectId);
     await mkdir(workDir, { recursive: true });
 
     try {
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
           localPaths.push(localPath);
         } catch (dlErr) {
           console.error("Failed to download scene " + (i + 1) + ":", dlErr);
-          const localFile = path.join(process.cwd(), scene.videoUrl!);
+          const localFile = resolvePublicAssetPath(scene.videoUrl!);
           if (existsSync(localFile)) {
             localPaths.push(localFile);
           }
@@ -136,10 +137,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Move final video to public/generated
+      // Move final video to the persistent generated store
       const finalFileName = "final_" + projectId + ".mp4";
-      const finalPath = path.join(process.cwd(), "public", "generated", finalFileName);
+      const finalPath = generatedFilePath(finalFileName);
       const finalData = await readFile(outputPath);
+      await mkdir(path.dirname(finalPath), { recursive: true });
       await writeFile(finalPath, finalData);
 
       const finalVideoUrl = "/generated/" + finalFileName;

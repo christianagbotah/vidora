@@ -3,8 +3,7 @@ import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
 
@@ -34,9 +33,6 @@ export async function POST(
       "suitable for use as character reference in video generation",
     ].join(", ");
 
-    const outputDir = path.join(process.cwd(), "public", "generated", "characters");
-    await mkdir(outputDir, { recursive: true });
-
     const imageBase64 = await zai.generateImage({
       prompt: portraitPrompt,
       size: "1024x1024",
@@ -45,9 +41,7 @@ export async function POST(
 
     const buffer = Buffer.from(imageBase64, "base64");
     const filename = `char_${characterId.slice(0, 8)}_${Date.now()}.png`;
-    await writeFile(path.join(outputDir, filename), buffer);
-
-    const imageUrl = `/generated/characters/${filename}`;
+    const imageUrl = await saveGeneratedFile(`characters/${filename}`, buffer);
 
     // Update character with generated image and style prompt
     const updated = await db.character.update({

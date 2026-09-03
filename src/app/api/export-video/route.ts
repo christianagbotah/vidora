@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import path from "path";
@@ -421,7 +422,7 @@ async function handleSingleSceneExport(
     data: { status: "generating" },
   });
 
-  const workDir = path.join(process.cwd(), "public", "generated", `export_${projectId}`);
+  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
   await mkdir(workDir, { recursive: true });
 
   try {
@@ -482,9 +483,10 @@ async function handleSingleSceneExport(
       throw new Error("ffmpeg produced no output file");
     }
 
-    // Copy final to public
-    const finalPath = path.join(process.cwd(), "public", "generated", outputFileName);
+    // Copy final to the persistent generated store
+    const finalPath = generatedFilePath(outputFileName);
     const finalData = await readFile(outputPath);
+    await mkdir(path.dirname(finalPath), { recursive: true });
     await writeFile(finalPath, finalData);
 
     const finalVideoUrl = `/generated/${outputFileName}`;
@@ -538,7 +540,7 @@ async function handleMultiSceneExport(
     data: { status: "generating" },
   });
 
-  const workDir = path.join(process.cwd(), "public", "generated", `export_${projectId}`);
+  const workDir = path.join(generatedStoreDir(), `export_${projectId}`);
   await mkdir(workDir, { recursive: true });
 
   try {
@@ -557,7 +559,7 @@ async function handleMultiSceneExport(
         console.log(`[Export] Downloaded scene ${i + 1}/${completedScenes.length}`);
       } catch (dlErr) {
         // Fallback: check for local file
-        const localFile = path.join(process.cwd(), scene.videoUrl!);
+        const localFile = resolvePublicAssetPath(scene.videoUrl!);
         if (existsSync(localFile)) {
           localPaths.push(localFile);
           console.log(`[Export] Using local file for scene ${i + 1}`);
@@ -625,9 +627,10 @@ async function handleMultiSceneExport(
       throw new Error("ffmpeg export produced no output file");
     }
 
-    // ── Step 6: Copy to public/generated ───────────────────────────────
-    const finalPath = path.join(process.cwd(), "public", "generated", outputFileName);
+    // ── Step 6: Copy to the persistent generated store ───────────────
+    const finalPath = generatedFilePath(outputFileName);
     const finalData = await readFile(outputPath);
+    await mkdir(path.dirname(finalPath), { recursive: true });
     await writeFile(finalPath, finalData);
 
     const finalVideoUrl = `/generated/${outputFileName}`;

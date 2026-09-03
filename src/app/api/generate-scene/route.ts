@@ -3,8 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
 
@@ -39,17 +38,12 @@ export async function POST(req: NextRequest) {
 
     const buffer = Buffer.from(imageBase64, "base64");
 
-    // Ensure output directory exists
-    const outputDir = path.join(process.cwd(), "public", "generated");
-    await mkdir(outputDir, { recursive: true });
-
     const filename = `scene_${Date.now()}.png`;
-    const filepath = path.join(outputDir, filename);
-    await writeFile(filepath, buffer);
+    const imageUrl = await saveGeneratedFile(filename, buffer);
 
     return NextResponse.json({
       success: true,
-      imageUrl: `/generated/${filename}`,
+      imageUrl,
     });
   } catch (error) {
     const session = await getServerSession(authOptions).catch(() => null);

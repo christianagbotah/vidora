@@ -7,8 +7,7 @@ import { applyWatermark } from "@/lib/watermark";
 import { consumePreviewQuota, refundPreviewQuota } from "@/lib/preview-limit";
 import { db } from "@/lib/db";
 import { PRICING } from "@/lib/pricing";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
 
@@ -116,14 +115,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Persist the watermarked image to /public/generated/previews ──
+  // ── Persist the watermarked image to the generated store ──
   // We store it so the frontend can reference it by URL. These are deliberately
   // low-res + watermarked, so even if shared they have no commercial value.
-  const outputDir = path.join(process.cwd(), "public", "generated", "previews");
-  await mkdir(outputDir, { recursive: true });
   const filename = `preview_${userId}_${Date.now()}.jpg`;
-  await writeFile(path.join(outputDir, filename), watermarkedBuffer);
-  const publicUrl = `/generated/previews/${filename}`;
+  const publicUrl = await saveGeneratedFile(`previews/${filename}`, watermarkedBuffer);
 
   // ── Record the (free) cost for analytics so the owner sees CAC ──
   await db.tokenTransaction.create({

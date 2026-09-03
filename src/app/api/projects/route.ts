@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile } from "@/lib/generated-store";
 import crypto from "crypto";
 
 /**
@@ -74,7 +73,6 @@ export async function POST(req: NextRequest) {
 
     // ── Pre-process character images ──
     // If a character has imageBase64, save it to disk and compute the URL
-    const outputDir = path.join(process.cwd(), "public", "generated", "characters");
     const processedCharacters = characters?.length
       ? await Promise.all(
           characters.map(async (c: Record<string, string>) => {
@@ -88,15 +86,13 @@ export async function POST(req: NextRequest) {
 
             if (c.imageBase64) {
               try {
-                await mkdir(outputDir, { recursive: true });
                 // Strip data URL prefix if present
                 const raw = c.imageBase64.includes(",")
                   ? c.imageBase64.split(",")[1]
                   : c.imageBase64;
                 const buffer = Buffer.from(raw, "base64");
                 const filename = `char_${crypto.randomBytes(4).toString("hex")}_${Date.now()}.png`;
-                await writeFile(path.join(outputDir, filename), buffer);
-                result.imageUrl = `/generated/characters/${filename}`;
+                result.imageUrl = await saveGeneratedFile(`characters/${filename}`, buffer);
               } catch (err) {
                 console.error(`Failed to save character image for ${c.name}:`, err);
                 // Continue without image — non-fatal

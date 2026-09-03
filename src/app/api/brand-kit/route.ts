@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { saveGeneratedFile } from "@/lib/generated-store";
 
 /**
  * GET /api/brand-kit
@@ -55,10 +54,9 @@ export async function POST(req: NextRequest) {
         const buffer = Buffer.from(await logoFile.arrayBuffer());
         const ext = logoFile.name.split(".").pop()?.toLowerCase() || "png";
         const filename = `brand-${userId.slice(-8)}-${Date.now()}.${ext}`;
-        const uploadDir = path.join(process.cwd(), "public", "uploads");
-        await mkdir(uploadDir, { recursive: true });
-        await writeFile(path.join(uploadDir, filename), buffer);
-        logoUrl = `/uploads/${filename}`;
+        // Persisted in the generated store — survives rebuilds (unlike
+        // public/uploads which is wiped on every deploy).
+        logoUrl = await saveGeneratedFile(`uploads/${filename}`, buffer);
       }
       // Parse other fields
       for (const [key, value] of formData.entries()) {

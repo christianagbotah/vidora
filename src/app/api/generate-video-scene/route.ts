@@ -1,14 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { zaiErrorResponse } from "@/lib/zai-errors";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import {
+  saveGeneratedFile,
+  publicOrigin,
+  toAbsoluteUrl,
+} from "@/lib/generated-store";
 
 export const runtime = "nodejs";
+
+/**
+ * POST /api/generate-video-scene
+ *
+ * Generates the video for a single scene (Studio "Generate" button).
+ *
+ * IMPORTANT — returns immediately (< ~1s). All heavy work (thumbnail,
+ * task creation, polling) runs in a background task, exactly like the
+ * batch /api/generate-video route. The old synchronous design held the
+ * HTTP request open for up to 20 minutes while polling the ZAI task,
+ * which Cloudflare cuts off at ~100s with a 524 error.
+ *
+ * The client polls /api/video-status (DB-only, fast) — the scene flips
+ * to "completed" (videoUrl set) or "failed" (errorMessage set) when the
+ * background task finishes.
+ */
 
 const VIDEO_SIZE_MAP: Record<string, string> = {
   "16:9": "1920x1080",
@@ -81,115 +97,146 @@ export async function POST(req: NextRequest) {
     const videoSize = VIDEO_SIZE_MAP[aspectRatio] || "1920x1080";
     const thumbSize = THUMB_SIZE_MAP[aspectRatio] || "1344x768";
 
-    // Step 1: Generate thumbnail image if scene doesn't have one
-    let imageUrl: string | null = null;
-    const sceneData = await db.videoScene.findUnique({ where: { id: sceneId }, select: { imageUrl: true } });
-    if (!sceneData?.imageUrl) {
-      try {
-        const imageBase64 = await zai.generateImage({
-          prompt,
-          size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
-          retry: { label: "Thumbnail generation", timeoutMs: 120_000, maxRetries: 4 },
-        });
-        const buffer = Buffer.from(imageBase64, "base64");
-        const outputDir = path.join(process.cwd(), "public", "generated");
-        await mkdir(outputDir, { recursive: true });
-        const filename = `thumb_${Date.now()}_${sceneId.slice(0, 8)}.png`;
-        const filepath = path.join(outputDir, filename);
-        await writeFile(filepath, buffer);
-        imageUrl = `/generated/${filename}`;
-        await db.videoScene.update({ where: { id: sceneId }, data: { imageUrl } });
-      } catch (imgErr) {
-        console.error("Thumbnail generation failed (non-fatal):", imgErr);
-      }
-    } else {
-      imageUrl = sceneData.imageUrl;
-    }
+    // Resolve the reference image to an absolute URL the ZAI API can
+    // fetch (local /generated/... paths are unreachable from the API).
+    const origin = publicOrigin(req);
+    const absoluteReferenceImage = toAbsoluteUrl(referenceImage, origin);
 
-    // Step 2: Create video generation task
-    let taskId: string;
-    try {
-      taskId = await zai.generateVideo({
-        prompt,
-        size: videoSize,
-        duration: duration || 10,
-        quality: "quality",
-        withAudio: false,
-        ...(referenceImage ? { imageUrl: referenceImage } : {}),
-        retry: { label: "Video generation task", timeoutMs: 120_000, maxRetries: 2 },
-      });
-    } catch (err) {
-      const isRateLimit = err instanceof ZAIError && err.kind === "rate_limit";
-      const errorMsg = isRateLimit
-        ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
-        : err instanceof Error ? err.message : String(err);
-
-      await db.videoScene.update({
-        where: { id: sceneId },
-        data: { status: "failed", errorMessage: errorMsg },
-      });
-
-      return NextResponse.json({
-        success: false,
-        error: errorMsg,
-        isRateLimit,
-      });
-    }
-
-    console.log(`Video generation task created: ${taskId}`);
-
+    // Mark generating right away so the client's status polling sees it
     await db.videoScene.update({
       where: { id: sceneId },
-      data: { taskId, status: "generating", errorMessage: null },
-    });
+      data: { status: "generating", errorMessage: null },
+    }).catch(() => { /* scene may not exist yet client-side */ });
 
-    // Step 3: Poll for video result
-    const result = await zai.pollVideoTask({
-      taskId,
-      maxAttempts: 80,
-      intervalMs: 15_000,
-    });
-
-    if (result.status === "success" && result.videoUrl) {
-      await db.videoScene.update({
+    // ── Fire-and-forget: everything below runs in the background ──
+    void runSceneGeneration({
+      prompt,
+      sceneId,
+      duration: duration || 10,
+      videoSize,
+      thumbSize,
+      referenceImage: absoluteReferenceImage,
+    }).catch((err) => {
+      console.error("[generate-video-scene] background task crashed:", err);
+      db.videoScene.update({
         where: { id: sceneId },
-        data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
-      });
-      console.log(`Video ready: ${result.videoUrl.slice(0, 80)}...`);
-      return NextResponse.json({
-        success: true,
-        videoUrl: result.videoUrl,
-        taskId,
-        imageUrl,
-      });
-    }
+        data: {
+          status: "failed",
+          errorMessage: "An unexpected error occurred during generation.",
+        },
+      }).catch(() => {});
+    });
 
-    if (result.status === "timeout") {
-      console.warn(`Video generation timed out for task: ${taskId}`);
-      return NextResponse.json({
-        success: true,
-        taskId,
-        imageUrl,
-        status: "processing",
-        message: "Video is still being generated. It will be available shortly.",
-      });
-    }
+    // Respond immediately — the client polls /api/video-status
+    return NextResponse.json({
+      success: true,
+      status: "generating",
+      message: "Video generation started. This may take a few minutes.",
+    });
+  } catch (error) {
+    console.error("generate-video-scene:", error);
+    return NextResponse.json(
+      { success: false, error: "Failed to start generation" },
+      { status: 500 }
+    );
+  }
+}
 
-    // Failed
-    const errorMsg = result.error || "Video generation failed on the server";
+/** Background worker: thumbnail → video task → poll → DB updates. */
+async function runSceneGeneration(opts: {
+  prompt: string;
+  sceneId: string;
+  duration: number;
+  videoSize: string;
+  thumbSize: string;
+  referenceImage?: string;
+}): Promise<void> {
+  const { prompt, sceneId, duration, videoSize, thumbSize, referenceImage } = opts;
+
+  // Step 1: Generate thumbnail image if scene doesn't have one
+  let imageUrl: string | null = null;
+  const sceneData = await db.videoScene.findUnique({
+    where: { id: sceneId },
+    select: { imageUrl: true },
+  });
+  if (!sceneData?.imageUrl) {
+    try {
+      const imageBase64 = await zai.generateImage({
+        prompt,
+        size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
+        retry: { label: "Thumbnail generation", timeoutMs: 120_000, maxRetries: 4 },
+      });
+      const buffer = Buffer.from(imageBase64, "base64");
+      const filename = `thumb_${Date.now()}_${sceneId.slice(0, 8)}.png`;
+      imageUrl = await saveGeneratedFile(filename, buffer);
+      await db.videoScene.update({ where: { id: sceneId }, data: { imageUrl } });
+    } catch (imgErr) {
+      console.error("Thumbnail generation failed (non-fatal):", imgErr);
+    }
+  } else {
+    imageUrl = sceneData.imageUrl;
+  }
+
+  // Step 2: Create video generation task
+  let taskId: string;
+  try {
+    taskId = await zai.generateVideo({
+      prompt,
+      size: videoSize,
+      duration,
+      quality: "quality",
+      withAudio: false,
+      ...(referenceImage ? { imageUrl: referenceImage } : {}),
+      retry: { label: "Video generation task", timeoutMs: 120_000, maxRetries: 2 },
+    });
+  } catch (err) {
+    const isRateLimit = err instanceof ZAIError && err.kind === "rate_limit";
+    const errorMsg = isRateLimit
+      ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
+      : err instanceof Error ? err.message : String(err);
+
     await db.videoScene.update({
       where: { id: sceneId },
       data: { status: "failed", errorMessage: errorMsg },
     });
-    return NextResponse.json({
-      success: false,
-      error: errorMsg,
-    });
-  } catch (error) {
-    const session = await getServerSession(authOptions).catch(() => null);
-    return zaiErrorResponse(error, {
-      session,
-      logLabel: "generate-video-scene",
-    });
+    console.error(`[generate-video-scene] task creation failed: ${errorMsg}`);
+    return;
   }
+
+  console.log(`[generate-video-scene] task created: ${taskId}`);
+
+  await db.videoScene.update({
+    where: { id: sceneId },
+    data: { taskId, status: "generating", errorMessage: null },
+  });
+
+  // Step 3: Poll for video result (background — no HTTP timeout applies)
+  const result = await zai.pollVideoTask({
+    taskId,
+    maxAttempts: 80,
+    intervalMs: 15_000,
+  });
+
+  if (result.status === "success" && result.videoUrl) {
+    await db.videoScene.update({
+      where: { id: sceneId },
+      data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
+    });
+    console.log(`[generate-video-scene] video ready: ${result.videoUrl.slice(0, 80)}...`);
+    return;
+  }
+
+  if (result.status === "timeout") {
+    // Leave in "generating" state — client polling + reload recovery
+    // handle it; a future /api/video-status call could re-poll.
+    console.warn(`[generate-video-scene] polling timed out for task: ${taskId}`);
+    return;
+  }
+
+  // Failed
+  const errorMsg = result.error || "Video generation failed on the server";
+  await db.videoScene.update({
+    where: { id: sceneId },
+    data: { status: "failed", errorMessage: errorMsg },
+  });
 }

@@ -89,3 +89,6 @@ enhance-toast.png
 /auto-git.log
 ~/.github_token
 prisma/schema.prisma.postgres-backup
+
+# Persistent generated-media store (runtime artifacts, survives rebuilds)
+/generated-store/
