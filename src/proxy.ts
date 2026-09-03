@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export async function middleware(req: NextRequest) {
+// Next.js 16 "proxy" file convention (replaces the deprecated middleware.ts).
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // ── Public page routes (no auth needed) ──
