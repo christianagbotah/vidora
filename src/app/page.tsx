@@ -6,7 +6,7 @@ import { useAppStore } from "@/store/useAppStore";
 import { useToast } from "@/hooks/use-toast";
 import { signOut, useSession, SessionProvider } from "next-auth/react";
 import type {
-  VideoProject, VideoScene, ClassicScene, InputMode,
+  VideoProject, VideoScene, ClassicScene, InputMode, AppView,
   Character, ParsedSceneResult, DetectedCharacter, ContinuityIssue,
 } from "@/types/video";
 import {
@@ -109,6 +109,18 @@ const TRANSITIONS = [
   { value: "wipe", label: "Wipe" }, { value: "slide", label: "Slide" },
   { value: "cut", label: "Hard Cut" },
 ];
+
+/* Friendly names for each app view — used by the dynamic "Back to …" labels */
+const VIEW_LABELS: Record<AppView, string> = {
+  home: "Home",
+  create: "Create",
+  studio: "Project",
+  gallery: "Gallery",
+  admin: "Admin",
+  "buy-tokens": "Tokens",
+  dashboard: "Dashboard",
+  profile: "Profile",
+};
 
 const DURATION_PRESETS = [
   { value: 10, label: "10s" }, { value: 30, label: "30s" },
@@ -1713,6 +1725,45 @@ function VidoraApp() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [currentView]);
 
+  // ── View history stack (browser-back semantics for every "Back" button) ──
+  // Every distinct view transition is recorded, so Back returns the user to
+  // wherever they came from (e.g. Dashboard → Project → Back → Dashboard)
+  // instead of always dumping them on the homepage.
+  // Invariant: after this effect runs, the stack's top always equals currentView.
+  const viewHistoryRef = useRef<AppView[]>([]);
+  useEffect(() => {
+    const stack = viewHistoryRef.current;
+    if (stack[stack.length - 1] !== currentView) {
+      stack.push(currentView);
+      if (stack.length > 30) stack.shift(); // cap the stack
+    }
+  }, [currentView]);
+
+  /** The view goBack() would navigate to right now — drives the dynamic "Back to …" labels. */
+  const backTargetView = useMemo<AppView>(() => {
+    const stack = [...viewHistoryRef.current];
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      // Skip entries matching the current view (the newest one may not be pushed
+      // yet during this render) and studio entries that can no longer render.
+      if (top === currentView || (top === "studio" && !currentProject)) { stack.pop(); continue; }
+      return top;
+    }
+    return "home";
+  }, [currentView, currentProject]);
+
+  /** Navigate back to the previous distinct view; falls back when history is exhausted. */
+  const goBack = useCallback((fallback: AppView = "home") => {
+    const stack = viewHistoryRef.current;
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (top === currentView || (top === "studio" && !currentProject)) { stack.pop(); continue; }
+      setCurrentView(top);
+      return;
+    }
+    setCurrentView(fallback);
+  }, [currentView, currentProject, setCurrentView]);
+
   // ── Network error toast: offline / online detection ──
   const onlineToastShown = useRef(false);
   useEffect(() => {
@@ -1840,7 +1891,7 @@ function VidoraApp() {
           return;
         }
         e.preventDefault();
-        setCurrentView("home");
+        goBack();
       }
       if (!isTyping && e.key === " ") {
         e.preventDefault();
@@ -2058,7 +2109,7 @@ function VidoraApp() {
           setCurrentProject(null);
           // Only navigate away if we were viewing this project in the studio;
           // deleting from the dashboard keeps the user on the dashboard.
-          if (currentView === "studio") setCurrentView("home");
+          if (currentView === "studio") goBack();
         }
         toast({ title: "Project deleted" });
       } catch {
@@ -3664,6 +3715,7 @@ function VidoraApp() {
     setUserProfile(null);
     setUserTokens(0);
     clearPersistedNav();
+    viewHistoryRef.current = []; // history belongs to the previous session
     toast({ title: "Signed out" });
   };
 
@@ -5463,7 +5515,7 @@ function VidoraApp() {
               {/* ── Wizard navigation ── */}
               <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
                 {createStep === 0 ? (
-                  <Button variant="outline" onClick={() => setCurrentView("home")}>
+                  <Button variant="outline" onClick={() => goBack()}>
                     <ArrowLeft className="h-4 w-4 mr-1.5" />Cancel
                   </Button>
                 ) : (
@@ -5523,8 +5575,8 @@ function VidoraApp() {
             <motion.div key="studio" {...fadeUp} className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
               {/* ── A. Project Header ── */}
               <div className="flex items-center gap-3 flex-wrap">
-                <Button variant="ghost" size="sm" onClick={() => setCurrentView("home")} className="hover:bg-violet-50">
-                  <ArrowLeft className="h-4 w-4 mr-1" />Back
+                <Button variant="ghost" size="sm" onClick={() => goBack()} className="hover:bg-violet-50">
+                  <ArrowLeft className="h-4 w-4 mr-1" />Back to {VIEW_LABELS[backTargetView]}
                 </Button>
                 <div className="flex-1 min-w-0">
                   {editingProjectTitle ? (
@@ -6124,8 +6176,8 @@ function VidoraApp() {
 
               {/* Back button */}
               <div className="pt-4">
-                <Button variant="outline" onClick={() => setCurrentView("home")}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                <Button variant="outline" onClick={() => goBack()}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to {VIEW_LABELS[backTargetView]}
                 </Button>
               </div>
 
@@ -6298,8 +6350,8 @@ function VidoraApp() {
               </div>
 
               <div className="text-center pt-4">
-                <Button variant="outline" onClick={() => setCurrentView("home")}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                <Button variant="outline" onClick={() => goBack()}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to {VIEW_LABELS[backTargetView]}
                 </Button>
               </div>
             </motion.div>
@@ -6762,8 +6814,8 @@ function VidoraApp() {
               </Card>
 
               <div className="text-center pt-2">
-                <Button variant="outline" onClick={() => setCurrentView("home")}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                <Button variant="outline" onClick={() => goBack()}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to {VIEW_LABELS[backTargetView]}
                 </Button>
               </div>
             </motion.div>
@@ -6991,8 +7043,8 @@ function VidoraApp() {
               </Card>
 
               <div className="text-center pt-2">
-                <Button variant="outline" onClick={() => setCurrentView("home")}>
-                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                <Button variant="outline" onClick={() => goBack()}>
+                  <ArrowLeft className="h-4 w-4 mr-1.5" />Back to {VIEW_LABELS[backTargetView]}
                 </Button>
               </div>
             </motion.div>
@@ -7911,8 +7963,8 @@ function VidoraApp() {
                   />
 
                   <div className="text-center pt-2">
-                    <Button variant="outline" onClick={() => setCurrentView("home")}>
-                      <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Home
+                    <Button variant="outline" onClick={() => goBack()}>
+                      <ArrowLeft className="h-4 w-4 mr-1.5" />Back to {VIEW_LABELS[backTargetView]}
                     </Button>
                   </div>
                 </>

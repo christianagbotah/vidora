@@ -2522,3 +2522,28 @@ Work Log:
 Stage Summary:
 - Dashboard "My Projects" now supports: per-card delete with confirmation, bulk multi-select delete with confirmation + loading state, and a persistent grid/table view toggle
 - All delete flows reuse the existing owner-checked DELETE /api/projects/[id] endpoint — no backend changes needed
+
+---
+Task ID: back-nav-1
+Agent: main
+Task: Fix Back navigation — Back button on the single project (Studio) page always went to the homepage instead of returning to where the user came from (e.g. Dashboard)
+
+Work Log:
+- Root cause: the Studio "Back" button hard-coded setCurrentView("home"); the app has 8 views routed through the Zustand store with zero navigation history
+- Implemented a view-history stack with browser-back semantics in page.tsx:
+  - viewHistoryRef (useRef<AppView[]>) + tracking effect on currentView that pushes every distinct consecutive view (capped at 30); invariant: stack top === currentView
+  - goBack(fallback="home") — pops entries matching the current view (and studio entries that can no longer render because currentProject is null), then navigates to the previous distinct view; falls back to home when history is exhausted
+  - backTargetView (useMemo) — the view goBack() would go to right now; drives dynamic "Back to …" labels via new VIEW_LABELS map
+- Converted ALL back affordances to goBack():
+  - Studio "Back" (the reported bug) → now "Back to Dashboard" / "Back to Home" / etc. dynamically
+  - Create wizard step-0 Cancel → returns to where the wizard was opened from
+  - "Back to Home" buttons in Gallery, Buy Tokens, Dashboard, Profile, Admin → dynamic "Back to {previous view}" (degrades to "Back to Home" identically to before when there is no history)
+  - Escape key in Studio → goBack() instead of home
+  - Deleting the current project from Studio → goBack() (returns to Dashboard instead of Home)
+- handleSignOut resets the history stack (history belongs to the previous session)
+- Kept intentional home navigations as-is: header logo, mobile Home nav, studio-reload error fallback
+- Browser-verified with agent-browser (admin session): Dashboard→Studio→Back lands on Dashboard (VLM-confirmed "← Back to Dashboard" label); Home→Studio→Back lands on Home; multi-step chain back-back works; Escape from Studio returns to previous view; reload-while-in-studio restores Studio and Back gracefully falls back to Home; delete-project-from-studio returns to Dashboard; dynamic labels render on dashboard/gallery/buy-tokens/profile/admin; no console/page errors; ESLint passes
+
+Stage Summary:
+- All Back buttons now have proper browser-back semantics backed by an in-memory view history; labels tell the user exactly where Back will go
+- The reported bug (projects page → project page → back → homepage) is fixed: Back now returns to the Dashboard
