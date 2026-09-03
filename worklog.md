@@ -2617,3 +2617,26 @@ Stage Summary:
   ZAI_VIDEO_MODEL still forces a single model globally (operator escape hatch).
 - Corollary for the user: their comparison table's "Vidu2 = 4K flagship/most expensive" is marketing-flavored;
   official docs put Vidu2 at 720P/4-5s/$0.2-0.4, ViduQ1 at 1080P/5s/$0.4, CogVideoX-3 up to 4K and cheapest.
+
+---
+Task ID: storefront-pricing-1
+Agent: main
+Task: Admin-controlled pricing — per-clip engine prices, homepage packages, charge currency (GHS/USD)
+
+Work Log:
+- Prisma: added `EnginePricing` (modelId unique, priceGHS, priceUSD, tokensPerClip, isActive) and `PricingPlan` (slug, name, badge, prices, period, features JSON, ctaLabel/ctaAction, highlight, isActive, sortOrder) to both schema.prisma and schema.prisma.local; ran db:push
+- Created src/lib/storefront.ts — single source of truth: charge currency (SystemConfig `store.currency`), engine pricing (per-clip price + token charge + active flag), homepage plans CRUD; seeds mirror previous hardcoded values; 60s cache + invalidation on writes; DB-unreachable fallbacks keep storefront alive
+- API routes: GET /api/storefront/pricing (public: currency + active plans + active engines), GET/PUT /api/admin/storefront (admin: full state, currency + bulk engine save, reset-engines/reset-plans/reset-all actions), /api/admin/plans + /api/admin/plans/[id] (plan CRUD)
+- src/proxy.ts: allowlisted /api/storefront/pricing as public (homepage needs it pre-login)
+- /api/generate-video: token charge now per-engine via getEngineChargeInfo(project.videoModel) — tokensPerClip + image_gen; refunds share the same closure so they stay consistent; default engine keeps 3 tk → zero behavior change on seed values
+- /api/payments/packages: response now includes admin-selected `currency`
+- page.tsx (~+1100 lines): storefront state + fetch on mount; currency-aware `formatChargePrice` / `engineClipPriceLabel`; homepage pricing section now renders DB plans (badge colors, period suffix, secondary currency hint, CTA actions create/buy-tokens/contact, currency badge); engine picker shows admin price + tokens/clip chips and hides engines the admin disabled (wizard + studio pill selector + info line); Buy Tokens cards + modal display in active currency and charge it (handleBuyTokens gets USD amount when USD active); auto-fallback of selected engine to default when disabled
+- Admin panel: new "Storefront Pricing" card (charge-currency radios GHS/USD with hints + save; engine table with inline GHS/USD/token inputs, live GHS⇄USD auto-convert at live rate, Z.ai cost reference, live margin, available switches — default engine locked) + "Homepage Pricing Plans" card (reorder, badge, period, prices, feature count, highlight star, active switch, edit/delete, Add Plan, Reset)
+- New src/components/PlanEditDialog.tsx — plan editor with live homepage-card preview, price auto-convert, period/CTA selects, highlight/active/order
+- Agent-browser E2E (as temp admin, deleted after): homepage GHS cards → engine price edit (1.5→2.5 GHS) → save → picker instantly shows GH₵2.50/clip → currency→USD → homepage $9.99/$49.99 + Buy Tokens $ cards → Starter plan edit (25 GHS, auto-converted $2.21) → homepage updated → reset engines/plans + currency back → defaults confirmed; mobile 390px single-column, no overflow; dev.log clean; ESLint clean
+
+Stage Summary:
+- Admin now controls ALL money-facing surfaces without redeploy: which currency (GHS/USD), per-clip price + token charge per engine, engine availability, homepage package contents/prices/CTAs
+- Generation charges are per-engine (seed: CogVideoX-3 3tk, vidu2-image 4tk, viduq1/vidu2-reference 8tk + 1tk thumbnail) with matching refunds
+- New public endpoint /api/storefront/pricing (cached 60s, admin writes invalidate)
+- Test artifacts cleaned (temp admin deleted); DB back to seed defaults; commit ready

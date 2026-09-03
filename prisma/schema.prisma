@@ -202,6 +202,45 @@ model TokenPackage {
   @@index([isActive, sortOrder])
 }
 
+// ── Admin-managed per-engine clip pricing ──
+// The admin sets what users pay per video clip for EACH AI engine
+// (CogVideoX-3, Vidu 2, ViduQ1...). `tokensPerClip` is what actually gets
+// deducted from a user's balance during generation; priceGHS/priceUSD are
+// the storefront display prices. `isActive` hides an engine from the picker.
+model EnginePricing {
+  id            String   @id @default(cuid())
+  modelId       String   @unique // "CogVideoX-3" | "vidu2-image" | "vidu2-reference" | "viduq1-text" | "viduq1-image"
+  priceGHS      Float    @default(0)  // display price per clip (GHS)
+  priceUSD      Float    @default(0)  // display price per clip (USD)
+  tokensPerClip Int      @default(3)  // tokens deducted per generated clip
+  isActive      Boolean  @default(true) // offered in the engine picker
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+}
+
+// ── Admin-managed homepage pricing plans ──
+// The marketing pricing cards shown on the homepage ("Simple, Transparent
+// Pricing"). Fully admin-controlled: name, badge, price in both currencies,
+// billing period, feature bullets, CTA label/action, and ordering.
+model PricingPlan {
+  id            String   @id @default(cuid())
+  slug          String   @unique // stable reference, e.g. "starter", "pro"
+  name          String
+  badge         String?  // "FREE" | "POPULAR" | "BEST VALUE" | custom text
+  priceGHS      Float    @default(0)
+  priceUSD      Float    @default(0)
+  period        String   @default("month") // "forever" | "month" | "one-time"
+  features      String   @default("[]") @db.Text // JSON array of feature strings
+  ctaLabel      String   @default("Get Started")
+  ctaAction     String   @default("create") // "create" | "buy-tokens" | "contact"
+  highlight     Boolean  @default(false) // purple border + ribbon emphasis
+  isActive      Boolean  @default(true) // visible on homepage
+  sortOrder     Int      @default(0)
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  @@index([isActive, sortOrder])
+}
+
 // ════════════════════════════════════════════════════════════════
 // ADVANCED FEATURES SCHEMA
 // ════════════════════════════════════════════════════════════════

@@ -16,6 +16,7 @@ export async function proxy(req: NextRequest) {
     "/api/payments/webhook",    // payment gateway callbacks
     "/api/payments/packages",   // list packages (needed before login)
     "/api/payments/verify",     // paystack client-side verify
+    "/api/storefront/pricing",  // public storefront pricing (currency + plans + engine prices)
     "/api/demo/",               // demo templates + create
     "/api/templates",           // template listing
     "/api/share/",              // public shared project view

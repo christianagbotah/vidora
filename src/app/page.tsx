@@ -66,6 +66,7 @@ import DeviceSimulator from "@/components/DeviceSimulator";
 import { AIStatusBadge } from "@/components/AIStatusBadge";
 import { PRICING } from "@/lib/pricing";
 import { PackageEditDialog } from "@/components/PackageEditDialog";
+import { PlanEditDialog } from "@/components/PlanEditDialog";
 import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
 import AIAssistant from "@/components/AIAssistant";
@@ -235,6 +236,94 @@ interface AdminTokenPackage {
   effectiveTokenPriceUSD: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   STOREFRONT: admin-managed pricing types + fallback seeds
+   (mirrors src/lib/storefront.ts shapes — client-side copy because
+   the server module imports the DB)
+   ════════════════════════════════════════════════════════════════ */
+
+type StorefrontCurrency = "GHS" | "USD";
+
+interface EnginePricingClient {
+  modelId: string;
+  name: string;
+  familyLabel: string;
+  tierLabel: string;
+  resolution: string;
+  durationSec: number;
+  zaiCostUsd: number;
+  priceGHS: number;
+  priceUSD: number;
+  tokensPerClip: number;
+  isActive: boolean;
+  isDefault: boolean;
+  marginPct: number;
+}
+
+interface StorefrontPlanClient {
+  id: string;
+  slug: string;
+  name: string;
+  badge: string | null;
+  priceGHS: number;
+  priceUSD: number;
+  period: string; // "forever" | "month" | "one-time"
+  features: string[];
+  ctaLabel: string;
+  ctaAction: string; // "create" | "buy-tokens" | "contact"
+  highlight: boolean;
+  isActive: boolean;
+  sortOrder: number;
+}
+
+/** Homepage pricing cards shown before the storefront API responds (or if
+    it fails). Mirrors the DB seeds exactly, so users never see an empty grid. */
+const DEFAULT_STOREFRONT_PLANS: StorefrontPlanClient[] = [
+  {
+    id: "starter", slug: "starter", name: "Starter", badge: "FREE",
+    priceGHS: 0, priceUSD: 0, period: "forever",
+    features: ["100 Free Tokens", "5 projects", "720p export", "Basic styles", "Community support"],
+    ctaLabel: "Get Started", ctaAction: "create",
+    highlight: false, isActive: true, sortOrder: 0,
+  },
+  {
+    id: "pro", slug: "pro", name: "Pro", badge: "POPULAR",
+    priceGHS: 150, priceUSD: 9.99, period: "month",
+    features: ["2,000 Tokens", "Unlimited projects", "1080p export", "All styles + AI Director", "Priority rendering", "Email support"],
+    ctaLabel: "Buy Tokens", ctaAction: "buy-tokens",
+    highlight: true, isActive: true, sortOrder: 1,
+  },
+  {
+    id: "enterprise", slug: "enterprise", name: "Enterprise", badge: "BEST VALUE",
+    priceGHS: 750, priceUSD: 49.99, period: "month",
+    features: ["10,000 Tokens", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"],
+    ctaLabel: "Contact Us", ctaAction: "contact",
+    highlight: false, isActive: true, sortOrder: 2,
+  },
+];
+
+/** Charge-currency options shown in the admin panel. */
+const STOREFRONT_CURRENCIES: { code: StorefrontCurrency; label: string; symbol: string; hint: string }[] = [
+  { code: "GHS", label: "Ghana Cedi", symbol: "GH₵", hint: "Mobile Money friendly (MTN, Vodafone)" },
+  { code: "USD", label: "US Dollar", symbol: "$", hint: "International cards (Visa, Mastercard)" },
+];
+
+/** Badge gradient for a plan card (FREE → emerald, POPULAR → violet, …). */
+function planBadgeStyle(badge: string | null): string {
+  const b = (badge || "").toUpperCase();
+  if (b.includes("FREE")) return "bg-gradient-to-r from-emerald-400 to-teal-500";
+  if (b.includes("POPULAR")) return "bg-gradient-to-r from-violet-500 to-fuchsia-500";
+  if (b.includes("BEST") || b.includes("VALUE")) return "bg-gradient-to-r from-amber-400 to-orange-500";
+  return "bg-gradient-to-r from-slate-500 to-slate-600";
+}
+
+/** "/forever" | "/month" | "/one-time" suffix for a plan's price. */
+function planPeriodLabel(period: string): string {
+  if (period === "forever") return "/forever";
+  if (period === "one-time") return "/one-time";
+  return "/month";
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -1580,6 +1669,26 @@ function VidoraApp() {
   const [apiCosts, setApiCosts] = useState<{ pricingTable: Array<{ operation: string; label: string; tokensCharged: number; estimatedCostUsd: number }>; historical: Record<string, unknown>; projectEstimates: Array<{ label: string; scenes: number; tokens: number; zaiCostUsd: number; revenueUsd: number; profitUsd: number; marginPct: number }> } | null>(null);
   const [apiCostsLoading, setApiCostsLoading] = useState(false);
 
+  // ── Storefront pricing (admin-managed) ──
+  // Public storefront state: charge currency + homepage plans + engine prices.
+  const [storefrontCurrency, setStorefrontCurrency] = useState<StorefrontCurrency>("GHS");
+  const [storefrontPlans, setStorefrontPlans] = useState<StorefrontPlanClient[]>(DEFAULT_STOREFRONT_PLANS);
+  const [storefrontEngines, setStorefrontEngines] = useState<EnginePricingClient[]>([]);
+  // ── Admin: Storefront Pricing management ──
+  const [adminCurrency, setAdminCurrency] = useState<StorefrontCurrency>("GHS");
+  const [savedAdminCurrency, setSavedAdminCurrency] = useState<StorefrontCurrency>("GHS");
+  const [savingCurrency, setSavingCurrency] = useState(false);
+  const [adminEngines, setAdminEngines] = useState<EnginePricingClient[]>([]);
+  const [engineDrafts, setEngineDrafts] = useState<Record<string, { priceGHS: string; priceUSD: string; tokensPerClip: string; isActive: boolean }>>({});
+  const [enginePricingDirty, setEnginePricingDirty] = useState(false);
+  const [savingEnginePricing, setSavingEnginePricing] = useState(false);
+  const [resettingEnginePricing, setResettingEnginePricing] = useState(false);
+  const [adminPlans, setAdminPlans] = useState<StorefrontPlanClient[]>([]);
+  const [editingPlan, setEditingPlan] = useState<StorefrontPlanClient | null>(null);
+  const [planDialogOpen, setPlanDialogOpen] = useState(false);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [resettingStorefrontPlans, setResettingStorefrontPlans] = useState(false);
+
   /* ── Payment State ── */
   const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
   const [buyTokensModalOpen, setBuyTokensModalOpen] = useState(false);
@@ -1624,11 +1733,38 @@ function VidoraApp() {
   // True while the full-screen generation lock overlay should block the page
   const generationActive = generationPhase === "starting" || generationPhase === "generating";
 
+  /* ── Storefront pricing derived values ── */
+  // Admin-set engine pricing: per-clip price + token charge per engine
+  const enginePricingMap = useMemo(() => {
+    const map = new Map<string, EnginePricingClient>();
+    storefrontEngines.forEach((e) => map.set(e.modelId, e));
+    return map;
+  }, [storefrontEngines]);
+  // Engines offered to users (admin can disable individual engines)
+  const offeredVideoModels = useMemo(
+    () => VIDEO_MODELS.filter((m) => enginePricingMap.get(m.id)?.isActive !== false),
+    [enginePricingMap]
+  );
+  const chargeSymbol = storefrontCurrency === "USD" ? "$" : "GH₵";
+  const formatChargePrice = useCallback((ghs: number, usd: number) => {
+    const primary = storefrontCurrency === "USD" ? Number(usd) : Number(ghs);
+    const shown = Number.isInteger(primary) ? String(primary) : primary.toFixed(2);
+    return `${chargeSymbol}${shown}`;
+  }, [storefrontCurrency, chargeSymbol]);
+  // Per-clip price label for an engine: admin-set price in the active charge
+  // currency, or the static Z.ai catalog cost as an informational fallback.
+  const engineClipPriceLabel = useCallback((modelId: string) => {
+    const ep = enginePricingMap.get(modelId);
+    if (ep) return `${formatChargePrice(ep.priceGHS, ep.priceUSD)}/clip`;
+    const info = getVideoModelInfo(modelId);
+    return info ? `~$${info.costUsd.toFixed(2)}/clip` : "";
+  }, [enginePricingMap, formatChargePrice]);
+
   /* ── Create wizard derived values ── */
   const wizardContentText = inputMode === "script" ? scriptText : textPrompt;
   const hasCreateContent = wizardContentText.trim().length > 0 || parsedScenes.length > 0;
   const createSceneCount = parsedScenes.length > 0 ? parsedScenes.length : 1;
-  const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
+  const tokensPerScene = (enginePricingMap.get(selectedModel)?.tokensPerClip ?? PRICING.video_gen.tokens) + PRICING.image_gen.tokens;
   const createTokensNeeded = createSceneCount * tokensPerScene;
   const tokensInsufficient = createTokensNeeded > userTokens;
   // Selected video engine's catalog entry (always defined — CogVideoX-3 is the fallback)
@@ -3824,7 +3960,7 @@ function VidoraApp() {
   const handleAdminLoadData = useCallback(async () => {
     setAdminLoading(true);
     try {
-      const [usersRes, paymentsRes, analyticsRes, configRes, packagesRes, exchangeRes, apiCostsRes] = await Promise.all([
+      const [usersRes, paymentsRes, analyticsRes, configRes, packagesRes, exchangeRes, apiCostsRes, storefrontRes] = await Promise.all([
         fetch("/api/admin/users"),
         fetch("/api/admin/payments"),
         fetch("/api/admin/analytics"),
@@ -3832,6 +3968,7 @@ function VidoraApp() {
         fetch("/api/admin/packages"),
         fetch("/api/admin/exchange-rate").catch(() => null),
         fetch("/api/admin/api-costs").catch(() => null),
+        fetch("/api/admin/storefront").catch(() => null),
       ]);
       const [usersData, paymentsData, analyticsData, configData, packagesData] = await Promise.all([
         usersRes.json(), paymentsRes.json(), analyticsRes.json(), configRes.json(), packagesRes.json(),
@@ -3866,6 +4003,31 @@ function VidoraApp() {
         try {
           const costsData = await apiCostsRes.json();
           if (costsData.success) setApiCosts(costsData.data);
+        } catch { /* ignore */ }
+      }
+      // Storefront pricing (currency + engines + homepage plans)
+      if (storefrontRes?.ok) {
+        try {
+          const sfData = await storefrontRes.json();
+          if (sfData.success) {
+            if (sfData.currency === "USD" || sfData.currency === "GHS") {
+              setAdminCurrency(sfData.currency);
+              setSavedAdminCurrency(sfData.currency);
+            }
+            if (Array.isArray(sfData.engines)) {
+              setAdminEngines(sfData.engines);
+              setEngineDrafts(
+                Object.fromEntries(
+                  (sfData.engines as EnginePricingClient[]).map((e) => [
+                    e.modelId,
+                    { priceGHS: String(e.priceGHS), priceUSD: String(e.priceUSD), tokensPerClip: String(e.tokensPerClip), isActive: e.isActive },
+                  ])
+                )
+              );
+              setEnginePricingDirty(false);
+            }
+            if (Array.isArray(sfData.plans)) setAdminPlans(sfData.plans);
+          }
         } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
@@ -4025,6 +4187,340 @@ function VidoraApp() {
     }
   };
 
+  // ════════════════════════════════════════════════════════════════
+  // ADMIN: Storefront Pricing (charge currency · engine prices · plans)
+  // ════════════════════════════════════════════════════════════════
+
+  /** Fetch the PUBLIC storefront state (currency + plans + engine prices).
+      Also used by admin handlers to refresh what users see after a save. */
+  const fetchStorefront = useCallback(async () => {
+    try {
+      const res = await fetch("/api/storefront/pricing");
+      const data = await res.json();
+      if (data.success) {
+        if (data.currency === "USD" || data.currency === "GHS") setStorefrontCurrency(data.currency);
+        if (Array.isArray(data.plans) && data.plans.length > 0) setStorefrontPlans(data.plans);
+        if (Array.isArray(data.engines)) setStorefrontEngines(data.engines);
+      }
+    } catch { /* silent — fallback seeds keep the UI intact */ }
+  }, []);
+
+  /** Load the full storefront state for the admin panel + seed edit drafts. */
+  const refreshAdminStorefront = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/storefront");
+      const data = await res.json();
+      if (!data.success) return;
+      if (data.currency === "USD" || data.currency === "GHS") {
+        setAdminCurrency(data.currency);
+        setSavedAdminCurrency(data.currency);
+      }
+      if (Array.isArray(data.engines)) {
+        setAdminEngines(data.engines);
+        setEngineDrafts(
+          Object.fromEntries(
+            data.engines.map((e: EnginePricingClient) => [
+              e.modelId,
+              { priceGHS: String(e.priceGHS), priceUSD: String(e.priceUSD), tokensPerClip: String(e.tokensPerClip), isActive: e.isActive },
+            ])
+          )
+        );
+        setEnginePricingDirty(false);
+      }
+      if (Array.isArray(data.plans)) setAdminPlans(data.plans);
+    } catch { /* silent */ }
+  }, []);
+
+  /** Save the admin-selected charge currency (GHS | USD). */
+  const handleSaveCurrency = async () => {
+    setSavingCurrency(true);
+    try {
+      const res = await fetch("/api/admin/storefront", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currency: adminCurrency }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSavedAdminCurrency(adminCurrency);
+        toast({
+          title: `Charge currency set to ${adminCurrency}`,
+          description: "Homepage plans, engine prices, and Buy Tokens now display in this currency.",
+        });
+        fetchStorefront(); // refresh the public storefront immediately
+      } else {
+        toast({ title: "Failed to save currency", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save currency", variant: "destructive" });
+    } finally {
+      setSavingCurrency(false);
+    }
+  };
+
+  /** Update one engine's draft fields. Auto-converts GHS ⇄ USD at the live
+      exchange rate when the admin edits a money field. */
+  const updateEngineDraft = (
+    modelId: string,
+    field: "priceGHS" | "priceUSD" | "tokensPerClip" | "isActive",
+    value: string | boolean
+  ) => {
+    setEngineDrafts((prev) => {
+      const draft = prev[modelId];
+      if (!draft) return prev;
+      const next = { ...draft };
+      if (field === "isActive") {
+        next.isActive = Boolean(value);
+      } else if (field === "tokensPerClip") {
+        next.tokensPerClip = String(value).replace(/[^0-9]/g, "");
+      } else if (field === "priceGHS") {
+        const ghs = String(value).replace(/[^0-9.]/g, "");
+        next.priceGHS = ghs;
+        // Auto-convert → USD (only when a live-ish rate is available)
+        const ghsNum = Number(ghs);
+        if (exchangeRate?.usdPerGhs && ghsNum > 0) {
+          next.priceUSD = String(Math.round(ghsNum * exchangeRate.usdPerGhs * 100) / 100);
+        }
+      } else {
+        const usd = String(value).replace(/[^0-9.]/g, "");
+        next.priceUSD = usd;
+        const usdNum = Number(usd);
+        if (exchangeRate?.ghsPerUsd && usdNum > 0) {
+          next.priceGHS = String(Math.round(usdNum * exchangeRate.ghsPerUsd * 100) / 100);
+        }
+      }
+      return { ...prev, [modelId]: next };
+    });
+    setEnginePricingDirty(true);
+  };
+
+  /** Bulk-save all engine pricing drafts. */
+  const handleSaveEnginePricing = async () => {
+    setSavingEnginePricing(true);
+    try {
+      const engines = adminEngines.map((e) => {
+        const d = engineDrafts[e.modelId];
+        return {
+          modelId: e.modelId,
+          priceGHS: Number(d?.priceGHS) || 0,
+          priceUSD: Number(d?.priceUSD) || 0,
+          tokensPerClip: Math.max(1, Number(d?.tokensPerClip) || 1),
+          isActive: d?.isActive !== false,
+        };
+      });
+      const res = await fetch("/api/admin/storefront", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engines }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminEngines(data.engines);
+        setEngineDrafts(
+          Object.fromEntries(
+            (data.engines as EnginePricingClient[]).map((e) => [
+              e.modelId,
+              { priceGHS: String(e.priceGHS), priceUSD: String(e.priceUSD), tokensPerClip: String(e.tokensPerClip), isActive: e.isActive },
+            ])
+          )
+        );
+        setEnginePricingDirty(false);
+        toast({
+          title: "Engine pricing saved",
+          description: "Per-clip prices and token charges are live — the picker updates instantly.",
+        });
+        fetchStorefront();
+      } else {
+        toast({ title: "Failed to save engine pricing", description: data.error, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save engine pricing", variant: "destructive" });
+    } finally {
+      setSavingEnginePricing(false);
+    }
+  };
+
+  /** Reset engine pricing to seed defaults. */
+  const handleResetEnginePricing = async () => {
+    if (!confirm("Reset all engine prices to the default values? Your custom per-clip prices will be discarded.")) return;
+    setResettingEnginePricing(true);
+    try {
+      const res = await fetch("/api/admin/storefront", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset-engines" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminEngines(data.engines);
+        setEngineDrafts(
+          Object.fromEntries(
+            (data.engines as EnginePricingClient[]).map((e) => [
+              e.modelId,
+              { priceGHS: String(e.priceGHS), priceUSD: String(e.priceUSD), tokensPerClip: String(e.tokensPerClip), isActive: e.isActive },
+            ])
+          )
+        );
+        setEnginePricingDirty(false);
+        toast({ title: "Engine pricing reset to defaults" });
+        fetchStorefront();
+      } else {
+        toast({ title: "Failed to reset", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to reset", variant: "destructive" });
+    } finally {
+      setResettingEnginePricing(false);
+    }
+  };
+
+  /** Create or update a homepage pricing plan. */
+  const handleSavePlan = async (plan: Partial<StorefrontPlanClient> & { id?: string }) => {
+    setSavingPlan(true);
+    try {
+      const isEdit = !!plan.id;
+      const body = {
+        slug: plan.slug,
+        name: plan.name,
+        badge: plan.badge ?? null,
+        priceGHS: Number(plan.priceGHS) || 0,
+        priceUSD: Number(plan.priceUSD) || 0,
+        period: plan.period,
+        features: plan.features || [],
+        ctaLabel: plan.ctaLabel,
+        ctaAction: plan.ctaAction,
+        highlight: Boolean(plan.highlight),
+        isActive: plan.isActive !== false,
+        sortOrder: Number(plan.sortOrder ?? 0),
+      };
+      const url = isEdit ? `/api/admin/plans/${plan.id}` : "/api/admin/plans";
+      const method = isEdit ? "PUT" : "POST";
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: isEdit ? "Plan updated" : "Plan created", description: "The homepage pricing section updates instantly." });
+        setPlanDialogOpen(false);
+        setEditingPlan(null);
+        refreshAdminStorefront();
+        fetchStorefront();
+      } else {
+        toast({ title: "Failed to save plan", description: data.error || "Check the fields and try again.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to save plan", variant: "destructive" });
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const handleDeletePlan = async (id: string) => {
+    if (!confirm("Delete this pricing plan? The card disappears from the homepage immediately.")) return;
+    try {
+      const res = await fetch(`/api/admin/plans/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Plan deleted" });
+        refreshAdminStorefront();
+        fetchStorefront();
+      } else {
+        toast({ title: "Failed to delete plan", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to delete plan", variant: "destructive" });
+    }
+  };
+
+  const handleTogglePlanActive = async (plan: StorefrontPlanClient) => {
+    setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, isActive: !p.isActive } : p)));
+    try {
+      const res = await fetch(`/api/admin/plans/${plan.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !plan.isActive }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, isActive: plan.isActive } : p)));
+        toast({ title: "Failed to toggle plan", variant: "destructive" });
+        return;
+      }
+      toast({ title: plan.isActive ? "Plan hidden from homepage" : "Plan is now live", description: plan.name });
+      fetchStorefront();
+    } catch {
+      setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, isActive: plan.isActive } : p)));
+      toast({ title: "Failed to toggle plan", variant: "destructive" });
+    }
+  };
+
+  const handleTogglePlanHighlight = async (plan: StorefrontPlanClient) => {
+    setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, highlight: !p.highlight } : p)));
+    try {
+      const res = await fetch(`/api/admin/plans/${plan.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ highlight: !plan.highlight }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, highlight: plan.highlight } : p)));
+        toast({ title: "Failed to toggle highlight", variant: "destructive" });
+        return;
+      }
+      fetchStorefront();
+    } catch {
+      setAdminPlans((prev) => prev.map((p) => (p.id === plan.id ? { ...p, highlight: plan.highlight } : p)));
+      toast({ title: "Failed to toggle highlight", variant: "destructive" });
+    }
+  };
+
+  const handleReorderPlan = async (plan: StorefrontPlanClient, direction: "up" | "down") => {
+    const sorted = [...adminPlans].sort((a, b) => a.sortOrder - b.sortOrder);
+    const idx = sorted.findIndex((p) => p.id === plan.id);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const swapPlan = sorted[swapIdx];
+    setAdminPlans((prev) => prev.map((p) => {
+      if (p.id === plan.id) return { ...p, sortOrder: swapPlan.sortOrder };
+      if (p.id === swapPlan.id) return { ...p, sortOrder: plan.sortOrder };
+      return p;
+    }).sort((a, b) => a.sortOrder - b.sortOrder));
+    try {
+      await Promise.all([
+        fetch(`/api/admin/plans/${plan.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sortOrder: swapPlan.sortOrder }) }),
+        fetch(`/api/admin/plans/${swapPlan.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sortOrder: plan.sortOrder }) }),
+      ]);
+      fetchStorefront();
+    } catch {
+      toast({ title: "Failed to reorder", variant: "destructive" });
+      refreshAdminStorefront();
+    }
+  };
+
+  const handleResetStorefrontPlans = async () => {
+    if (!confirm("Reset homepage pricing plans to the defaults (Starter / Pro / Enterprise)? Custom plans will be discarded.")) return;
+    setResettingStorefrontPlans(true);
+    try {
+      const res = await fetch("/api/admin/storefront", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset-plans" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast({ title: "Homepage plans reset to defaults" });
+        refreshAdminStorefront();
+        fetchStorefront();
+      } else {
+        toast({ title: "Failed to reset plans", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to reset plans", variant: "destructive" });
+    } finally {
+      setResettingStorefrontPlans(false);
+    }
+  };
+
   // Save only the fields belonging to the specified gateway — no global reload mid-edit.
   const handleSaveGatewayConfig = async (gateway: string, fields: string[]) => {
     setSavingConfigKey(gateway);
@@ -4116,10 +4612,30 @@ function VidoraApp() {
     }
   }, [session, fetchUserProfile]);
 
+  // ── Storefront pricing (admin-managed): currency, homepage plans, engine prices ──
+  useEffect(() => {
+    fetchStorefront();
+  }, [fetchStorefront]);
+
+  // Keep the create wizard's selected engine valid: if the admin disables it,
+  // fall back to the default engine so users can always generate.
+  useEffect(() => {
+    if (storefrontEngines.length === 0) return;
+    if (enginePricingMap.get(selectedModel)?.isActive === false) {
+      setSelectedModel(DEFAULT_VIDEO_MODEL_ID);
+    }
+  }, [storefrontEngines, enginePricingMap, selectedModel, setSelectedModel]);
+
   useEffect(() => {
     fetch("/api/payments/packages")
       .then((r) => r.json())
-      .then((d) => d.success && setTokenPackages(d.packages))
+      .then((d) => {
+        if (!d.success) return;
+        setTokenPackages(d.packages);
+        // The packages route also reports the admin-selected charge currency —
+        // kept in sync so Buy Tokens always charges what the admin chose.
+        if (d.currency === "USD" || d.currency === "GHS") setStorefrontCurrency(d.currency);
+      })
       .catch(() => {});
   }, []);
 
@@ -4130,7 +4646,11 @@ function VidoraApp() {
     if (currentView === "buy-tokens") {
       fetch("/api/payments/packages")
         .then((r) => r.json())
-        .then((d) => d.success && setTokenPackages(d.packages))
+        .then((d) => {
+          if (!d.success) return;
+          setTokenPackages(d.packages);
+          if (d.currency === "USD" || d.currency === "GHS") setStorefrontCurrency(d.currency);
+        })
         .catch(() => {});
     }
   }, [currentView]);
@@ -4556,94 +5076,86 @@ function VidoraApp() {
                 </div>
               </section>
 
-              {/* Simple, Transparent Pricing */}
+              {/* Simple, Transparent Pricing — admin-managed (Admin → Storefront Pricing) */}
               <section className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
                 <div className="section-divider mb-12" />
                 <div className="text-center mb-10">
                   <h2 className="text-xl sm:text-2xl font-bold tracking-tight">Simple, Transparent Pricing</h2>
                   <p className="text-muted-foreground mt-2">Choose the plan that fits your creative needs</p>
+                  {/* Active charge currency badge — set by the admin */}
+                  <Badge variant="outline" className="mt-3 text-[11px] font-medium text-muted-foreground">
+                    <Wallet className="h-3 w-3 mr-1" />
+                    Prices shown in {storefrontCurrency === "USD" ? "US Dollar (USD)" : "Ghana Cedis (GHS)"}
+                  </Badge>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Starter */}
-                  <ScrollReveal delay={0}>
-                    <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white h-full flex flex-col">
-                      <CardHeader className="pb-4">
-                        <div className="flex items-center justify-between">
-                          <Badge className="bg-gradient-to-r from-emerald-400 to-teal-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">FREE</Badge>
-                          <span className="text-sm text-muted-foreground">Starter</span>
-                        </div>
-                        <CardTitle className="text-2xl font-extrabold mt-2">$0<span className="text-sm font-normal text-muted-foreground">/forever</span></CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex-1 space-y-3">
-                        {["100 Free Tokens", "5 projects", "720p export", "Basic styles", "Community support"].map((f) => (
-                          <div key={f} className="flex items-center gap-2 text-sm">
-                            <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                            <span>{f}</span>
+                  {storefrontPlans.map((plan, i) => (
+                    <ScrollReveal key={plan.id} delay={i * 100}>
+                      <Card
+                        className={`card-glow bg-white h-full flex flex-col relative ${
+                          plan.highlight
+                            ? "border-2 border-violet-400 shadow-lg shadow-violet-500/10"
+                            : "border-0 shadow-lg shadow-black/5"
+                        }`}
+                      >
+                        {plan.highlight && (
+                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                            <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-xs px-3 shadow-md">
+                              {plan.badge || "POPULAR"}
+                            </Badge>
                           </div>
-                        ))}
-                      </CardContent>
-                      <div className="px-6 pb-6">
-                        <Button className="w-full" variant="outline" onClick={() => setCurrentView("create")}>
-                          Get Started
-                        </Button>
-                      </div>
-                    </Card>
-                  </ScrollReveal>
-
-                  {/* Pro */}
-                  <ScrollReveal delay={100}>
-                    <Card className="card-glow border-2 border-violet-400 shadow-lg shadow-violet-500/10 bg-white h-full flex flex-col relative">
-                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
-                        <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-xs px-3 shadow-md">POPULAR</Badge>
-                      </div>
-                      <CardHeader className="pb-4">
-                        <div className="flex items-center justify-between">
-                          <Badge className="bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">POPULAR</Badge>
-                          <span className="text-sm text-muted-foreground">Pro</span>
-                        </div>
-                        <CardTitle className="text-2xl font-extrabold mt-2">$9.99<span className="text-sm font-normal text-muted-foreground">/month</span></CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex-1 space-y-3">
-                        {["2,000 Tokens", "Unlimited projects", "1080p export", "All styles + AI Director", "Priority rendering", "Email support"].map((f) => (
-                          <div key={f} className="flex items-center gap-2 text-sm">
-                            <Check className="h-4 w-4 text-violet-500 shrink-0" />
-                            <span>{f}</span>
+                        )}
+                        <CardHeader className="pb-4">
+                          <div className="flex items-center justify-between gap-2">
+                            {plan.badge && !plan.highlight ? (
+                              <Badge className={`${planBadgeStyle(plan.badge)} text-white border-0 text-xs font-bold px-2.5 shadow-md`}>
+                                {plan.badge}
+                              </Badge>
+                            ) : <span className="text-[10px]" />}
+                            <span className="text-sm text-muted-foreground">{plan.name}</span>
                           </div>
-                        ))}
-                      </CardContent>
-                      <div className="px-6 pb-6">
-                        <Button className="w-full btn-gradient" onClick={() => setCurrentView("buy-tokens")}>
-                          Buy Tokens
-                        </Button>
-                      </div>
-                    </Card>
-                  </ScrollReveal>
-
-                  {/* Enterprise */}
-                  <ScrollReveal delay={200}>
-                    <Card className="card-glow border-0 shadow-lg shadow-black/5 bg-white h-full flex flex-col">
-                      <CardHeader className="pb-4">
-                        <div className="flex items-center justify-between">
-                          <Badge className="bg-gradient-to-r from-amber-400 to-orange-500 text-white border-0 text-xs font-bold px-2.5 shadow-md">BEST VALUE</Badge>
-                          <span className="text-sm text-muted-foreground">Enterprise</span>
+                          <CardTitle className="text-2xl font-extrabold mt-2">
+                            {formatChargePrice(plan.priceGHS, plan.priceUSD)}
+                            <span className="text-sm font-normal text-muted-foreground">{planPeriodLabel(plan.period)}</span>
+                          </CardTitle>
+                          {/* Secondary currency hint (only when a price exists) */}
+                          {storefrontCurrency === "GHS" && plan.priceUSD > 0 && (
+                            <p className="text-xs text-muted-foreground mt-0.5">≈ ${plan.priceUSD} USD</p>
+                          )}
+                          {storefrontCurrency === "USD" && plan.priceGHS > 0 && (
+                            <p className="text-xs text-muted-foreground mt-0.5">≈ GH₵{plan.priceGHS}</p>
+                          )}
+                        </CardHeader>
+                        <CardContent className="flex-1 space-y-3">
+                          {plan.features.map((f) => (
+                            <div key={f} className="flex items-center gap-2 text-sm">
+                              <Check className={`h-4 w-4 shrink-0 ${plan.highlight ? "text-violet-500" : "text-emerald-500"}`} />
+                              <span>{f}</span>
+                            </div>
+                          ))}
+                        </CardContent>
+                        <div className="px-6 pb-6">
+                          <Button
+                            className={`w-full ${plan.highlight ? "btn-gradient" : ""}`}
+                            variant={plan.highlight ? "default" : "outline"}
+                            onClick={() => {
+                              if (plan.ctaAction === "buy-tokens") setCurrentView("buy-tokens");
+                              else if (plan.ctaAction === "contact") setContactDialogOpen(true);
+                              else setCurrentView("create");
+                            }}
+                          >
+                            {plan.ctaLabel || "Get Started"}
+                          </Button>
                         </div>
-                        <CardTitle className="text-2xl font-extrabold mt-2">$49.99<span className="text-sm font-normal text-muted-foreground">/month</span></CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex-1 space-y-3">
-                        {["10,000 Tokens", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"].map((f) => (
-                          <div key={f} className="flex items-center gap-2 text-sm">
-                            <Check className="h-4 w-4 text-amber-500 shrink-0" />
-                            <span>{f}</span>
-                          </div>
-                        ))}
-                      </CardContent>
-                      <div className="px-6 pb-6">
-                        <Button className="w-full" variant="outline" onClick={() => setContactDialogOpen(true)}>
-                          Contact Us
-                        </Button>
-                      </div>
-                    </Card>
-                  </ScrollReveal>
+                      </Card>
+                    </ScrollReveal>
+                  ))}
+                  {storefrontPlans.length === 0 && (
+                    <div className="col-span-full text-center py-10">
+                      <p className="text-sm text-muted-foreground mb-3">Custom pricing is being updated. Contact us for a quote.</p>
+                      <Button variant="outline" onClick={() => setContactDialogOpen(true)}>Contact Us</Button>
+                    </div>
+                  )}
                 </div>
               </section>
 
@@ -5391,15 +5903,16 @@ function VidoraApp() {
                           </div>
                           Video Engine
                           <Badge variant="outline" className="text-xs ml-auto font-normal text-muted-foreground">
-                            {selectedModelInfo.resolution} · {selectedModelInfo.durationSec}s/clip · ~${selectedModelInfo.costUsd.toFixed(2)}/clip
+                            {selectedModelInfo.resolution} · {selectedModelInfo.durationSec}s/clip · {engineClipPriceLabel(selectedModel)}
                           </Badge>
                         </CardTitle>
                         <CardDescription>The AI model that renders every scene — pick your trade-off between quality, speed and cost</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3" role="radiogroup" aria-label="Video engine">
-                          {VIDEO_MODELS.map((m) => {
+                          {offeredVideoModels.map((m) => {
                             const active = selectedModel === m.id;
+                            const enginePrice = enginePricingMap.get(m.id);
                             return (
                               <button
                                 key={m.id}
@@ -5428,7 +5941,12 @@ function VidoraApp() {
                                 <div className="flex items-center gap-2.5 flex-wrap mt-2.5 text-[10px] font-medium text-muted-foreground">
                                   <span className="flex items-center gap-0.5"><Gauge className="h-3 w-3" />{m.resolution}</span>
                                   <span className="flex items-center gap-0.5"><Clock className="h-3 w-3" />{m.durationSec}s</span>
-                                  <span className="flex items-center gap-0.5"><Coins className="h-3 w-3" />${m.costUsd.toFixed(2)}/clip</span>
+                                  <span className="flex items-center gap-0.5"><Coins className="h-3 w-3" />{engineClipPriceLabel(m.id)}</span>
+                                  {enginePrice && (
+                                    <span className="flex items-center gap-0.5" title="Charged from your token balance per clip">
+                                      <Wallet className="h-3 w-3" />{enginePrice.tokensPerClip} tokens
+                                    </span>
+                                  )}
                                 </div>
                               </button>
                             );
@@ -5790,8 +6308,9 @@ function VidoraApp() {
                             <span className="text-xs font-normal text-muted-foreground">(applies to new generations)</span>
                           </Label>
                           <div className="flex flex-wrap gap-2">
-                            {VIDEO_MODELS.map((m) => {
+                            {offeredVideoModels.map((m) => {
                               const current = (currentProject.videoModel ?? DEFAULT_VIDEO_MODEL_ID) === m.id;
+                              const enginePrice = enginePricingMap.get(m.id);
                               return (
                                 <button
                                   key={m.id}
@@ -5806,6 +6325,11 @@ function VidoraApp() {
                                   }`}
                                 >
                                   {m.name}
+                                  {enginePrice && (
+                                    <span className={`ml-1.5 font-normal ${current ? "text-white/80" : "text-muted-foreground"}`}>
+                                      · {enginePrice.tokensPerClip} tk/clip
+                                    </span>
+                                  )}
                                 </button>
                               );
                             })}
@@ -5818,7 +6342,13 @@ function VidoraApp() {
                                   <Gauge className="h-3 w-3 shrink-0" />
                                   {mi.tagline}
                                   <span className="opacity-70">·</span>
-                                  {mi.resolution} · {mi.durationSec}s/clip
+                                  {mi.resolution} · {mi.durationSec}s/clip · {engineClipPriceLabel(mi.id)}
+                                  {enginePricingMap.get(mi.id) && (
+                                    <>
+                                      <span className="opacity-70">·</span>
+                                      {enginePricingMap.get(mi.id)!.tokensPerClip} tokens/clip
+                                    </>
+                                  )}
                                 </>
                               );
                             })()}
@@ -6456,16 +6986,25 @@ function VidoraApp() {
                       <div className="text-center">
                         <div className="flex items-baseline justify-center gap-1">
                           <span className="text-3xl font-extrabold text-slate-900">
-                            {typeof pkg.priceGHS === "number" && pkg.priceGHS < 100 ? `GH₵${pkg.priceGHS}` : `$${pkg.priceUSD}`}
+                            {formatChargePrice(pkg.priceGHS as number, pkg.priceUSD as number)}
                           </span>
                         </div>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                          or ${pkg.priceUSD} USD
+                          {storefrontCurrency === "USD"
+                            ? `or GH₵${pkg.priceGHS} GHS`
+                            : `or $${pkg.priceUSD} USD`}
                         </p>
                       </div>
                       <Button
                         className="w-full btn-gradient"
-                        onClick={() => handleBuyTokens(pkg.id as string, pkg.priceGHS as number, pkg.tokens as number, "GHS")}
+                        onClick={() =>
+                          handleBuyTokens(
+                            pkg.id as string,
+                            storefrontCurrency === "USD" ? (pkg.priceUSD as number) : (pkg.priceGHS as number),
+                            pkg.tokens as number,
+                            storefrontCurrency
+                          )
+                        }
                       >
                         <ShoppingBag className="h-4 w-4 mr-1.5" />Buy Now
                       </Button>
@@ -7599,6 +8138,362 @@ function VidoraApp() {
                     </CardContent>
                   </Card>
 
+                  {/* ══════════════════════════════════════════════════════
+                      STOREFRONT PRICING — charge currency + engine prices
+                      Admin sets what users pay per clip for each AI engine
+                      and which currency the storefront charges in.
+                      ══════════════════════════════════════════════════════ */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2 flex-wrap">
+                        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white">
+                          <Wallet className="h-3.5 w-3.5" />
+                        </div>
+                        Storefront Pricing
+                        <Badge variant="outline" className="text-xs ml-1 bg-emerald-50 text-emerald-600 border-emerald-200">
+                          {adminEngines.filter((e) => engineDrafts[e.modelId]?.isActive !== false).length}/{adminEngines.length} engines live
+                        </Badge>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        Set the currency customers are charged in and the per-clip price of every video engine. Prices appear instantly in the Video Engine picker and on the homepage.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                      {/* ── Charge Currency ── */}
+                      <div>
+                        <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                          <DollarSign className="h-4 w-4 text-emerald-500" />
+                          Charge Currency
+                          <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
+                            currently {savedAdminCurrency}
+                          </Badge>
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {STOREFRONT_CURRENCIES.map((c) => {
+                            const selected = adminCurrency === c.code;
+                            return (
+                              <button
+                                key={c.code}
+                                type="button"
+                                role="radio"
+                                aria-checked={selected}
+                                onClick={() => setAdminCurrency(c.code)}
+                                className={`text-left p-3.5 rounded-xl border-2 transition-all ${
+                                  selected
+                                    ? "border-violet-400 bg-violet-50/70 shadow-md shadow-violet-500/10"
+                                    : "border-slate-100 bg-white hover:border-slate-200"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  <span className={`h-9 w-9 rounded-lg flex items-center justify-center text-white font-bold ${selected ? "bg-gradient-to-br from-violet-500 to-fuchsia-500" : "bg-slate-300"}`}>
+                                    {c.symbol}
+                                  </span>
+                                  <div>
+                                    <p className="text-sm font-bold text-slate-800">{c.label} <span className="font-mono text-xs text-muted-foreground">({c.code})</span></p>
+                                    <p className="text-xs text-muted-foreground">{c.hint}</p>
+                                  </div>
+                                  {selected && <Check className="h-4 w-4 text-violet-600 ml-auto" />}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <Button
+                          size="sm"
+                          className="btn-gradient h-8 text-xs mt-3"
+                          onClick={handleSaveCurrency}
+                          disabled={savingCurrency || adminCurrency === savedAdminCurrency}
+                        >
+                          {savingCurrency ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                          Save Currency
+                        </Button>
+                      </div>
+
+                      <div className="border-t" />
+
+                      {/* ── Video Engine per-clip pricing ── */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                          <p className="text-sm font-semibold flex items-center gap-1.5">
+                            <Cpu className="h-4 w-4 text-violet-500" />
+                            Video Engine — price per clip
+                            {enginePricingDirty && (
+                              <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-600 border-amber-200">
+                                unsaved changes
+                              </Badge>
+                            )}
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs"
+                              onClick={handleResetEnginePricing}
+                              disabled={resettingEnginePricing || savingEnginePricing}
+                            >
+                              {resettingEnginePricing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1.5" />}
+                              Reset
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="btn-gradient h-8 text-xs"
+                              onClick={handleSaveEnginePricing}
+                              disabled={!enginePricingDirty || savingEnginePricing}
+                            >
+                              {savingEnginePricing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+                              Save Changes
+                            </Button>
+                          </div>
+                        </div>
+                        {adminEngines.length === 0 ? (
+                          <div className="text-center py-6 text-muted-foreground">
+                            <Cpu className="h-6 w-6 mx-auto mb-2 opacity-30" />
+                            <p className="text-sm">Loading engine pricing…</p>
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto -mx-2 px-2 custom-scrollbar">
+                            <table className="w-full text-sm min-w-[820px]">
+                              <thead className="sticky top-0 bg-white z-10">
+                                <tr className="border-b text-left text-xs text-muted-foreground">
+                                  <th className="pb-2 pr-2">Engine</th>
+                                  <th className="pb-2 pr-2">Specs</th>
+                                  <th className="pb-2 pr-2 text-right">Z.ai Cost</th>
+                                  <th className="pb-2 pr-2 text-right">Price (GHS)</th>
+                                  <th className="pb-2 pr-2 text-right">Price (USD)</th>
+                                  <th className="pb-2 pr-2 text-right">Tokens / clip</th>
+                                  <th className="pb-2 pr-2 text-right">Margin</th>
+                                  <th className="pb-2 pr-1 text-center">Available</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {adminEngines.map((e) => {
+                                  const d = engineDrafts[e.modelId];
+                                  if (!d) return null;
+                                  const usd = Number(d.priceUSD) || 0;
+                                  const marginPct = usd > 0 ? ((usd - e.zaiCostUsd) / usd) * 100 : 0;
+                                  return (
+                                    <tr
+                                      key={e.modelId}
+                                      className={`border-b last:border-0 hover:bg-slate-50 ${d.isActive ? "" : "opacity-50"}`}
+                                    >
+                                      <td className="py-2 pr-2">
+                                        <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                          {e.name}
+                                          {e.isDefault && (
+                                            <Badge variant="secondary" className="text-[10px] font-semibold">Default</Badge>
+                                          )}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">{e.familyLabel} · {e.tierLabel}</div>
+                                      </td>
+                                      <td className="py-2 pr-2 text-xs text-muted-foreground whitespace-nowrap">
+                                        {e.resolution} · {e.durationSec}s
+                                      </td>
+                                      <td className="py-2 pr-2 text-right text-rose-600 font-mono text-xs whitespace-nowrap">
+                                        ${e.zaiCostUsd.toFixed(2)}
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">
+                                        <Input
+                                          className="h-8 w-24 text-right font-mono"
+                                          inputMode="decimal"
+                                          value={d.priceGHS}
+                                          onChange={(ev) => updateEngineDraft(e.modelId, "priceGHS", ev.target.value)}
+                                          aria-label={`${e.name} price in GHS`}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">
+                                        <Input
+                                          className="h-8 w-24 text-right font-mono"
+                                          inputMode="decimal"
+                                          value={d.priceUSD}
+                                          onChange={(ev) => updateEngineDraft(e.modelId, "priceUSD", ev.target.value)}
+                                          aria-label={`${e.name} price in USD`}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-2 text-right">
+                                        <Input
+                                          className="h-8 w-16 text-right font-mono"
+                                          inputMode="numeric"
+                                          value={d.tokensPerClip}
+                                          onChange={(ev) => updateEngineDraft(e.modelId, "tokensPerClip", ev.target.value)}
+                                          aria-label={`${e.name} tokens per clip`}
+                                        />
+                                      </td>
+                                      <td className="py-2 pr-2 text-right text-xs">
+                                        <span className={`font-semibold ${marginPct >= 50 ? "text-emerald-600" : marginPct >= 0 ? "text-amber-600" : "text-red-600"}`}>
+                                          {usd > 0 ? `${marginPct >= 0 ? "+" : ""}${Math.round(marginPct)}%` : "—"}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 pr-1 text-center">
+                                        <Switch
+                                          checked={d.isActive}
+                                          disabled={e.isDefault}
+                                          onCheckedChange={(v) => updateEngineDraft(e.modelId, "isActive", v)}
+                                          title={e.isDefault ? "The default engine is always available" : d.isActive ? "Click to hide from the picker" : "Click to offer in the picker"}
+                                        />
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-2.5 flex items-start gap-1.5">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          <span>
+                            Money prices are what users see in the engine picker; <strong>tokens/clip</strong> is what generation deducts per clip (plus 1 token for the thumbnail). Editing GHS or USD auto-converts the other at the live rate. The default engine can never be disabled.
+                          </span>
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* ══════════════════════════════════════════════════════
+                      HOMEPAGE PRICING PLANS — the marketing cards on the
+                      public homepage. Fully admin-managed.
+                      ══════════════════════════════════════════════════════ */}
+                  <Card className="border-0 shadow-lg shadow-black/5">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-bold flex items-center gap-2 flex-wrap">
+                        <LayoutGrid className="h-4 w-4 text-violet-500" />
+                        Homepage Pricing Plans
+                        <Badge variant="outline" className="text-xs ml-1 bg-violet-50 text-violet-600 border-violet-200">
+                          {adminPlans.filter((p) => p.isActive).length} live · {adminPlans.length} total
+                        </Badge>
+                        <div className="ml-auto flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleResetStorefrontPlans}
+                            disabled={resettingStorefrontPlans}
+                            className="h-8 text-xs"
+                          >
+                            {resettingStorefrontPlans ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1.5" />}
+                            Reset to Defaults
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => { setEditingPlan(null); setPlanDialogOpen(true); }}
+                            className="btn-gradient h-8 text-xs"
+                          >
+                            <Plus className="h-3.5 w-3.5 mr-1.5" />Add Plan
+                          </Button>
+                        </div>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        The pricing cards on the homepage — name, badge, price, billing period, feature bullets and call-to-action. Changes go live instantly, no redeploy needed.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="max-h-[28rem] overflow-y-auto custom-scrollbar -mx-2 px-2">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-white z-10">
+                            <tr className="border-b text-left text-xs text-muted-foreground">
+                              <th className="pb-2 pr-2 pl-1 w-8"></th>
+                              <th className="pb-2 pr-2">Plan</th>
+                              <th className="pb-2 pr-2">Badge</th>
+                              <th className="pb-2 pr-2">Period</th>
+                              <th className="pb-2 pr-2 text-right">Price (GHS)</th>
+                              <th className="pb-2 pr-2 text-right">Price (USD)</th>
+                              <th className="pb-2 pr-2 text-center">Features</th>
+                              <th className="pb-2 pr-2 text-center">Highlight</th>
+                              <th className="pb-2 pr-2 text-center">Active</th>
+                              <th className="pb-2 pr-1 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {adminPlans.map((plan) => (
+                              <tr key={plan.id} className={`border-b last:border-0 hover:bg-slate-50 ${!plan.isActive ? "opacity-50" : ""}`}>
+                                <td className="py-2 pr-2 pl-1">
+                                  <div className="flex flex-col">
+                                    <button
+                                      onClick={() => handleReorderPlan(plan, "up")}
+                                      disabled={plan.sortOrder === Math.min(...adminPlans.map((p) => p.sortOrder))}
+                                      className="text-slate-400 hover:text-violet-600 disabled:opacity-20 disabled:cursor-not-allowed"
+                                      title="Move up"
+                                    ><ChevronUp className="h-3.5 w-3.5" /></button>
+                                    <button
+                                      onClick={() => handleReorderPlan(plan, "down")}
+                                      disabled={plan.sortOrder === Math.max(...adminPlans.map((p) => p.sortOrder))}
+                                      className="text-slate-400 hover:text-violet-600 disabled:opacity-20 disabled:cursor-not-allowed"
+                                      title="Move down"
+                                    ><ChevronDown className="h-3.5 w-3.5" /></button>
+                                  </div>
+                                </td>
+                                <td className="py-2 pr-2">
+                                  <div className="font-semibold text-slate-800">{plan.name}</div>
+                                  <div className="text-xs text-muted-foreground font-mono">{plan.slug}</div>
+                                </td>
+                                <td className="py-2 pr-2">
+                                  {plan.badge ? (
+                                    <Badge variant="outline" className="text-xs bg-violet-50 text-violet-600 border-violet-200">
+                                      {plan.badge}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground text-xs">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2 pr-2 text-xs text-muted-foreground">{planPeriodLabel(plan.period).slice(1)}</td>
+                                <td className="py-2 pr-2 text-right font-semibold whitespace-nowrap">₵{plan.priceGHS.toFixed(2)}</td>
+                                <td className="py-2 pr-2 text-right text-muted-foreground whitespace-nowrap">${plan.priceUSD.toFixed(2)}</td>
+                                <td className="py-2 pr-2 text-center text-xs">
+                                  <span className="text-muted-foreground">{plan.features.length} items</span>
+                                </td>
+                                <td className="py-2 pr-2 text-center">
+                                  <button
+                                    onClick={() => handleTogglePlanHighlight(plan)}
+                                    className={`transition-transform hover:scale-110 ${plan.highlight ? "text-violet-500" : "text-slate-300 hover:text-violet-400"}`}
+                                    title={plan.highlight ? "Unhighlight (remove purple border + ribbon)" : "Highlight (purple border + ribbon)"}
+                                  >
+                                    <Star className={`h-4 w-4 ${plan.highlight ? "fill-current" : ""}`} />
+                                  </button>
+                                </td>
+                                <td className="py-2 pr-2 text-center">
+                                  <Switch
+                                    checked={plan.isActive}
+                                    onCheckedChange={() => handleTogglePlanActive(plan)}
+                                    title={plan.isActive ? "Click to hide from homepage" : "Click to show on homepage"}
+                                  />
+                                </td>
+                                <td className="py-2 pr-1 text-right">
+                                  <div className="flex justify-end gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0"
+                                      onClick={() => { setEditingPlan(plan); setPlanDialogOpen(true); }}
+                                      title="Edit plan"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0 text-red-500 hover:bg-red-50 hover:text-red-600"
+                                      onClick={() => handleDeletePlan(plan.id)}
+                                      title="Delete plan"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {adminPlans.length === 0 && (
+                              <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">No plans yet. Click "Add Plan" or "Reset to Defaults".</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2.5 flex items-start gap-1.5">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          Cards display in the charge currency selected above ({savedAdminCurrency}). CTA actions: <strong>Start Creating</strong> opens the wizard, <strong>Buy Tokens</strong> opens checkout, <strong>Contact Us</strong> opens the contact form.
+                        </span>
+                      </p>
+                    </CardContent>
+                  </Card>
+
                   {/* Users Table */}
                   <Card className="border-0 shadow-lg shadow-black/5">
                     <CardHeader className="pb-3">
@@ -8111,6 +9006,15 @@ function VidoraApp() {
                     pkg={editingPackage}
                     onSave={handleSavePackage}
                     saving={savingPackage}
+                  />
+
+                  {/* ── Homepage Plan Edit/Create Dialog ── */}
+                  <PlanEditDialog
+                    open={planDialogOpen}
+                    onOpenChange={(open) => { setPlanDialogOpen(open); if (!open) setEditingPlan(null); }}
+                    plan={editingPlan}
+                    onSave={handleSavePlan}
+                    saving={savingPlan}
                   />
 
                   <div className="text-center pt-2">
@@ -9473,18 +10377,25 @@ function VidoraApp() {
                       <div className="text-center">
                         <div className="flex items-baseline justify-center gap-1">
                           <span className="text-2xl font-extrabold text-slate-900">
-                            {typeof pkg.priceGHS === "number" && pkg.priceGHS < 100 ? `GH₵${pkg.priceGHS}` : `$${pkg.priceUSD}`}
+                            {formatChargePrice(pkg.priceGHS as number, pkg.priceUSD as number)}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          or ${pkg.priceUSD} USD
+                          {storefrontCurrency === "USD"
+                            ? `or GH₵${pkg.priceGHS} GHS`
+                            : `or $${pkg.priceUSD} USD`}
                         </p>
                       </div>
                       <Button
                         className="w-full btn-gradient"
                         onClick={() => {
                           setBuyTokensModalOpen(false);
-                          handleBuyTokens(pkg.id as string, pkg.priceGHS as number, pkg.tokens as number, "GHS");
+                          handleBuyTokens(
+                            pkg.id as string,
+                            storefrontCurrency === "USD" ? (pkg.priceUSD as number) : (pkg.priceGHS as number),
+                            pkg.tokens as number,
+                            storefrontCurrency
+                          );
                         }}
                       >
                         <ShoppingBag className="h-4 w-4 mr-1.5" />Buy Now
@@ -9934,7 +10845,8 @@ function VidoraApp() {
                 { method: "POST", path: "/api/scenes/:id/dubbing", desc: "Generate a dubbed audio track. Body: { lang }." },
                 { method: "DELETE", path: "/api/scenes/:id/dubbing?lang=xx", desc: "Delete a single dubbed translation by language code." },
                 { method: "GET", path: "/api/history", desc: "List generation history for the signed-in user." },
-                { method: "GET", path: "/api/payments/packages", desc: "List available token packages." },
+                { method: "GET", path: "/api/payments/packages", desc: "List available token packages + the active charge currency." },
+                { method: "GET", path: "/api/storefront/pricing", desc: "Public storefront pricing: charge currency, homepage plans, engine per-clip prices." },
                 { method: "POST", path: "/api/assistant/chat", desc: "AI assistant chat. Body: { messages: [{role, content}] }." },
               ].map((endpoint) => (
                 <div key={endpoint.path + endpoint.method} className="border border-slate-200 rounded-lg p-3 bg-slate-50/50">

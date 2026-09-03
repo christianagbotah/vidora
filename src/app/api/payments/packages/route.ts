@@ -4,6 +4,7 @@ import {
   estimateSceneCount,
 } from "@/lib/pricing";
 import { getActivePackages } from "@/lib/token-packages";
+import { getChargeCurrency } from "@/lib/storefront";
 
 /**
  * Returns token packages available for purchase + a cost estimator
@@ -14,7 +15,10 @@ import { getActivePackages } from "@/lib/token-packages";
  * in src/lib/pricing.ts so the storefront never breaks.
  */
 export async function GET() {
-  const packages = await getActivePackages();
+  const [packages, currency] = await Promise.all([
+    getActivePackages(),
+    getChargeCurrency(),
+  ]);
 
   // Build a "what can I make with N tokens?" estimate for each package
   const packagesWithEstimates = packages.map((pkg) => {
@@ -38,6 +42,8 @@ export async function GET() {
 
   return NextResponse.json({
     success: true,
+    // Admin-selected charge currency — the Buy Tokens cards charge in this.
+    currency,
     packages: packagesWithEstimates,
     pricing: {
       tokenValueGHS: 0.5,

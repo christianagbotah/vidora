@@ -6,6 +6,7 @@ import { zai, ZAIError } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
+import { getEngineChargeInfo } from "@/lib/storefront";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
 import { resolveModelForRequest } from "@/lib/video-models";
 import {
@@ -263,7 +264,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Token Check ──
-    const tokensPerScene = PRICING.video_gen.tokens + PRICING.image_gen.tokens;
+    // Per-engine pricing (admin-managed): each engine has its own token cost
+    // per clip. Falls back to the flat PRICING.video_gen default when the
+    // engine has no admin-set row (or the DB is unreachable).
+    const engineCharge = await getEngineChargeInfo(project.videoModel);
+    const tokensPerScene = engineCharge.tokensPerClip + PRICING.image_gen.tokens;
+    const costUsdPerScene = engineCharge.costUsdPerClip + PRICING.image_gen.costUsd;
     const totalTokensNeeded = scenesToProcess.length * tokensPerScene;
 
     const tokenCheck = await checkTokens(userId, totalTokensNeeded);
@@ -288,7 +294,7 @@ export async function POST(req: NextRequest) {
       description: `Generate ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""} for "${project.title}"`,
       referenceId: projectId,
       customTokens: totalTokensNeeded,
-      customCostUsd: scenesToProcess.length * (PRICING.video_gen.costUsd + PRICING.image_gen.costUsd),
+      customCostUsd: scenesToProcess.length * costUsdPerScene,
     });
 
     if (!deduction.success) {
