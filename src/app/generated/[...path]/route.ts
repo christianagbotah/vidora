@@ -1,19 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
 import { readGeneratedFile, sanitizeRelPath } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
-
-/**
- * GET /generated/[...path]
- *
- * Serves runtime-generated media (thumbnails, portraits, exports,
- * previews) from the persistent generated-store — which survives
- * `next build` + standalone deploys, unlike public/generated.
- * Falls back to legacy public/generated for pre-migration files.
- *
- * Supports HTTP Range requests so exported videos can be seeked /
- * played on iOS Safari.
- */
 
 const MIME: Record<string, string> = {
   ".png": "image/png",
@@ -31,6 +21,76 @@ const MIME: Record<string, string> = {
   ".vtt": "text/vtt; charset=utf-8",
 };
 
+type MediaAccess = { allowed: boolean; publicCache: boolean };
+
+async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
+  // Watermarked previews are deliberately public acquisition assets.
+  if (rel.startsWith("previews/")) {
+    return { allowed: true, publicCache: true };
+  }
+
+  // Standalone generated assets are stored under users/<ownerId>/... .
+  if (rel.startsWith("users/")) {
+    const ownerId = rel.split("/")[1] || "";
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed: auth.session.userId === ownerId || auth.session.role === "admin",
+      publicCache: false,
+    };
+  }
+
+  const mediaUrl = `/generated/${rel}`;
+  const project = await db.videoProject.findFirst({
+    where: {
+      OR: [
+        { finalVideoUrl: mediaUrl },
+        {
+          scenes: {
+            some: {
+              OR: [
+                { imageUrl: mediaUrl },
+                { videoUrl: mediaUrl },
+                { referenceImageUrl: mediaUrl },
+                { musicTrackUrl: mediaUrl },
+              ],
+            },
+          },
+        },
+        { characters: { some: { imageUrl: mediaUrl } } },
+      ],
+    },
+    select: { id: true, isPublic: true, sharePassword: true },
+  });
+
+  if (project) {
+    if (project.isPublic && !project.sharePassword) {
+      return { allowed: true, publicCache: true };
+    }
+    const access = await requireProjectAccess(project.id, false);
+    return { allowed: access.ok, publicCache: false };
+  }
+
+  // Brand assets can also live in the generated store. They are private to
+  // their owner unless intentionally copied into an explicitly public project.
+  const brand = await db.brandKit.findFirst({
+    where: { logoUrl: mediaUrl },
+    select: { userId: true },
+  });
+  if (brand) {
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed: auth.session.userId === brand.userId || auth.session.role === "admin",
+      publicCache: false,
+    };
+  }
+
+  // Fail closed for orphaned/legacy generated files. Knowing a filename is not
+  // proof of authorization.
+  return { allowed: false, publicCache: false };
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -44,22 +104,30 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
+  const access = await authorizeGeneratedMedia(rel);
+  if (!access.allowed) {
+    // A 404 avoids confirming whether a private generated object exists.
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const buffer = await readGeneratedFile(rel);
   if (!buffer) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const ext = rel.slice(rel.lastIndexOf(".")).toLowerCase();
+  const dot = rel.lastIndexOf(".");
+  const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : "";
   const contentType = MIME[ext] ?? "application/octet-stream";
   const total = buffer.length;
-
   const baseHeaders: Record<string, string> = {
     "Content-Type": contentType,
     "Accept-Ranges": "bytes",
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": access.publicCache
+      ? "public, max-age=300"
+      : "private, no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
   };
 
-  // ── Range request support (video seeking / Safari playback) ──
   const range = req.headers.get("range");
   if (range) {
     const match = /bytes=(\d*)-(\d*)/.exec(range);
