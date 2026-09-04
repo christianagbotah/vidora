@@ -91,17 +91,17 @@ export interface ClassicScene {
 
 export interface ParsedSceneResult {
   prompt: string;
-  title?: string;
-  dialogue?: string;
+  title?: string | null;
+  dialogue?: string | null;
   characterNames?: string[];
-  visualNote?: string;
+  visualNote?: string | null;
 }
 
 export interface DetectedCharacter {
   name: string;
   role: string;
-  description: string;
-  stylePrompt?: string;
+  description: string | null;
+  stylePrompt?: string | null;
 }
 
 export interface ContinuityIssue {
