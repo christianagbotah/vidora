@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin";
 import { zai, ZAIError } from "@/lib/zai";
@@ -21,8 +23,21 @@ interface HealthCache {
 let deepCached: HealthCache | null = null;
 const DEEP_CACHE_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * Mirror the client's credential resolution order (see src/lib/zai.ts):
+ *   1. SystemConfig DB (zai_base_url + zai_api_key)
+ *   2. ZAI_BASE_URL + ZAI_API_KEY env vars
+ *   3. .z-ai-config file via ZAI.create() — dev sandbox fallback
+ * Readiness checks env vars and the .z-ai-config fallback without touching
+ * the DB (keeps the endpoint zero-cost and latency-free); Admin-Portal-only
+ * setups still report ok via their DB rows once any deep probe runs.
+ */
 function publicReadiness(): HealthCache {
-  const configured = Boolean(process.env.ZAI_API_KEY?.trim());
+  const envConfigured =
+    Boolean(process.env.ZAI_BASE_URL?.trim()) && Boolean(process.env.ZAI_API_KEY?.trim());
+  const fileConfigured =
+    existsSync(join(process.cwd(), ".z-ai-config")) || existsSync("/etc/.z-ai-config");
+  const configured = envConfigured || fileConfigured;
   return {
     status: configured ? "ok" : "degraded",
     message: configured
