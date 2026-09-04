@@ -2922,3 +2922,25 @@ Stage Summary:
 - README.md now serves as the repo landing page on GitHub — auto-rendered for the senior architect
 - Report includes honest limitations (monolithic page.tsx, in-memory locks, no test suite, mocked social publish, TTS price estimated) and a concrete pre-deploy checklist
 - Repo state: main @ 9a7f7a0, clean tree, pushed
+
+---
+Task ID: 11
+Agent: main
+Task: Fix footer modal scrolling, rename "Vidora AI" → "Vidora Studio", use header logo as favicon/OG icon
+
+Work Log:
+- Diagnosed modal scroll bug with in-browser layout inspection: Radix ScrollArea's viewport (height:100%) cannot resolve against a flex-resolved parent height in this environment (verified with a probe div + inline height:100% → 0px); the dialog's overflow-hidden then clipped content with no scrolling
+- Fixed both footer dialogs (Documentation + API Reference) by replacing <ScrollArea flex-1> with self-scrolling plain divs (flex-1 min-h-0 overflow-y-auto overscroll-contain) — they pick up the global violet custom scrollbar
+- Browser-verified: Documentation modal scrolls to 600px (312px visible vs 1085px content), API Reference to 500px (292 vs 1665); zero console errors
+- Renamed "Vidora AI" → "Vidora Studio" in 4 spots: AIAssistant greeting, assistant LLM system prompt, ffmpeg export title-card drawtext, footer copyright; also metadata titles/OG/Twitter + manifest name now "Vidora Studio"
+- Replaced stale Z.ai "Z" public/logo.svg with the real header brand mark (violet-500→fuchsia-500 gradient tile + white lucide clapperboard)
+- Created scripts/generate-brand-assets.ts (sharp-based, regenerable single source of truth) and generated: favicon-32.png, icon-192.png, icon-512.png, icon-512-mask.png (maskable safe-zone), apple-icon.png (180), images/og-image.png (1200×630 dark gradient card with "Vidora Studio" wordmark + tagline + URL)
+- Wired assets: layout.tsx metadata icons (32/192/svg + apple 180), OG + Twitter images → og-image.png; manifest.json PWA icons (192/512/maskable/svg, name "Vidora Studio — AI Video Creator"); share-page OG fallback hero-bg → og-image
+- VLM visual QA on og-image + icon-192: text fully readable, gradient tile + clapperboard correct, no rendering glitches
+- Lint: 0 errors; dev.log clean; committed 8787bae and pushed to origin/main
+
+Stage Summary:
+- Both footer modals scroll properly (root-caused Radix percentage-height limitation, worked around with self-scrolling divs)
+- App full name "Vidora Studio" everywhere (short form "Vidora" retained in UI chrome)
+- Full brand asset pipeline committed: header logo now backs favicon, apple touch icon, PWA icons, and social OG/Twitter cards — regenerable via bun scripts/generate-brand-assets.ts
+- Repo state: main @ 8787bae, pushed
