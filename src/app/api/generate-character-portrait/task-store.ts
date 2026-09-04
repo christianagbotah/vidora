@@ -1,14 +1,13 @@
 /**
- * In-memory task store for fire-and-forget portrait generation.
+ * Temporary portrait task store.
  *
- * Shared between:
- *   - POST /api/generate-character-portrait  (creates tasks)
- *   - GET  /api/generate-character-portrait/status (reads tasks)
- *
- * Tasks are auto-cleaned after 10 minutes.
+ * NOTE: this remains process-local until the durable worker migration lands.
+ * Every entry is nevertheless bound to its authenticated owner so status
+ * polling cannot disclose generated media across users.
  */
 
 export interface PortraitTask {
+  userId: string;
   status: "pending" | "generating" | "complete" | "failed";
   base64?: string;
   error?: string;
@@ -17,9 +16,8 @@ export interface PortraitTask {
 
 export const taskStore = new Map<string, PortraitTask>();
 
-// Auto-cleanup stale tasks every 5 minutes
 if (typeof globalThis !== "undefined" && typeof setInterval === "function") {
-  setInterval(() => {
+  const timer = setInterval(() => {
     const now = Date.now();
     for (const [id, task] of taskStore) {
       if (now - task.createdAt > 10 * 60 * 1000) {
@@ -27,4 +25,6 @@ if (typeof globalThis !== "undefined" && typeof setInterval === "function") {
       }
     }
   }, 5 * 60 * 1000);
+  // Do not keep a standalone Node worker alive solely for cleanup.
+  if (typeof timer === "object" && "unref" in timer) timer.unref();
 }
