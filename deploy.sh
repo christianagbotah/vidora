@@ -108,14 +108,37 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_FILE="$BACKUP_DIR/vidora_db_${STAMP}_${RELEASE_SHA:0:12}.sql.gz"
 MEDIA_BACKUP_FILE="$BACKUP_DIR/vidora_media_${STAMP}_${RELEASE_SHA:0:12}.tar.gz"
 
+# Prisma connection URLs commonly include ?schema=public. Prisma understands
+# that parameter, but libpq/pg_dump does not. Remove only the Prisma-specific
+# schema parameter for pg_dump while preserving all other connection settings
+# (for example sslmode=require on managed PostgreSQL).
+PG_DUMP_DATABASE_URL="$(DATABASE_URL="$DATABASE_URL" bun -e '
+const raw = process.env.DATABASE_URL;
+if (!raw) process.exit(2);
+const url = new URL(raw);
+url.searchParams.delete("schema");
+process.stdout.write(url.toString());
+')"
+
+BACKUP_TMP="${BACKUP_FILE}.tmp"
+rm -f "$BACKUP_TMP"
 echo "Creating PostgreSQL backup: $BACKUP_FILE"
-pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip -9 > "$BACKUP_FILE"
-if [[ ! -s "$BACKUP_FILE" ]]; then
-  echo "FATAL: database backup is empty"
-  rm -f "$BACKUP_FILE"
+if ! pg_dump --no-owner --no-privileges "$PG_DUMP_DATABASE_URL" | gzip -9 > "$BACKUP_TMP"; then
+  echo "FATAL: PostgreSQL backup failed"
+  rm -f "$BACKUP_TMP"
   exit 1
 fi
-gzip -t "$BACKUP_FILE"
+if [[ ! -s "$BACKUP_TMP" ]]; then
+  echo "FATAL: database backup is empty"
+  rm -f "$BACKUP_TMP"
+  exit 1
+fi
+if ! gzip -t "$BACKUP_TMP"; then
+  echo "FATAL: database backup archive validation failed"
+  rm -f "$BACKUP_TMP"
+  exit 1
+fi
+mv "$BACKUP_TMP" "$BACKUP_FILE"
 chmod 600 "$BACKUP_FILE"
 
 echo "Creating generated-media backup: $MEDIA_BACKUP_FILE"
