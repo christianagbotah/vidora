@@ -1,18 +1,9 @@
 /**
- * ───────────────────────────────────────────────────────────────────────────
- *  Vidora — Free Preview Rate Limiter
- * ───────────────────────────────────────────────────────────────────────────
+ * Vidora — Free Preview Quota
  *
- *  Enforces per-user daily limits on free previews so the owner's Z.ai costs
- *  stay bounded. Counts reset at local midnight (tracked by previewDate).
- *
- *  Two preview types:
- *   - "storyboard"  → max 10/day (cheap, LLM-only)
- *   - "image"       → max 3/day  (costlier, real image generation)
- *
- *  This is the ONLY place that checks/increments preview counters. All preview
- *  API routes must go through here to keep limits consistent.
- * ───────────────────────────────────────────────────────────────────────────
+ * Free AI previews are an explicit customer-acquisition budget. Quota
+ * consumption is serialized per user in Postgres so concurrent requests
+ * cannot exceed the configured daily allowance.
  */
 
 import { db } from "@/lib/db";
@@ -22,19 +13,13 @@ export type PreviewKind = "storyboard" | "image";
 
 export interface PreviewLimitResult {
   ok: boolean;
-  /** Remaining previews of this kind for today */
   remaining: number;
-  /** Daily limit for this kind */
   limit: number;
-  /** Used today */
   used: number;
-  /** Reason if blocked */
   reason?: string;
 }
 
 function todayStr(timezone?: string): string {
-  // Use the configured timezone (default Africa/Accra per app settings) so
-  // "today" matches the user's local day. Falls back to UTC if TZ invalid.
   try {
     return new Date().toLocaleDateString("en-CA", {
       timeZone: timezone || "Africa/Accra",
@@ -47,24 +32,27 @@ function todayStr(timezone?: string): string {
   }
 }
 
-/**
- * Check whether the user may use another free preview of `kind`, and if so,
- * atomically increment their daily counter.
- *
- * If the user's previewDate doesn't match today, the window resets first.
- */
+async function lockPreviewUser(tx: any, userId: string): Promise<void> {
+  const key = `vidora-preview-user:${userId}`;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+}
+
 export async function consumePreviewQuota(
   userId: string,
   kind: PreviewKind
 ): Promise<PreviewLimitResult> {
   const today = todayStr();
   const limit =
-    kind === "storyboard" ? PREVIEW_LIMITS.storyboardPerDay : PREVIEW_LIMITS.imagePerDay;
+    kind === "storyboard"
+      ? PREVIEW_LIMITS.storyboardPerDay
+      : PREVIEW_LIMITS.imagePerDay;
   const countField =
     kind === "storyboard" ? "previewStoryboardCount" : "previewImageCount";
 
   try {
     const result = await db.$transaction(async (tx) => {
+      await lockPreviewUser(tx, userId);
+
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
@@ -73,15 +61,10 @@ export async function consumePreviewQuota(
           previewImageCount: true,
         },
       });
+      if (!user) throw new Error("User not found");
 
-      if (!user) {
-        throw new Error("User not found");
-      }
-
-      // Reset the daily window if it's a new day
       const needsReset = user.previewDate !== today;
       const currentUsed = needsReset ? 0 : user[countField];
-
       if (currentUsed >= limit) {
         return { blocked: true as const, used: currentUsed };
       }
@@ -118,24 +101,22 @@ export async function consumePreviewQuota(
       used: result.used,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Quota check failed";
     return {
       ok: false,
       remaining: 0,
       limit,
       used: 0,
-      reason: message,
+      reason: err instanceof Error ? err.message : "Quota check failed",
     };
   }
 }
 
-/**
- * Read-only check of the user's current preview usage (no increment).
- * Used by the UI to show "3/3 previews used today" badges.
- */
 export async function getPreviewUsage(
   userId: string
-): Promise<{ storyboard: { used: number; limit: number }; image: { used: number; limit: number } }> {
+): Promise<{
+  storyboard: { used: number; limit: number };
+  image: { used: number; limit: number };
+}> {
   const today = todayStr();
   const user = await db.user.findUnique({
     where: { id: userId },
@@ -146,7 +127,6 @@ export async function getPreviewUsage(
     },
   });
 
-  // If the window is stale, treat counts as zero
   const stale = !user || user.previewDate !== today;
   return {
     storyboard: {
@@ -160,18 +140,6 @@ export async function getPreviewUsage(
   };
 }
 
-/**
- * Refund a previously-consumed preview quota (decrement the daily counter).
- *
- * Call this when a preview generation fails due to a SERVER-SIDE error
- * (e.g., Z.ai is down, insufficient balance on the owner's account) so the
- * user isn't unfairly penalized for a failure that wasn't their fault.
- *
- * Does NOT refund on 4xx client errors (bad input) — those are the user's
- * responsibility and should still count against the quota to prevent abuse.
- *
- * Safe to call even if the window has rolled over (no-op in that case).
- */
 export async function refundPreviewQuota(
   userId: string,
   kind: PreviewKind
@@ -181,19 +149,21 @@ export async function refundPreviewQuota(
     kind === "storyboard" ? "previewStoryboardCount" : "previewImageCount";
 
   try {
-    // Only decrement if we're still in the same daily window AND count > 0.
-    // Using a conditional update prevents going negative.
-    await db.user.updateMany({
-      where: {
-        id: userId,
-        previewDate: today,
-        [countField]: { gt: 0 },
-      },
-      data: { [countField]: { decrement: 1 } },
+    await db.$transaction(async (tx) => {
+      await lockPreviewUser(tx, userId);
+      await tx.user.updateMany({
+        where: {
+          id: userId,
+          previewDate: today,
+          [countField]: { gt: 0 },
+        },
+        data: { [countField]: { decrement: 1 } },
+      });
     });
   } catch (err) {
-    // Non-fatal — a failed refund just means the user lost one quota slot,
-    // which is acceptable compared to blocking the request flow.
-    console.error("Failed to refund preview quota:", err);
+    console.error(
+      "Failed to refund preview quota:",
+      err instanceof Error ? err.message : "unknown error"
+    );
   }
 }
