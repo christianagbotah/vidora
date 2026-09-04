@@ -146,8 +146,6 @@ new_create = '''    // ── Persist the job only; the dedicated PostgreSQL-bac
     return NextResponse.json({ success: true, jobId: job.id });'''
 text = replace_exact(text, old_create, new_create, label="enqueue-only export route")
 
-# A stale heartbeat is now recoverable by the worker; status polling must never
-# turn a recoverable persisted job into a terminal failure.
 stale_pattern = re.compile(
     r'''/\*\*\n \* Mark a job as failed if its heartbeat went silent.*?\n\}\n\nexport async function GET\(req: NextRequest\) \{''',
     re.S,
@@ -193,3 +191,4 @@ text = replace_exact(
 
 path.write_text(text, encoding="utf-8")
 print("Export route is now enqueue-only with durable active-key recovery semantics.")
+# Trigger marker: workflow exists before this revision.
