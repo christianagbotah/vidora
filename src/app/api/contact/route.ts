@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/admin";
 
 /**
  * POST /api/contact
- *
- * Stores a contact message submitted from the contact form.
- * Public endpoint — no auth required (guests can send messages).
- *
- * Body: { name, email, subject?, message }
+ * Stores a public contact-form submission. Public by design; input is bounded
+ * before persistence. Abuse-rate limiting is handled separately at the edge.
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { name, email, subject, message } = body;
 
-    // Validate required fields
     if (!name || typeof name !== "string" || !name.trim()) {
       return NextResponse.json(
         { success: false, error: "Name is required" },
@@ -34,10 +31,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Basic length limits to prevent abuse
     const safeName = name.trim().slice(0, 100);
     const safeEmail = email.trim().slice(0, 200);
-    const safeSubject = (subject || "General Inquiry").trim().slice(0, 200);
+    const safeSubject =
+      typeof subject === "string" && subject.trim()
+        ? subject.trim().slice(0, 200)
+        : "General Inquiry";
     const safeMessage = message.trim().slice(0, 5000);
 
     const record = await db.contactMessage.create({
@@ -54,7 +53,10 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("Failed to save contact message:", error);
+    console.error(
+      "Failed to save contact message:",
+      error instanceof Error ? error.message : "unknown error"
+    );
     return NextResponse.json(
       { success: false, error: "Failed to send message. Please try again." },
       { status: 500 }
@@ -62,32 +64,22 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/**
- * GET /api/contact
- *
- * Returns all contact messages. Admin-only.
- */
-export async function GET() {
+/** GET /api/contact — current-role/current-session admin authorization. */
+export async function GET(req: NextRequest) {
+  const { error } = await requireAdmin(req);
+  if (error) return error;
+
   try {
-    const { getServerSession } = await import("next-auth");
-    const { authOptions } = await import("@/lib/auth");
-    const session = await getServerSession(authOptions);
-
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json(
-        { success: false, error: "Admin access required" },
-        { status: 403 }
-      );
-    }
-
     const messages = await db.contactMessage.findMany({
       orderBy: { createdAt: "desc" },
       take: 200,
     });
-
     return NextResponse.json({ success: true, messages });
   } catch (error) {
-    console.error("Failed to fetch contact messages:", error);
+    console.error(
+      "Failed to fetch contact messages:",
+      error instanceof Error ? error.message : "unknown error"
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch messages" },
       { status: 500 }
