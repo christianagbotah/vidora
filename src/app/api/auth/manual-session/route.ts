@@ -6,78 +6,36 @@ import { loginLimiter } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
-/**
- * Manual session creation endpoint.
- *
- * Why this exists:
- *   NextAuth's /api/auth/callback/credentials returns a 302 redirect with the
- *   session cookie. When the client uses fetch() with redirect:"manual", the
- *   browser receives an "opaqueredirect" response and does NOT reliably
- *   process Set-Cookie headers. This endpoint returns a plain 200 OK so
- *   fetch() processes the cookie normally.
- *
- * The JWT is produced with next-auth/jwt's encode(), so it's fully compatible
- * with every other NextAuth session check.
- */
+function authSecret(): string {
+  const secret = process.env.NEXTAUTH_SECRET?.trim();
+  if (!secret) {
+    if (process.env.NODE_ENV === "development") return "vidora-dev-secret-do-not-use-in-production";
+    throw new Error("NEXTAUTH_SECRET is required in production");
+  }
+  if (process.env.NODE_ENV === "production" && secret.length < 32) {
+    throw new Error("NEXTAUTH_SECRET is too short for production");
+  }
+  return secret;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    // Rate limit: 5 login attempts per minute
     const { limited } = loginLimiter(req);
     if (limited) {
-      return NextResponse.json(
-        { error: "Too many login attempts. Please wait a minute and try again." },
-        { status: 429 }
-      );
+      return NextResponse.json({ error: "Too many login attempts. Please wait a minute and try again." }, { status: 429 });
     }
 
-    const { email, password } = await req.json();
+    const body = await req.json();
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!email || !password) return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
 
-    if (!email || !password) {
-      return NextResponse.json(
-        { error: "Email and password are required." },
-        { status: 400 }
-      );
+    const user = await db.user.findUnique({ where: { email } });
+    if (!user?.password || !(await bcrypt.compare(password, user.password))) {
+      return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
     }
+    if (!user.isActive) return NextResponse.json({ error: "Account is deactivated." }, { status: 403 });
 
-    // 1. Look up user
-    const user = await db.user.findUnique({ where: { email: email as string } });
-    if (!user || !user.password) {
-      return NextResponse.json(
-        { error: "Invalid email or password." },
-        { status: 401 }
-      );
-    }
-
-    // 2. Verify password
-    const isValid = await bcrypt.compare(password as string, user.password);
-    if (!isValid) {
-      return NextResponse.json(
-        { error: "Invalid email or password." },
-        { status: 401 }
-      );
-    }
-
-    // 3. Check active
-    if (!user.isActive) {
-      return NextResponse.json(
-        { error: "Account is deactivated." },
-        { status: 403 }
-      );
-    }
-
-    // 4. Get secret (same logic as auth.ts)
-    const secret = (() => {
-      const s = process.env.NEXTAUTH_SECRET;
-      if (!s) {
-        if (process.env.NODE_ENV === "development") {
-          return "vidora-dev-secret-do-not-use-in-production";
-        }
-        throw new Error("NEXTAUTH_SECRET is required in production");
-      }
-      return s;
-    })();
-
-    // 5. Create a NextAuth-compatible JWT
     const token = await encode({
       token: {
         id: user.id,
@@ -85,43 +43,26 @@ export async function POST(req: NextRequest) {
         name: user.name,
         role: user.role,
         tokens: user.tokens,
+        sessionVersion: user.sessionVersion,
       },
-      secret,
+      secret: authSecret(),
     });
 
-    // 6. Determine cookie attributes from the proxy headers
     const forwardedProto = req.headers.get("x-forwarded-proto") || "http";
     const isSecure = forwardedProto === "https";
-    const cookieName = isSecure
-      ? "__Secure-next-auth.session-token"
-      : "next-auth.session-token";
-
-    // 7. Build response with the session cookie
-    const response = NextResponse.json({
-      success: true,
-      user: { email: user.email, name: user.name },
-    });
-
+    const cookieName = isSecure ? "__Secure-next-auth.session-token" : "next-auth.session-token";
+    const response = NextResponse.json({ success: true, user: { email: user.email, name: user.name } });
     response.cookies.set(cookieName, token, {
       httpOnly: true,
       secure: isSecure,
       sameSite: "lax",
       path: "/",
-      maxAge: 30 * 24 * 60 * 60, // 30 days
+      maxAge: 30 * 24 * 60 * 60,
     });
-
-    // 8. Clear stale variant that might conflict
-    const altName = isSecure
-      ? "next-auth.session-token"
-      : "__Secure-next-auth.session-token";
-    response.cookies.delete(altName);
-
+    response.cookies.delete(isSecure ? "next-auth.session-token" : "__Secure-next-auth.session-token");
     return response;
-  } catch (err) {
-    console.error("[manual-session] Error:", err);
-    return NextResponse.json(
-      { error: "Internal server error during login." },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error("[manual-session] login failed", error instanceof Error ? error.message : "unknown error");
+    return NextResponse.json({ error: "Internal server error during login." }, { status: 500 });
   }
 }
