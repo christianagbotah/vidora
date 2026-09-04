@@ -1,175 +1,101 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { creditPurchase } from "@/lib/tokens";
+import crypto from "crypto";
+import { getConfigValue } from "@/lib/secure-config";
+import { verifyAndSettleByReference } from "@/lib/payment-settlement";
 
-/**
- * Extract bonusTokens from payment metadata (stored at creation time).
- * Falls back to 0 if not found.
- */
-function getBonusTokens(payment: { metadata: string | null }): number {
-  try {
-    if (payment.metadata) {
-      const meta = JSON.parse(payment.metadata);
-      return typeof meta.bonusTokens === "number" ? meta.bonusTokens : 0;
-    }
-  } catch { /* ignore parse errors */ }
-  return 0;
+function safeHexEqual(a: string, b: string): boolean {
+  if (!/^[a-f0-9]+$/i.test(a) || !/^[a-f0-9]+$/i.test(b)) return false;
+  const left = Buffer.from(a, "hex");
+  const right = Buffer.from(b, "hex");
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-// Webhook handler for all payment gateways
-// - Paystack:  x-paystack-signature header
-// - Stripe:    stripe-signature header
-// - Hubtel:    body contains ResponseCode + Data.ClientReference (no signature header)
-//
-// IMPORTANT: Hubtel docs recommend whitelisting their callback IP: 108.129.40.25
+async function verifyPaystack(rawBody: string, signature: string): Promise<boolean> {
+  const secret = await getConfigValue("paystack_secret_key", "PAYSTACK_SECRET_KEY");
+  if (!secret || !signature) return false;
+  const expected = crypto.createHmac("sha512", secret).update(rawBody, "utf8").digest("hex");
+  return safeHexEqual(expected, signature.trim());
+}
+
+async function verifyStripe(rawBody: string, signatureHeader: string): Promise<boolean> {
+  const secret = await getConfigValue("stripe_webhook_secret", "STRIPE_WEBHOOK_SECRET");
+  if (!secret || !signatureHeader) return false;
+
+  const parts = signatureHeader.split(",").map((part) => part.trim());
+  const timestamp = parts.find((part) => part.startsWith("t="))?.slice(2);
+  const signatures = parts.filter((part) => part.startsWith("v1=")).map((part) => part.slice(3));
+  if (!timestamp || signatures.length === 0 || !/^\d+$/.test(timestamp)) return false;
+
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isSafeInteger(timestampSeconds)) return false;
+  if (Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds) > 300) return false;
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${rawBody}`, "utf8")
+    .digest("hex");
+  return signatures.some((candidate) => safeHexEqual(expected, candidate));
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.text();
-    const signature =
-      req.headers.get("x-paystack-signature") ||
-      req.headers.get("stripe-signature") ||
-      "";
-
-    let parsedBody: Record<string, unknown>;
+    const rawBody = await req.text();
+    let body: Record<string, any>;
     try {
-      parsedBody = JSON.parse(body);
+      body = JSON.parse(rawBody);
     } catch {
-      return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
     }
 
-    // Detect gateway from headers or body structure
-    let gateway = "unknown";
-    if (req.headers.get("x-paystack-signature")) {
-      gateway = "paystack";
-    } else if (req.headers.get("stripe-signature")) {
-      gateway = "stripe";
-    } else if (parsedBody.ResponseCode || parsedBody.Data?.ClientReference) {
-      gateway = "hubtel";
-    }
-
-    console.log(`[Webhook] ${gateway} callback received`, {
-      gateway,
-      body: body.substring(0, 500),
-    });
-
+    const paystackSignature = req.headers.get("x-paystack-signature");
+    const stripeSignature = req.headers.get("stripe-signature");
+    let gateway: "paystack" | "stripe" | "hubtel" | null = null;
     let reference = "";
 
-    // ─── Paystack Webhook ──────────────────────────────────
-    if (gateway === "paystack" && parsedBody.data) {
-      const data = parsedBody.data as Record<string, unknown>;
-      reference = (data.reference || "") as string;
-      const event = parsedBody.event as string;
-
-      if (event === "charge.success" && reference) {
-        const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
-        if (payment && payment.status !== "completed") {
-          const bonusTokens = getBonusTokens(payment);
-          await db.payment.update({ where: { id: payment.id }, data: { status: "completed" } });
-          await creditPurchase({
-            userId: payment.userId,
-            baseTokens: payment.tokensPurchased,
-            bonusTokens,
-            paymentId: payment.id,
-            description: `Purchased ${payment.tokensPurchased} tokens via Paystack (webhook)`,
-          });
-          console.log(
-            `[Webhook] Paystack: credited ${payment.tokensPurchased} + ${bonusTokens} bonus tokens to ${payment.userId}`
-          );
-        }
+    if (paystackSignature) {
+      gateway = "paystack";
+      if (!(await verifyPaystack(rawBody, paystackSignature))) {
+        return NextResponse.json({ error: "Invalid Paystack signature" }, { status: 401 });
       }
+      if (body.event !== "charge.success") {
+        return NextResponse.json({ received: true, ignored: true });
+      }
+      reference = String(body.data?.reference || "");
+    } else if (stripeSignature) {
+      gateway = "stripe";
+      if (!(await verifyStripe(rawBody, stripeSignature))) {
+        return NextResponse.json({ error: "Invalid Stripe signature" }, { status: 401 });
+      }
+      const supported = new Set(["checkout.session.completed", "checkout.session.async_payment_succeeded"]);
+      if (!supported.has(String(body.type || ""))) {
+        return NextResponse.json({ received: true, ignored: true });
+      }
+      reference = String(body.data?.object?.client_reference_id || "");
+    } else if (body?.Data?.ClientReference) {
+      // Hubtel callbacks do not provide a signing header in this integration.
+      // The callback is NEVER accepted as proof of payment: it only triggers a
+      // server-to-server status query before settlement.
+      gateway = "hubtel";
+      reference = String(body.Data.ClientReference || "");
     }
 
-    // ─── Hubtel Online Checkout Callback (2026) ────────────
-    else if (gateway === "hubtel" && parsedBody.Data) {
-      const hubtelData = parsedBody.Data as Record<string, unknown>;
-      reference = (hubtelData.ClientReference || "") as string;
-      const responseCode = String(parsedBody.ResponseCode || "");
-      const callbackStatus = String(hubtelData.Status || "").toLowerCase();
-      const amount = typeof hubtelData.Amount === "number" ? hubtelData.Amount : null;
-      const checkoutId = String(hubtelData.CheckoutId || "");
-      const customerPhone = String(hubtelData.CustomerPhoneNumber || "");
-      const description = String(hubtelData.Description || "");
-
-      // Extract payment details (mobile money, card, etc.)
-      const paymentDetails = hubtelData.PaymentDetails as Record<string, unknown> | undefined;
-      const paymentType = String(paymentDetails?.PaymentType || "");
-      const channel = String(paymentDetails?.Channel || "");
-      const mobileNumber = String(paymentDetails?.MobileMoneyNumber || "");
-
-      if (reference) {
-        const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
-
-        if (payment) {
-          // Only process if not already completed
-          if (payment.status !== "completed") {
-            if (responseCode === "0000" && callbackStatus === "success") {
-              const bonusTokens = getBonusTokens(payment);
-
-              // Payment successful — credit tokens with bonus
-              await db.payment.update({
-                where: { id: payment.id },
-                data: {
-                  status: "completed",
-                  metadata: JSON.stringify({
-                    ...getBonusTokens(payment),
-                    hubtelCheckoutId: checkoutId,
-                    hubtelSalesInvoiceId: hubtelData.SalesInvoiceId || "",
-                    customerPhone,
-                    paymentType,
-                    channel,
-                    mobileNumber,
-                    description,
-                    bonusTokens,
-                    callbackRaw: { ResponseCode: responseCode, Status: hubtelData.Status, Amount: amount },
-                  }),
-                },
-              });
-
-              await creditPurchase({
-                userId: payment.userId,
-                baseTokens: payment.tokensPurchased,
-                bonusTokens,
-                paymentId: payment.id,
-                description: `Purchased ${payment.tokensPurchased} tokens via Hubtel ${paymentType ? `(${paymentType}/${channel})` : "(webhook)"}`,
-              });
-
-              console.log(
-                `[Webhook] Hubtel: credited ${payment.tokensPurchased} + ${bonusTokens} bonus tokens to ${payment.userId}` +
-                  (paymentType ? ` [${paymentType}/${channel}]` : "")
-              );
-            } else {
-              // Payment failed
-              await db.payment.update({
-                where: { id: payment.id },
-                data: {
-                  status: "failed",
-                  metadata: JSON.stringify({
-                    hubtelCheckoutId: checkoutId,
-                    callbackStatus,
-                    responseCode,
-                    description,
-                    failed: true,
-                  }),
-                },
-              });
-              console.log(`[Webhook] Hubtel: payment failed for ref ${reference}`, {
-                callbackStatus,
-                responseCode,
-                description,
-              });
-            }
-          } else {
-            console.log(`[Webhook] Hubtel: payment ${reference} already completed, skipping`);
-          }
-        } else {
-          console.warn(`[Webhook] Hubtel: no payment found for reference ${reference}`);
-        }
-      }
+    if (!gateway || !reference) {
+      return NextResponse.json({ error: "Unsupported webhook payload" }, { status: 400 });
     }
 
-    return NextResponse.json({ received: true });
+    const result = await verifyAndSettleByReference(reference);
+    if (!result.success) {
+      console.warn("Payment webhook did not settle", { gateway, reference, status: result.status });
+      return NextResponse.json({ received: true, settled: false, error: result.error }, { status: result.status >= 500 ? 500 : 422 });
+    }
+
+    return NextResponse.json({
+      received: true,
+      settled: true,
+      alreadySettled: result.alreadySettled,
+    });
   } catch (error) {
-    console.error("[Webhook] Error:", error);
+    console.error("Payment webhook processing failed", error instanceof Error ? error.message : "unknown error");
     return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }
