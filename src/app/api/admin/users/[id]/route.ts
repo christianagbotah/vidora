@@ -58,8 +58,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     const user = await db.$transaction(async (tx) => {
-      const lockKey = `vidora-admin-user:${id}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "User"
+        WHERE "id" = ${id}
+        FOR UPDATE
+      `;
+      if (locked.length !== 1) throw new Error("User not found");
+
       const current = await tx.user.findUnique({ where: { id } });
       if (!current) throw new Error("User not found");
 
