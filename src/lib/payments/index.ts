@@ -1,11 +1,14 @@
 import { db } from "@/lib/db";
+import { getConfigValue } from "@/lib/secure-config";
 
-// ─── Interface ───────────────────────────────────────────────
+export type GatewayName = "paystack" | "hubtel" | "stripe";
+
 export interface PaymentResult {
   success: boolean;
   authorizationUrl?: string;
   directCheckoutUrl?: string;
   reference?: string;
+  providerTransactionId?: string;
   error?: string;
 }
 
@@ -13,12 +16,15 @@ export interface VerificationResult {
   success: boolean;
   verified: boolean;
   amount?: number;
+  amountMinor?: number;
+  currency?: string;
   reference?: string;
+  providerTransactionId?: string;
   error?: string;
 }
 
 export interface PaymentGateway {
-  getName(): string;
+  getName(): GatewayName;
   initializePayment(params: {
     email: string;
     amount: number;
@@ -30,67 +36,54 @@ export interface PaymentGateway {
   verifyPayment(reference: string): Promise<VerificationResult>;
 }
 
-// ─── Paystack ────────────────────────────────────────────────
-export class PaystackGateway implements PaymentGateway {
-  getName() {
-    return "paystack";
-  }
+function normalizeCurrency(currency: unknown, fallback: string): string {
+  const value = String(currency || fallback).trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(value) ? value : fallback;
+}
 
-  private async getSecretKey(): Promise<string> {
-    const config = await db.systemConfig.findUnique({
-      where: { key: "paystack_secret_key" },
-    });
-    return config?.value || process.env.PAYSTACK_SECRET_KEY || "";
+function toMinor(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+async function nonSecretConfig(key: string, envName?: string): Promise<string> {
+  const row = await db.systemConfig.findUnique({ where: { key } });
+  return (row?.value || (envName ? process.env[envName] : "") || "").trim();
+}
+
+export class PaystackGateway implements PaymentGateway {
+  getName(): GatewayName { return "paystack"; }
+
+  private getSecretKey() {
+    return getConfigValue("paystack_secret_key", "PAYSTACK_SECRET_KEY");
   }
 
   async initializePayment(params: {
-    email: string;
-    amount: number;
-    currency: string;
-    reference: string;
-    callbackUrl: string;
+    email: string; amount: number; currency: string; reference: string; callbackUrl: string;
     metadata?: Record<string, string>;
   }): Promise<PaymentResult> {
     try {
       const secretKey = await this.getSecretKey();
-      if (!secretKey) {
-        return { success: false, error: "Paystack secret key not configured" };
-      }
-
-      const amountInKobo = Math.round(params.amount * 100);
+      if (!secretKey) return { success: false, error: "Paystack secret key not configured" };
 
       const res = await fetch("https://api.paystack.co/transaction/initialize", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${secretKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           email: params.email,
-          amount: amountInKobo,
-          currency: params.currency || "GHS",
+          amount: toMinor(params.amount),
+          currency: normalizeCurrency(params.currency, "GHS"),
           reference: params.reference,
           callback_url: params.callbackUrl,
           metadata: params.metadata,
         }),
       });
-
       const data = await res.json();
-
-      if (data.status && data.data?.authorization_url) {
-        return {
-          success: true,
-          authorizationUrl: data.data.authorization_url,
-          reference: params.reference,
-        };
+      if (res.ok && data.status && data.data?.authorization_url) {
+        return { success: true, authorizationUrl: data.data.authorization_url, reference: params.reference };
       }
-
-      return {
-        success: false,
-        error: data.message || "Paystack initialization failed",
-      };
+      return { success: false, error: String(data.message || "Paystack initialization failed") };
     } catch (error) {
-      console.error("Paystack init error:", error);
+      console.error("Paystack initialization failed", error instanceof Error ? error.message : "unknown error");
       return { success: false, error: "Paystack payment initialization failed" };
     }
   }
@@ -98,354 +91,179 @@ export class PaystackGateway implements PaymentGateway {
   async verifyPayment(reference: string): Promise<VerificationResult> {
     try {
       const secretKey = await this.getSecretKey();
-      if (!secretKey) {
-        return { success: false, error: "Paystack secret key not configured" };
-      }
-
-      const res = await fetch(
-        `https://api.paystack.co/transaction/verify/${reference}`,
-        {
-          headers: {
-            Authorization: `Bearer ${secretKey}`,
-          },
-        }
-      );
-
+      if (!secretKey) return { success: false, verified: false, error: "Paystack secret key not configured" };
+      const res = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+        headers: { Authorization: `Bearer ${secretKey}` },
+      });
       const data = await res.json();
-
-      if (data.status && data.data?.status === "success") {
+      const txn = data?.data;
+      if (res.ok && data.status && txn?.status === "success" && txn.reference === reference) {
+        const amountMinor = Number(txn.amount);
+        if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+          return { success: false, verified: false, error: "Paystack returned an invalid amount" };
+        }
         return {
           success: true,
           verified: true,
-          amount: data.data.amount / 100,
+          amountMinor,
+          amount: amountMinor / 100,
+          currency: normalizeCurrency(txn.currency, "GHS"),
           reference,
+          providerTransactionId: txn.id != null ? String(txn.id) : undefined,
         };
       }
-
-      return {
-        success: true,
-        verified: false,
-        reference,
-        error: data.message || "Payment not verified",
-      };
+      return { success: true, verified: false, reference, error: String(data.message || "Payment not verified") };
     } catch (error) {
-      console.error("Paystack verify error:", error);
-      return { success: false, error: "Paystack verification failed" };
+      console.error("Paystack verification failed", error instanceof Error ? error.message : "unknown error");
+      return { success: false, verified: false, error: "Paystack verification failed" };
     }
   }
 }
 
-// ─── Hubtel ──────────────────────────────────────────────────
-// Uses the Online Checkout API (2026) which supports:
-//   Mobile Money, Bank Card, Wallet (Hubtel, G-Money), GhQR, Cash / Cheque
-// Initiate: POST https://payproxyapi.hubtel.com/items/initiate
-// Status:   GET  https://api-txnstatus.hubtel.com/transactions/{AccountNumber}/status
-// Auth:     Basic clientId:clientSecret
-// Response: { responseCode: "0000", data: { checkoutUrl, checkoutId, checkoutDirectUrl }}
-// Callback: { ResponseCode: "0000", Data: { ClientReference, Status: "Success", Amount, PaymentDetails }}
 export class HubtelGateway implements PaymentGateway {
-  getName() {
-    return "hubtel";
-  }
+  getName(): GatewayName { return "hubtel"; }
 
-  private async getCredentials(): Promise<{
-    clientId: string;
-    clientSecret: string;
-    merchantAccountNumber: string;
-  }> {
-    const clientIdRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_id" } });
-    const clientSecretRow = await db.systemConfig.findUnique({ where: { key: "hubtel_client_secret" } });
-    const accountNumberRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_account_number" } });
-    const oldAccountRow = await db.systemConfig.findUnique({ where: { key: "hubtel_merchant_id" } });
-
-    const clientId = (clientIdRow?.value || "").trim() || process.env.HUBTEL_CLIENT_ID || "";
-    const clientSecret = (clientSecretRow?.value || "").trim() || process.env.HUBTEL_CLIENT_SECRET || "";
-    const merchantAccountNumber =
-      (accountNumberRow?.value || "").trim() ||
-      process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ||
-      (oldAccountRow?.value || "").trim() ||
-      process.env.HUBTEL_MERCHANT_ID ||
-      "";
-
-    console.log(`[Hubtel] Credential sources:`, {
-      clientIdSource: clientIdRow?.value ? "DB(hubtel_client_id)" : process.env.HUBTEL_CLIENT_ID ? "ENV(HUBTEL_CLIENT_ID)" : "NONE",
-      clientSecretSource: clientSecretRow?.value ? "DB(hubtel_client_secret)" : process.env.HUBTEL_CLIENT_SECRET ? "ENV(HUBTEL_CLIENT_SECRET)" : "NONE",
-      merchantAccountSource: accountNumberRow?.value ? "DB(hubtel_merchant_account_number)" : oldAccountRow?.value ? "DB(hubtel_merchant_id)" : process.env.HUBTEL_MERCHANT_ACCOUNT_NUMBER ? "ENV" : "NONE",
-      clientIdPreview: clientId ? `${clientId.slice(0, 8)}...(${clientId.length}chars)` : "EMPTY",
-      clientSecretPreview: clientSecret ? `${clientSecret.slice(0, 8)}...(${clientSecret.length}chars)` : "EMPTY",
-      merchantAccountNumber,
-    });
-
+  private async getCredentials() {
+    const [clientId, clientSecret, merchantAccountNumber] = await Promise.all([
+      getConfigValue("hubtel_client_id", "HUBTEL_CLIENT_ID"),
+      getConfigValue("hubtel_client_secret", "HUBTEL_CLIENT_SECRET"),
+      nonSecretConfig("hubtel_merchant_account_number", "HUBTEL_MERCHANT_ACCOUNT_NUMBER"),
+    ]);
     return { clientId, clientSecret, merchantAccountNumber };
   }
 
   async initializePayment(params: {
-    email: string;
-    amount: number;
-    currency: string;
-    reference: string;
-    callbackUrl: string;
+    email: string; amount: number; currency: string; reference: string; callbackUrl: string;
     metadata?: Record<string, string>;
   }): Promise<PaymentResult> {
     try {
       const { clientId, clientSecret, merchantAccountNumber } = await this.getCredentials();
-      if (!clientId || !clientSecret) {
-        return {
-          success: false,
-          error: "Hubtel API credentials not configured. Set Client ID and Client Secret in the Admin Portal.",
-        };
+      if (!clientId || !clientSecret || !merchantAccountNumber) {
+        return { success: false, error: "Hubtel payment credentials are not fully configured" };
       }
-      if (!merchantAccountNumber) {
-        return {
-          success: false,
-          error: "Hubtel Merchant Account Number not configured. Set it in the Admin Portal.",
-        };
+      if (normalizeCurrency(params.currency, "GHS") !== "GHS") {
+        return { success: false, error: "Hubtel checkout currently supports GHS only" };
       }
 
-      const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-      const totalAmount = Number(params.amount.toFixed(2));
-
-      console.log(`[Hubtel] Initiating checkout:`, {
-        clientId: `${clientId.slice(0, 6)}...`,
-        clientSecret: `${clientSecret.slice(0, 6)}...`,
-        merchantAccountNumber,
-        totalAmount,
-        reference: params.reference,
-        authPrefix: auth.slice(0, 10) + "...",
-      });
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000";
-
-      // Hubtel Online Checkout (2026) — initiate a hosted checkout
+      const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
       const requestBody: Record<string, unknown> = {
-        totalAmount,
+        totalAmount: Number(params.amount.toFixed(2)),
         description: `Vidora Token Purchase - ${params.metadata?.tokens || ""} tokens`,
         callbackUrl: `${baseUrl}/api/payments/webhook`,
-        returnUrl: `${baseUrl}/api/payments/verify?reference=${params.reference}&status=success`,
+        returnUrl: `${baseUrl}/api/payments/verify?reference=${encodeURIComponent(params.reference)}&status=success`,
+        cancellationUrl: `${baseUrl}/api/payments/verify?reference=${encodeURIComponent(params.reference)}&status=cancelled`,
         merchantAccountNumber,
-        cancellationUrl: `${baseUrl}/api/payments/verify?reference=${params.reference}&status=cancelled`,
         clientReference: params.reference,
+        ...(params.email ? { payeeEmail: params.email } : {}),
+        ...(params.metadata?.userName ? { payeeName: params.metadata.userName } : {}),
+        ...(params.metadata?.phone ? { payeeMobileNumber: params.metadata.phone } : {}),
       };
-
-      // Optional payee info
-      if (params.email) {
-        requestBody.payeeEmail = params.email;
-      }
-      if (params.metadata?.userName) {
-        requestBody.payeeName = params.metadata.userName;
-      }
-      if (params.metadata?.phone) {
-        requestBody.payeeMobileNumber = params.metadata.phone;
-      }
 
       const res = await fetch("https://payproxyapi.hubtel.com/items/initiate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Basic ${auth}`,
-          Accept: "application/json",
-          "Cache-Control": "no-cache",
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${auth}`, Accept: "application/json" },
         body: JSON.stringify(requestBody),
       });
-
-      // Handle non-JSON responses gracefully (Hubtel may return HTML on bad auth)
-      const responseText = await res.text();
-      console.log(`[Hubtel] Response: HTTP ${res.status}`, {
-        requestUrl: "https://payproxyapi.hubtel.com/items/initiate",
-        responseBody: responseText.substring(0, 500),
-      });
+      const text = await res.text();
       let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        console.error("Hubtel returned non-JSON response:", res.status, responseText.substring(0, 500));
-        return {
-          success: false,
-          error: `Hubtel API returned HTTP ${res.status}. Verify your API credentials and Merchant Account Number in the Admin Portal.`,
-        };
-      }
+      try { data = JSON.parse(text); }
+      catch { return { success: false, error: `Hubtel returned HTTP ${res.status}` }; }
 
-      // Hubtel Online Checkout response:
-      // { responseCode: "0000", status: "Success", data: { checkoutUrl, checkoutId, clientReference, checkoutDirectUrl }}
       const responseCode = String(data.responseCode ?? data.response_code ?? "");
       const responseData = data.data as Record<string, unknown> | undefined;
       const checkoutUrl = String(responseData?.checkoutUrl ?? data.checkoutUrl ?? "");
-
-      // checkoutDirectUrl is for iframe embedding (onsite checkout)
       const directUrl = String(responseData?.checkoutDirectUrl ?? "");
-
-      if ((responseCode === "0000" || responseCode === "00") && (checkoutUrl || directUrl)) {
-        return {
-          success: true,
-          authorizationUrl: checkoutUrl || directUrl,
-          directCheckoutUrl: directUrl || checkoutUrl,
-          reference: params.reference,
-        };
+      if (res.ok && (responseCode === "0000" || responseCode === "00") && (checkoutUrl || directUrl)) {
+        return { success: true, authorizationUrl: checkoutUrl || directUrl, directCheckoutUrl: directUrl || checkoutUrl, reference: params.reference };
       }
-
-      // Fallback: check if checkoutUrl is at top level
-      if (typeof data.checkoutUrl === "string" && data.checkoutUrl) {
-        return {
-          success: true,
-          authorizationUrl: data.checkoutUrl,
-          reference: params.reference,
-        };
-      }
-
-      // Error — surface the actual Hubtel error for debugging
-      const errorMsg =
-        responseData?.message ||
-        data.message ||
-        data.responseMessage ||
-        data.error_description ||
-        `Hubtel initialization failed (HTTP ${res.status}, code: ${responseCode || "none"})`;
-      console.error("Hubtel init failed:", { status: res.status, responseCode, data });
-      return { success: false, error: String(errorMsg) };
+      return { success: false, error: String(responseData?.message || data.message || "Hubtel initialization failed") };
     } catch (error) {
-      console.error("Hubtel init error:", error);
-      return {
-        success: false,
-        error: `Hubtel payment initialization failed: ${error instanceof Error ? error.message : "network error"}`,
-      };
+      console.error("Hubtel initialization failed", error instanceof Error ? error.message : "unknown error");
+      return { success: false, error: "Hubtel payment initialization failed" };
     }
   }
 
   async verifyPayment(reference: string): Promise<VerificationResult> {
     try {
       const { clientId, clientSecret, merchantAccountNumber } = await this.getCredentials();
-      if (!clientId || !clientSecret) {
-        return { success: false, error: "Hubtel credentials not configured" };
+      if (!clientId || !clientSecret || !merchantAccountNumber) {
+        return { success: false, verified: false, error: "Hubtel credentials are not fully configured" };
       }
-      if (!merchantAccountNumber) {
-        return { success: false, error: "Hubtel Merchant Account Number not configured" };
-      }
-
       const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-      // Hubtel Online Checkout: Transaction Status Check API
-      // GET https://api-txnstatus.hubtel.com/transactions/{Collection_Account_Number}/status?clientReference=xxx
-      const url = new URL(`https://api-txnstatus.hubtel.com/transactions/${merchantAccountNumber}/status`);
+      const url = new URL(`https://api-txnstatus.hubtel.com/transactions/${encodeURIComponent(merchantAccountNumber)}/status`);
       url.searchParams.set("clientReference", reference);
-
-      const res = await fetch(url.toString(), {
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${auth}`,
-          Accept: "application/json",
-        },
-      });
-
-      const responseText = await res.text();
+      const res = await fetch(url.toString(), { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
+      const text = await res.text();
       let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        return {
-          success: false,
-          error: `Hubtel status API returned non-JSON response (HTTP ${res.status})`,
-        };
-      }
+      try { data = JSON.parse(text); }
+      catch { return { success: false, verified: false, error: `Hubtel status API returned HTTP ${res.status}` }; }
 
       const responseData = data.data as Record<string, unknown> | undefined;
-      const status = String(responseData?.status ?? data.status ?? "").toLowerCase();
       const responseCode = String(data.responseCode ?? data.response_code ?? "");
+      const status = String(responseData?.status ?? data.status ?? "").toLowerCase();
+      const returnedRef = String(responseData?.clientReference ?? responseData?.client_reference ?? reference);
+      const amount = Number(responseData?.amount ?? 0);
+      const paid = (status === "paid" || status === "success") && (responseCode === "0000" || responseCode === "00");
 
-      // Hubtel considers payment complete when status is "paid"
-      if (status === "paid" || responseCode === "0000") {
+      if (res.ok && paid && returnedRef === reference && Number.isFinite(amount) && amount >= 0) {
         return {
           success: true,
           verified: true,
-          amount: typeof responseData?.amount === "number" ? responseData.amount : 0,
+          amount,
+          amountMinor: toMinor(amount),
+          currency: normalizeCurrency(responseData?.currency, "GHS"),
           reference,
+          providerTransactionId: responseData?.transactionId != null ? String(responseData.transactionId) : undefined,
         };
       }
-
-      return {
-        success: true,
-        verified: false,
-        reference,
-        error: data.message || responseData?.reason || "Payment not completed",
-      };
+      return { success: true, verified: false, reference, error: String(data.message || responseData?.reason || "Payment not completed") };
     } catch (error) {
-      console.error("Hubtel verify error:", error);
-      return {
-        success: false,
-        error: `Hubtel verification failed: ${error instanceof Error ? error.message : "network error"}`,
-      };
+      console.error("Hubtel verification failed", error instanceof Error ? error.message : "unknown error");
+      return { success: false, verified: false, error: "Hubtel verification failed" };
     }
   }
 }
 
-// ─── Stripe ───────────────────────────────────────────────────
 export class StripeGateway implements PaymentGateway {
-  getName() {
-    return "stripe";
-  }
+  getName(): GatewayName { return "stripe"; }
 
-  private async getSecretKey(): Promise<string> {
-    const config = await db.systemConfig.findUnique({
-      where: { key: "stripe_secret_key" },
-    });
-    return config?.value || process.env.STRIPE_SECRET_KEY || "";
+  private getSecretKey() {
+    return getConfigValue("stripe_secret_key", "STRIPE_SECRET_KEY");
   }
 
   async initializePayment(params: {
-    email: string;
-    amount: number;
-    currency: string;
-    reference: string;
-    callbackUrl: string;
+    email: string; amount: number; currency: string; reference: string; callbackUrl: string;
     metadata?: Record<string, string>;
   }): Promise<PaymentResult> {
     try {
       const secretKey = await this.getSecretKey();
-      if (!secretKey) {
-        return { success: false, error: "Stripe secret key not configured" };
-      }
-
-      // Amount in cents for Stripe
-      const currencyLower = (params.currency || "USD").toLowerCase();
-      const amountInSmallestUnit = currencyLower === "ghs"
-        ? Math.round(params.amount * 100)
-        : Math.round(params.amount * 100);
-
+      if (!secretKey) return { success: false, error: "Stripe secret key not configured" };
+      const currency = normalizeCurrency(params.currency, "USD").toLowerCase();
       const res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${secretKey}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
+        headers: { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
           "payment_method_types[0]": "card",
-          "line_items[0][price_data][currency]": currencyLower,
-          "line_items[0][price_data][product_data][name]": `Vidora Token Package`,
-          "line_items[0][price_data][unit_amount]": String(amountInSmallestUnit),
+          "line_items[0][price_data][currency]": currency,
+          "line_items[0][price_data][product_data][name]": "Vidora Token Package",
+          "line_items[0][price_data][unit_amount]": String(toMinor(params.amount)),
           "line_items[0][quantity]": "1",
           mode: "payment",
-          success_url: `${params.callbackUrl}?reference=${params.reference}&status=success`,
-          cancel_url: `${params.callbackUrl}?reference=${params.reference}&status=cancelled`,
+          success_url: `${params.callbackUrl}?reference=${encodeURIComponent(params.reference)}&status=success`,
+          cancel_url: `${params.callbackUrl}?reference=${encodeURIComponent(params.reference)}&status=cancelled`,
           client_reference_id: params.reference,
           customer_email: params.email,
-          metadata: JSON.stringify(params.metadata || {}),
+          ...Object.fromEntries(Object.entries(params.metadata || {}).map(([k, v]) => [`metadata[${k}]`, v])),
         }),
       });
-
       const data = await res.json();
-
-      if (data.url) {
-        return {
-          success: true,
-          authorizationUrl: data.url,
-          reference: params.reference,
-        };
+      if (res.ok && data.url && data.client_reference_id === params.reference) {
+        return { success: true, authorizationUrl: data.url, reference: params.reference, providerTransactionId: String(data.id || "") || undefined };
       }
-
-      return {
-        success: false,
-        error: data.error?.message || "Stripe initialization failed",
-      };
+      return { success: false, error: String(data.error?.message || "Stripe initialization failed") };
     } catch (error) {
-      console.error("Stripe init error:", error);
+      console.error("Stripe initialization failed", error instanceof Error ? error.message : "unknown error");
       return { success: false, error: "Stripe payment initialization failed" };
     }
   }
@@ -453,60 +271,46 @@ export class StripeGateway implements PaymentGateway {
   async verifyPayment(reference: string): Promise<VerificationResult> {
     try {
       const secretKey = await this.getSecretKey();
-      if (!secretKey) {
-        return { success: false, error: "Stripe secret key not configured" };
-      }
-
-      // Retrieve checkout session
-      const res = await fetch(
-        `https://api.stripe.com/v1/checkout/sessions?client_reference_id=${reference}&limit=1`,
-        {
-          headers: {
-            Authorization: `Bearer ${secretKey}`,
-          },
-        }
-      );
-
+      if (!secretKey) return { success: false, verified: false, error: "Stripe secret key not configured" };
+      const url = new URL("https://api.stripe.com/v1/checkout/sessions");
+      url.searchParams.set("client_reference_id", reference);
+      url.searchParams.set("limit", "1");
+      const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${secretKey}` } });
       const data = await res.json();
-
-      if (data.data && data.data.length > 0 && data.data[0].payment_status === "paid") {
-        const session = data.data[0];
+      const session = data?.data?.[0];
+      if (res.ok && session?.client_reference_id === reference && session?.payment_status === "paid") {
+        const amountMinor = Number(session.amount_total);
+        if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
+          return { success: false, verified: false, error: "Stripe returned an invalid amount" };
+        }
         return {
           success: true,
           verified: true,
-          amount: session.amount_total / 100,
+          amountMinor,
+          amount: amountMinor / 100,
+          currency: normalizeCurrency(session.currency, "USD"),
           reference,
+          providerTransactionId: String(session.payment_intent || session.id || "") || undefined,
         };
       }
-
-      return {
-        success: true,
-        verified: false,
-        reference,
-        error: "Payment not completed",
-      };
+      return { success: true, verified: false, reference, error: "Payment not completed" };
     } catch (error) {
-      console.error("Stripe verify error:", error);
-      return { success: false, error: "Stripe verification failed" };
+      console.error("Stripe verification failed", error instanceof Error ? error.message : "unknown error");
+      return { success: false, verified: false, error: "Stripe verification failed" };
     }
   }
 }
 
-// ─── Factory ─────────────────────────────────────────────────
-export async function getActiveGateway(): Promise<PaymentGateway> {
-  const config = await db.systemConfig.findUnique({
-    where: { key: "payment_gateway" },
-  });
-
-  const gateway = config?.value || "paystack";
-
-  switch (gateway) {
-    case "hubtel":
-      return new HubtelGateway();
-    case "stripe":
-      return new StripeGateway();
-    case "paystack":
-    default:
-      return new PaystackGateway();
+export function getGatewayByName(name: string): PaymentGateway {
+  switch (name) {
+    case "hubtel": return new HubtelGateway();
+    case "stripe": return new StripeGateway();
+    case "paystack": return new PaystackGateway();
+    default: throw new Error(`Unsupported payment gateway: ${name}`);
   }
+}
+
+export async function getActiveGateway(): Promise<PaymentGateway> {
+  const config = await db.systemConfig.findUnique({ where: { key: "payment_gateway" } });
+  return getGatewayByName(config?.value || "paystack");
 }
