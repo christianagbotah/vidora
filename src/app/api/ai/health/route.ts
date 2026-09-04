@@ -24,19 +24,17 @@ let deepCached: HealthCache | null = null;
 const DEEP_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
- * Mirror the client's credential resolution order (see src/lib/zai.ts):
- *   1. SystemConfig DB (zai_base_url + zai_api_key)
- *   2. ZAI_BASE_URL + ZAI_API_KEY env vars
- *   3. .z-ai-config file via ZAI.create() — dev sandbox fallback
- * Readiness checks env vars and the .z-ai-config fallback without touching
- * the DB (keeps the endpoint zero-cost and latency-free); Admin-Portal-only
- * setups still report ok via their DB rows once any deep probe runs.
+ * Production readiness is intentionally environment-based so production
+ * credentials stay outside the repository and web-admin configuration paths.
+ * The SDK's .z-ai-config fallback remains available only for non-production
+ * development/sandbox environments.
  */
 function publicReadiness(): HealthCache {
   const envConfigured =
     Boolean(process.env.ZAI_BASE_URL?.trim()) && Boolean(process.env.ZAI_API_KEY?.trim());
-  const fileConfigured =
-    existsSync(join(process.cwd(), ".z-ai-config")) || existsSync("/etc/.z-ai-config");
+  const fileConfigured = process.env.NODE_ENV !== "production" && (
+    existsSync(join(process.cwd(), ".z-ai-config")) || existsSync("/etc/.z-ai-config")
+  );
   const configured = envConfigured || fileConfigured;
   return {
     status: configured ? "ok" : "degraded",
@@ -68,8 +66,8 @@ export async function GET(req: NextRequest) {
 
   try {
     // Minimal chat call — 1 token of output, thinking disabled for speed/cost.
-    // Uses the FREE GLM-4.5-Flash model (verified price sheet: Flash models
-    // cost $0) so even the admin deep probe never consumes paid balance.
+    // GLM-4.5-Flash is currently listed as free by Z.ai, so this admin-only
+    // deep probe avoids paid model spend while still validating live access.
     await zai.chat({
       model: "glm-4.5-flash",
       systemPrompt: "You are a health-check endpoint. Reply with exactly: OK",
