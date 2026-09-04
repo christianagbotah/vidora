@@ -21,18 +21,21 @@ schema = replace_exact(
   activeKey            String?      @unique''',
     label="GenerationRun target scene field",
 )
-schema = replace_exact(
-    schema,
-    '''  @@index([projectId, createdAt])
+run_start = schema.find("model GenerationRun {")
+if run_start < 0:
+    raise SystemExit("GenerationRun model not found")
+run_block = schema[run_start:]
+index_old = '''  @@index([projectId, createdAt])
   @@index([status, updatedAt])
-}''',
-    '''  @@index([projectId, createdAt])
+}'''
+index_new = '''  @@index([projectId, createdAt])
   @@index([targetSceneId])
   @@index([status, updatedAt])
-}''',
-    expected=1,
-    label="GenerationRun target scene index",
-)
+}'''
+if run_block.count(index_old) != 1:
+    raise SystemExit(f"GenerationRun index block: expected 1, found {run_block.count(index_old)}")
+run_block = run_block.replace(index_old, index_new, 1)
+schema = schema[:run_start] + run_block
 schema_path.write_text(schema, encoding="utf-8")
 
 # ── Durable worker: scope a run to one scene when targetSceneId is present ──
@@ -152,7 +155,7 @@ route = route_path.read_text(encoding="utf-8")
 for old in [
     'import { zai, ZAIError } from "@/lib/zai";\n',
     'import { friendlySceneError } from "@/lib/zai-errors";\n',
-    'import { saveGeneratedFile,\n  publicOrigin,\n  toAbsoluteUrl,\n} from "@/lib/generated-store";\n',
+    'import {\n  saveGeneratedFile,\n  publicOrigin,\n  toAbsoluteUrl,\n} from "@/lib/generated-store";\n',
     'import { ensureReferenceAspect } from "@/lib/aspect-normalize";\n',
     'import { autoNarrateScene } from "@/lib/narration";\n',
     'import {\n  buildSceneImagePrompt,\n  buildSceneVideoPrompt,\n} from "@/lib/image-prompt";\n',
