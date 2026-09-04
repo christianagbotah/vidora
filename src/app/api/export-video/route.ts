@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
@@ -1122,7 +1123,7 @@ function friendlyExportError(err: unknown): string {
  * Execute an export job in the background. All errors are captured into the
  * job row — this function never rejects.
  */
-async function runExportJob(jobId: string): Promise<void> {
+export async function runExportJob(jobId: string): Promise<void> {
   let projectId = "";
   try {
     const job = await db.exportJob.findUnique({ where: { id: jobId } });
@@ -1196,6 +1197,7 @@ async function runExportJob(jobId: string): Promise<void> {
         where: { id: jobId },
         data: {
           status: "done",
+          activeKey: null,
           progress: 100,
           step: "Complete",
           result: JSON.stringify(payload),
@@ -1212,7 +1214,7 @@ async function runExportJob(jobId: string): Promise<void> {
     try {
       await db.exportJob.update({
         where: { id: jobId },
-        data: { status: "failed", step: "Failed", error: friendly, updatedAt: new Date() },
+        data: { status: "failed", activeKey: null, step: "Failed", error: friendly, updatedAt: new Date() },
       });
     } catch { /* ignore */ }
     if (projectId) {
@@ -1223,7 +1225,7 @@ async function runExportJob(jobId: string): Promise<void> {
   }
 }
 
-// ─── Route: POST — validate fast, create job, run in background ───────────────
+// ─── Route: POST — validate fast and enqueue a durable export job ─────────────
 
 export async function POST(req: NextRequest) {
   try {
@@ -1306,57 +1308,53 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Reuse / clean up a previous active job for this project ──────────
-    const activeJob = await db.exportJob.findFirst({
-      where: { projectId, status: { in: ["queued", "running"] } },
-      orderBy: { createdAt: "desc" },
-    });
+    // Durable one-active-export guard. The unique activeKey closes the
+    // double-click/concurrent-request race at the database boundary.
+    const activeKey = `project:${projectId}`;
+    const activeJob = await db.exportJob.findUnique({ where: { activeKey } });
     if (activeJob) {
-      const isFresh = Date.now() - activeJob.updatedAt.getTime() < STALE_JOB_MS;
-      if (isFresh) {
-        // An export is already running — attach to it instead of starting a
-        // second one (double-click / retry protection).
-        return NextResponse.json({
-          success: true,
-          jobId: activeJob.id,
-          resumed: true,
-          progress: activeJob.progress,
-          step: activeJob.step,
-        });
-      }
-      // Stale: the server likely restarted mid-export. Mark it failed so the
-      // UI can show a clean error instead of polling forever.
-      await db.exportJob
-        .update({
-          where: { id: activeJob.id },
-          data: {
-            status: "failed",
-            step: "Failed",
-            error: "Export was interrupted (the server may have restarted). Please try again.",
-            updatedAt: new Date(),
-          },
-        })
-        .catch(() => { /* ignore */ });
+      return NextResponse.json({
+        success: true,
+        jobId: activeJob.id,
+        resumed: true,
+        progress: activeJob.progress,
+        step: activeJob.step,
+      });
     }
 
-    // ── Create the job and kick off the pipeline in the background ───────
-    // The response returns immediately (~<1s) so gateway/proxy timeouts
-    // (Cloudflare 524, nginx proxy_read_timeout) can never kill an export.
-    const job = await db.exportJob.create({
-      data: {
-        projectId,
-        userId:
-          authResult.session.userId && authResult.session.userId !== "guest"
-            ? authResult.session.userId
-            : null,
-        status: "queued",
-        progress: 0,
-        step: "Queued",
-        params: JSON.stringify({ quality, transition, format, withTitleCard, includeAudio }),
-      },
-    });
-
-    void runExportJob(job.id);
+    // ── Persist the job only; the dedicated PostgreSQL-backed export worker
+    // claims it and performs ffmpeg work outside the Next.js request process.
+    let job;
+    try {
+      job = await db.exportJob.create({
+        data: {
+          projectId,
+          userId:
+            authResult.session.userId && authResult.session.userId !== "guest"
+              ? authResult.session.userId
+              : null,
+          activeKey,
+          status: "queued",
+          progress: 0,
+          step: "Queued",
+          params: JSON.stringify({ quality, transition, format, withTitleCard, includeAudio }),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
+        if (concurrent) {
+          return NextResponse.json({
+            success: true,
+            jobId: concurrent.id,
+            resumed: true,
+            progress: concurrent.progress,
+            step: concurrent.step,
+          });
+        }
+      }
+      throw error;
+    }
 
     return NextResponse.json({ success: true, jobId: job.id });
   } catch (error) {
@@ -1401,21 +1399,17 @@ function serializeJob(job: {
 }
 
 /**
- * Mark a job as failed if its heartbeat went silent (server restart, crash,
- * dev hot reload) — otherwise the client would poll a zombie forever.
+ * Present a stale active job as recoverable. The export worker owns terminal
+ * state transitions and will reclaim stale running jobs after its lease.
  */
-async function reapStaleJob(job: {
-  id: string; status: string; updatedAt: Date;
-}): Promise<{ status: string; step: string; error: string | null }> {
-  const error = "Export was interrupted (the server may have restarted). Please try again.";
-  const failed = { status: "failed", step: "Failed", error };
-  try {
-    await db.exportJob.update({
-      where: { id: job.id },
-      data: { ...failed, updatedAt: new Date() },
-    });
-  } catch { /* ignore */ }
-  return failed;
+function staleJobView(job: {
+  status: string;
+}): { status: string; step: string; error: string | null } {
+  return {
+    status: job.status,
+    step: "Waiting for export worker recovery…",
+    error: null,
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -1477,10 +1471,10 @@ export async function GET(req: NextRequest) {
       (status === "queued" || status === "running") &&
       Date.now() - job.updatedAt.getTime() > STALE_JOB_MS
     ) {
-      const failed = await reapStaleJob(job);
-      status = failed.status;
-      step = failed.step;
-      error = failed.error;
+      const recovering = staleJobView(job);
+      status = recovering.status;
+      step = recovering.step;
+      error = recovering.error;
     }
 
     return NextResponse.json({
