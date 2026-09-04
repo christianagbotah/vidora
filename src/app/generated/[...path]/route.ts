@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
 import { readGeneratedFile, sanitizeRelPath } from "@/lib/generated-store";
+import {
+  shareAccessCookieName,
+  verifyShareAccessToken,
+} from "@/lib/share-access";
 
 export const runtime = "nodejs";
 
@@ -23,7 +27,11 @@ const MIME: Record<string, string> = {
 
 type MediaAccess = { allowed: boolean; publicCache: boolean };
 
-async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
+async function authorizeGeneratedMedia(
+  req: NextRequest,
+  rel: string
+): Promise<MediaAccess> {
+  // Watermarked acquisition previews contain no private project data.
   if (rel.startsWith("previews/")) {
     return { allowed: true, publicCache: true };
   }
@@ -58,13 +66,27 @@ async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
         { characters: { some: { imageUrl: mediaUrl } } },
       ],
     },
-    select: { id: true, isPublic: true, sharePassword: true },
+    select: {
+      id: true,
+      isPublic: true,
+      sharePassword: true,
+    },
   });
 
   if (project) {
     if (project.isPublic && !project.sharePassword) {
       return { allowed: true, publicCache: true };
     }
+
+    if (project.isPublic && project.sharePassword) {
+      const token = req.cookies.get(shareAccessCookieName(project.id))?.value;
+      if (verifyShareAccessToken(token, project.id)) {
+        return { allowed: true, publicCache: false };
+      }
+    }
+
+    // Owners/admins can still access the media through their authenticated
+    // account even when a public-share password is configured.
     const access = await requireProjectAccess(project.id, false);
     return { allowed: access.ok, publicCache: false };
   }
@@ -77,7 +99,8 @@ async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
     const auth = await requireAuth();
     if (!auth.ok) return { allowed: false, publicCache: false };
     return {
-      allowed: auth.session.userId === brand.userId || auth.session.role === "admin",
+      allowed:
+        auth.session.userId === brand.userId || auth.session.role === "admin",
       publicCache: false,
     };
   }
@@ -98,7 +121,7 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
-  const access = await authorizeGeneratedMedia(rel);
+  const access = await authorizeGeneratedMedia(req, rel);
   if (!access.allowed) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -130,7 +153,12 @@ export async function GET(
       let start = startRaw ? parseInt(startRaw, 10) : 0;
       let end = endRaw ? parseInt(endRaw, 10) : total - 1;
 
-      if (Number.isNaN(start) || Number.isNaN(end) || start >= total || start > end) {
+      if (
+        Number.isNaN(start) ||
+        Number.isNaN(end) ||
+        start >= total ||
+        start > end
+      ) {
         return new NextResponse(null, {
           status: 416,
           headers: { "Content-Range": `bytes */${total}` },
