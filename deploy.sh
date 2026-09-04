@@ -21,7 +21,15 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-required_env=(DATABASE_URL NEXTAUTH_URL NEXTAUTH_SECRET NEXT_PUBLIC_BASE_URL CONFIG_ENCRYPTION_KEY BACKUP_DIR)
+required_env=(
+  DATABASE_URL
+  NEXTAUTH_URL
+  NEXTAUTH_SECRET
+  NEXT_PUBLIC_BASE_URL
+  CONFIG_ENCRYPTION_KEY
+  GENERATED_DIR
+  BACKUP_DIR
+)
 for name in "${required_env[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     echo "FATAL: required environment variable $name is missing"
@@ -35,6 +43,20 @@ if [[ ${#NEXTAUTH_SECRET} -lt 32 ]] || [[ "$NEXTAUTH_SECRET" == *"CHANGE_ME"* ]]
 fi
 if [[ ! "$CONFIG_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]] && [[ ${#CONFIG_ENCRYPTION_KEY} -lt 43 ]]; then
   echo "FATAL: CONFIG_ENCRYPTION_KEY must represent 32 random bytes"
+  exit 1
+fi
+if [[ "$GENERATED_DIR" != /* ]]; then
+  echo "FATAL: GENERATED_DIR must be an absolute path"
+  exit 1
+fi
+case "$GENERATED_DIR" in
+  "$PROJECT_DIR/.next"|"$PROJECT_DIR/.next/"*)
+    echo "FATAL: GENERATED_DIR must live outside .next so deploys cannot erase media"
+    exit 1
+    ;;
+esac
+if [[ "$BACKUP_DIR" != /* ]]; then
+  echo "FATAL: BACKUP_DIR must be an absolute path"
   exit 1
 fi
 
@@ -67,10 +89,15 @@ bun run typecheck
 bun run test:unit
 bun run build
 
-# Mandatory backup before any production schema mutation.
-mkdir -p "$BACKUP_DIR"
+# Mandatory backups before any production schema mutation/restart.
+mkdir -p "$BACKUP_DIR" "$GENERATED_DIR"
 chmod 700 "$BACKUP_DIR"
-BACKUP_FILE="$BACKUP_DIR/vidora_$(date -u +%Y%m%dT%H%M%SZ)_${RELEASE_SHA:0:12}.sql.gz"
+chmod 750 "$GENERATED_DIR"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_FILE="$BACKUP_DIR/vidora_db_${STAMP}_${RELEASE_SHA:0:12}.sql.gz"
+MEDIA_BACKUP_FILE="$BACKUP_DIR/vidora_media_${STAMP}_${RELEASE_SHA:0:12}.tar.gz"
+
 echo "Creating PostgreSQL backup: $BACKUP_FILE"
 pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip -9 > "$BACKUP_FILE"
 if [[ ! -s "$BACKUP_FILE" ]]; then
@@ -81,6 +108,16 @@ fi
 gzip -t "$BACKUP_FILE"
 chmod 600 "$BACKUP_FILE"
 
+echo "Creating generated-media backup: $MEDIA_BACKUP_FILE"
+tar -C "$GENERATED_DIR" -czf "$MEDIA_BACKUP_FILE" .
+if [[ ! -s "$MEDIA_BACKUP_FILE" ]]; then
+  echo "FATAL: generated-media backup is empty or was not created"
+  rm -f "$MEDIA_BACKUP_FILE"
+  exit 1
+fi
+tar -tzf "$MEDIA_BACKUP_FILE" >/dev/null
+chmod 600 "$MEDIA_BACKUP_FILE"
+
 # Production schema changes are versioned and reviewable. db push is forbidden.
 bunx prisma migrate deploy
 
@@ -90,13 +127,14 @@ pm2 save
 
 # Fail closed on web reachability. AI dependency may report degraded, but the
 # endpoint itself must remain reachable so operations can distinguish outage types.
+HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   HTTP_CODE="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3004/ || true)"
   [[ "$HTTP_CODE" == "200" ]] && break
   sleep 2
 done
-if [[ "${HTTP_CODE:-000}" != "200" ]]; then
-  echo "FATAL: Vidora did not become reachable after deploy (HTTP ${HTTP_CODE:-000})"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  echo "FATAL: Vidora did not become reachable after deploy (HTTP $HTTP_CODE)"
   pm2 logs vidora --lines 80 --nostream || true
   exit 1
 fi
@@ -109,6 +147,7 @@ fi
 
 echo "Deploy complete"
 echo "Commit: $RELEASE_SHA"
-echo "Backup: $BACKUP_FILE"
+echo "Database backup: $BACKUP_FILE"
+echo "Media backup: $MEDIA_BACKUP_FILE"
 echo "Web: HTTP $HTTP_CODE"
 echo "AI health: $HEALTH"
