@@ -1,0 +1,34 @@
+name: One-shot batch generation scope fix
+
+on:
+  push:
+    branches:
+      - production-hardening/p0-security-billing
+    paths:
+      - .github/workflows/one-shot-batch-generation-scope-fix.yml
+      - scripts/batch-generation-scope-fix.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: production-hardening/p0-security-billing
+          fetch-depth: 0
+      - name: Apply exact batch generation fixes
+        run: python3 scripts/batch-generation-scope-fix.py
+      - name: Commit hardened batch generation files
+        run: |
+          if git diff --quiet -- prisma/schema.prisma src/app/api/generate-video/route.ts src/app/api/generate-video-scene/route.ts scripts/generation-worker.ts; then
+            echo "No changes required."
+            exit 0
+          fi
+          git config user.name "vidora-hardening-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add prisma/schema.prisma src/app/api/generate-video/route.ts src/app/api/generate-video-scene/route.ts scripts/generation-worker.ts
+          git commit -m "billing: align generation charges with durable scene scope"
+          git push origin HEAD:production-hardening/p0-security-billing
