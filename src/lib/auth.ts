@@ -27,7 +27,6 @@ function productionSecret(): string {
 }
 
 export const authOptions: NextAuthOptions = {
-  trustHost: true,
   providers: [
     CredentialsProvider({
       name: "credentials",
