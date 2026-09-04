@@ -412,6 +412,7 @@ model GenerationRun {
   projectId            String
   project              VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId               String
+  targetSceneId        String?
   activeKey            String?      @unique
   status               String       @default("queued")
   totalTokens          Int
@@ -424,5 +425,6 @@ model GenerationRun {
   updatedAt            DateTime     @updatedAt
 
   @@index([projectId, createdAt])
+  @@index([targetSceneId])
   @@index([status, updatedAt])
 }

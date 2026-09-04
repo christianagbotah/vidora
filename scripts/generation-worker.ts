@@ -113,6 +113,7 @@ async function submitSceneTask(opts: {
     enhancedPrompt: string | null;
     referenceImageUrl: string | null;
     characterIds: string | null;
+    duration: number;
   };
   videoSize: string;
   origin: string;
@@ -173,7 +174,7 @@ async function submitSceneTask(opts: {
   const taskId = await zai.generateVideo({
     prompt,
     size: videoSize,
-    duration: 10,
+    duration: Math.max(1, Math.min(30, scene.duration || 10)),
     quality: "quality",
     withAudio: true,
     ...(referenceImage ? { imageUrl: referenceImage } : {}),
@@ -297,10 +298,24 @@ async function processRun(runId: string): Promise<void> {
     return;
   }
 
-  const scenes = project.scenes.filter((scene) => !scene.videoUrl);
+  const runScenes = run.targetSceneId
+    ? project.scenes.filter((scene) => scene.id === run.targetSceneId)
+    : project.scenes;
+  if (run.targetSceneId && runScenes.length !== 1) {
+    await markReconciliation(run.id, project.id, "Generation run target scene no longer exists");
+    return;
+  }
+
+  const scenes = runScenes.filter((scene) => !scene.videoUrl);
   if (scenes.length === 0) {
+    const incompleteProjectScenes = await db.videoScene.count({
+      where: { projectId: project.id, videoUrl: null },
+    });
     await Promise.all([
-      db.videoProject.update({ where: { id: project.id }, data: { status: "completed" } }),
+      db.videoProject.update({
+        where: { id: project.id },
+        data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" },
+      }),
       db.generationRun.update({
         where: { id: run.id },
         data: { status: "completed", activeKey: null, error: null },
@@ -353,8 +368,11 @@ async function processRun(runId: string): Promise<void> {
     }
   }
 
+  const scopedSceneWhere = run.targetSceneId
+    ? { projectId: project.id, id: run.targetSceneId }
+    : { projectId: project.id };
   const afterSubmission = await db.videoScene.findMany({
-    where: { projectId: project.id },
+    where: scopedSceneWhere,
     orderBy: { sceneNumber: "asc" },
   });
   let thumbnailFailure = false;
@@ -371,11 +389,17 @@ async function processRun(runId: string): Promise<void> {
     if (state === "waiting") providerWaiting = true;
   }
 
-  const finalScenes = await db.videoScene.findMany({ where: { projectId: project.id } });
+  const finalScenes = await db.videoScene.findMany({ where: scopedSceneWhere });
   const allVideosDone = finalScenes.every((scene) => Boolean(scene.videoUrl));
   if (allVideosDone && !thumbnailFailure) {
+    const incompleteProjectScenes = await db.videoScene.count({
+      where: { projectId: project.id, videoUrl: null },
+    });
     await Promise.all([
-      db.videoProject.update({ where: { id: project.id }, data: { status: "completed" } }),
+      db.videoProject.update({
+        where: { id: project.id },
+        data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" },
+      }),
       db.generationRun.update({
         where: { id: run.id },
         data: { status: "completed", activeKey: null, error: null },
