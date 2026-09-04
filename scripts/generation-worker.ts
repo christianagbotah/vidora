@@ -298,11 +298,34 @@ async function processRun(runId: string): Promise<void> {
     return;
   }
 
-  const runScenes = run.targetSceneId
-    ? project.scenes.filter((scene) => scene.id === run.targetSceneId)
-    : project.scenes;
-  if (run.targetSceneId && runScenes.length !== 1) {
-    await markReconciliation(run.id, project.id, "Generation run target scene no longer exists");
+  let persistedSceneIds: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(run.sceneIds || "[]");
+    if (Array.isArray(parsed)) {
+      persistedSceneIds = parsed.filter((id): id is string => typeof id === "string");
+    }
+  } catch {
+    persistedSceneIds = [];
+  }
+
+  const requestedIds = persistedSceneIds.length > 0
+    ? persistedSceneIds
+    : run.targetSceneId
+      ? [run.targetSceneId]
+      : [];
+  const requestedSet = new Set(requestedIds);
+  const runScenes = requestedIds.length > 0
+    ? project.scenes.filter((scene) => requestedSet.has(scene.id))
+    : project.scenes.filter(
+        (scene) =>
+          scene.status === "queued" ||
+          scene.status === "submitting" ||
+          scene.status === "generating" ||
+          Boolean(scene.taskId)
+      );
+
+  if (requestedIds.length > 0 && runScenes.length !== requestedSet.size) {
+    await markReconciliation(run.id, project.id, "Generation run scene scope no longer matches the project");
     return;
   }
 
@@ -368,11 +391,9 @@ async function processRun(runId: string): Promise<void> {
     }
   }
 
-  const scopedSceneWhere = run.targetSceneId
-    ? { projectId: project.id, id: run.targetSceneId }
-    : { projectId: project.id };
+  const scopedSceneIds = runScenes.map((scene) => scene.id);
   const afterSubmission = await db.videoScene.findMany({
-    where: scopedSceneWhere,
+    where: { projectId: project.id, id: { in: scopedSceneIds } },
     orderBy: { sceneNumber: "asc" },
   });
   let thumbnailFailure = false;
@@ -389,7 +410,9 @@ async function processRun(runId: string): Promise<void> {
     if (state === "waiting") providerWaiting = true;
   }
 
-  const finalScenes = await db.videoScene.findMany({ where: scopedSceneWhere });
+  const finalScenes = await db.videoScene.findMany({
+    where: { projectId: project.id, id: { in: scopedSceneIds } },
+  });
   const allVideosDone = finalScenes.every((scene) => Boolean(scene.videoUrl));
   if (allVideosDone && !thumbnailFailure) {
     const incompleteProjectScenes = await db.videoScene.count({

@@ -413,6 +413,7 @@ model GenerationRun {
   project              VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId               String
   targetSceneId        String?
+  sceneIds             String       @default("[]") @db.Text
   activeKey            String?      @unique
   status               String       @default("queued")
   totalTokens          Int

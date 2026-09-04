@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
           projectId,
           userId,
           targetSceneId: sceneId,
+          sceneIds: JSON.stringify([sceneId]),
           activeKey,
           status: "queued",
           totalTokens: tokensToCharge,

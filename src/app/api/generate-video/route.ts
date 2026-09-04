@@ -5,10 +5,34 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation } from "@/lib/tokens";
-import { PRICING, calculateProjectCost } from "@/lib/pricing";
+import { PRICING } from "@/lib/pricing";
 import { getEngineChargeInfo } from "@/lib/storefront";
+import { resolveModelForRequest } from "@/lib/video-models";
 
 export const runtime = "nodejs";
+
+function hasProviderReference(
+  scene: { referenceImageUrl: string | null; characterIds: string | null },
+  characters: Array<{ id: string; imageUrl: string | null }>
+): boolean {
+  if (scene.referenceImageUrl && !scene.referenceImageUrl.startsWith("data:")) {
+    return true;
+  }
+  if (!scene.characterIds) return false;
+  try {
+    const parsed: unknown = JSON.parse(scene.characterIds);
+    if (!Array.isArray(parsed)) return false;
+    const ids = new Set(parsed.filter((id): id is string => typeof id === "string"));
+    return characters.some(
+      (character) =>
+        ids.has(character.id) &&
+        Boolean(character.imageUrl) &&
+        !character.imageUrl!.startsWith("data:")
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -58,10 +82,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, message: "All scenes already have videos.", sceneCount: project.scenes.length, alreadyDone: true });
     }
 
-    const engineCharge = await getEngineChargeInfo(project.videoModel);
-    const tokensPerScene = engineCharge.tokensPerClip + PRICING.image_gen.tokens;
-    const costUsdPerScene = engineCharge.costUsdPerClip + PRICING.image_gen.costUsd;
-    const totalTokensNeeded = scenesToProcess.length * tokensPerScene;
+    const sceneCharges = await Promise.all(
+      scenesToProcess.map(async (scene) => {
+        const resolvedModel = resolveModelForRequest(
+          project.videoModel,
+          hasProviderReference(scene, project.characters)
+        );
+        const engineCharge = await getEngineChargeInfo(resolvedModel);
+        const needsThumbnail = !scene.imageUrl;
+        return {
+          sceneId: scene.id,
+          model: resolvedModel,
+          tokens: engineCharge.tokensPerClip + (needsThumbnail ? PRICING.image_gen.tokens : 0),
+          costUsd: engineCharge.costUsdPerClip + (needsThumbnail ? PRICING.image_gen.costUsd : 0),
+          needsThumbnail,
+        };
+      })
+    );
+    const totalTokensNeeded = sceneCharges.reduce((sum, charge) => sum + charge.tokens, 0);
+    const totalCostUsd = sceneCharges.reduce((sum, charge) => sum + charge.costUsd, 0);
+    const tokensPerScene = Math.ceil(totalTokensNeeded / scenesToProcess.length);
+    const costUsdPerScene = totalCostUsd / scenesToProcess.length;
     const tokenCheck = await checkTokens(userId, totalTokensNeeded);
     if (!tokenCheck.hasEnough) {
       return NextResponse.json({
@@ -69,7 +110,11 @@ export async function POST(req: NextRequest) {
         error: `Insufficient tokens. You need ${totalTokensNeeded} tokens but have ${tokenCheck.balance}.`,
         tokensNeeded: totalTokensNeeded,
         tokensAvailable: tokenCheck.balance,
-        costBreakdown: calculateProjectCost(scenesToProcess.length, { withNarration: false }),
+        costBreakdown: {
+          sceneCount: scenesToProcess.length,
+          thumbnailCount: sceneCharges.filter((charge) => charge.needsThumbnail).length,
+          totalTokens: totalTokensNeeded,
+        },
       }, { status: 402 });
     }
 
@@ -79,6 +124,7 @@ export async function POST(req: NextRequest) {
         data: {
           projectId,
           userId,
+          sceneIds: JSON.stringify(scenesToProcess.map((scene) => scene.id)),
           activeKey,
           status: "queued",
           totalTokens: totalTokensNeeded,
@@ -101,7 +147,7 @@ export async function POST(req: NextRequest) {
       referenceId: projectId,
       idempotencyKey: `generation:${run.id}:charge`,
       customTokens: totalTokensNeeded,
-      customCostUsd: scenesToProcess.length * costUsdPerScene,
+      customCostUsd: totalCostUsd,
     });
     if (!deduction.success) {
       await db.generationRun.update({
