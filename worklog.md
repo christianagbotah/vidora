@@ -2994,3 +2994,22 @@ Stage Summary:
 - Health check switched to FREE glm-4.5-flash model (the only passive call) — zero-cost pings on sandbox and (after next deploy) production
 - Owner's balance drop explained: delayed posting of the E2E test session charges (~$2.85) + Z.ai credits-first deduction order; definitive answer is in z.ai Billing → Transaction History
 - Needs `./deploy.sh` on VPS to apply the free-model health check to production
+
+---
+Task ID: 13 (addendum)
+Agent: main
+Task: Rebase onto external "P0 production hardening" merge + keep health endpoint correct
+
+Work Log:
+- Remote gained new commits (authored outside this session): payment verification hardening, admin balance row locks, legacy payment recovery tests, CI workflow, unified prisma/schema.prisma (schema.prisma.local removed), scripts/generation-worker.ts + export-worker.ts, deploy.sh overhaul, health endpoint redesign (public = zero-cost config readiness; deep live probe admin-only ?deep=1)
+- Rebased my Task 13 commit; resolved conflict in health route by combining their redesign with my free-model change: admin deep probe now uses glm-4.5-flash (FREE)
+- Fixed publicReadiness to mirror the real credential resolution order: env (ZAI_BASE_URL+ZAI_API_KEY) OR .z-ai-config fallback (cwd or /etc) — sandbox previously showed "degraded" despite working SDK
+- Fresh browser load: 0 console errors, 0 page errors, /api/auth/session 200 JSON (earlier CLIENT_FETCH_ERROR was transient mid-rebase compile noise)
+- Health endpoint: public returns {"status":"ok"} in sandbox, no provider spend; lint 0 errors
+- Committed abd5507, pushed to origin/main
+
+Stage Summary:
+- My Task 13 changes (free-model deep probe + consumption audit script) rebased cleanly on top of the external hardening merge
+- Health endpoint now: public zero-cost (config readiness incl. sandbox .z-ai-config detection), admin deep probe on FREE model
+- Transient mid-rebase compile errors fully cleared; app verified clean post-rebase
+- NOTE: deploy.sh on the VPS should be run to bring production up to the hardening + zero-cost-health stack
