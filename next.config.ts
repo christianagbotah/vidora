@@ -34,9 +34,8 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "50mb",
     },
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Production builds must fail closed when TypeScript compilation fails.
+  // Do not re-enable `typescript.ignoreBuildErrors`.
   reactStrictMode: false,
   allowedDevOrigins: ["localhost", "127.0.0.1", "21.0.6.50", "*.space-z.ai", "space-z.ai"],
 
