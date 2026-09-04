@@ -3,6 +3,14 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { zai, cleanLLMOutput } from "@/lib/zai";
 import { userFriendlyZaiMessage, isAdminSession } from "@/lib/zai-errors";
+import {
+  buildCelebrationText,
+  extractFinalScreenLine,
+  injectInscriptionInstructions,
+  buildFinalScreenScene,
+  pickDefaultMusic,
+  normalizeFinalScreenLine,
+} from "@/lib/onscreen-text";
 
 export const runtime = "nodejs";
 
@@ -104,6 +112,35 @@ function displayNameForKey(key: string): string {
 
 const CLIP_DURATION = 10;
 
+// Hard cap on scenes from a user-supplied structured script — the script's
+// own scene count wins over targetDuration (users who write out scenes mean
+// every one of them), but a runaway paste can't create 50 clips.
+const MAX_SCRIPT_SCENES = 12;
+
+// ── Speaker-attribution detection (shared by dialogue & visual extraction) ──
+
+/**
+ * Scene metadata attributions — never spoken lines. "Visual:" is handled
+ * separately (it IS the visual description source).
+ */
+const METADATA_PREFIXES =
+  /^(?:Visual|Scenes?|Audio|Music|Sound|SFX|Camera|Mood|Transition|Duration|Characters?|Setting|Background|Lighting|Location|Props|Costumes?|Action|Notes?|Description|Title|Screen|Screenplay|Script|Cast|Style|Format|Time|Overall|Total|Target|Intro|Opening|Outro|Ending|Narration|Voice\s*Over|VO|Dialogue)\b/i;
+
+/**
+ * A spoken-line attribution: a capitalized name (Narrator, Chorus, Everyone,
+ * Miss Rachel, SuperKitties, JJ), optionally a compound ("Chase & Marshall",
+ * "Spidey and Friends"), optionally a parenthetical stage direction
+ * ("Everyone (all together, singing):"), then a colon. Quoted or unquoted.
+ */
+const SPEAKER_RE =
+  /^(?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?\s*:/;
+
+/** Group speakers that are not individual characters. */
+const NON_CHARACTER_SPEAKERS = new Set([
+  "Narrator", "Chorus", "All", "Everyone", "Friends", "Together", "Crowd",
+  "Kids", "Everyone Together", "Visual", "Scene", "Final", "Remember", "The",
+]);
+
 interface ParsedScene {
   prompt: string;
   title?: string;
@@ -178,32 +215,30 @@ function extractVisualLines(text: string): string {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // Skip dialogue lines (CharacterName: "text")
-    if (/^[A-Z][a-zA-Z\s]+:\s*["\u201C]/.test(trimmed)) continue;
-    if (/^[A-Z][a-zA-Z\s]+\s*["\u201C]/.test(trimmed)) continue;
-    if (/^Narrator:\s*/i.test(trimmed)) continue;
-    if (/^Everyone\s/.test(trimmed) && /:["\u201C]/.test(trimmed)) continue;
+    // Extract Visual: prefixed lines (the canonical visual source)
+    if (/^Visual:/i.test(trimmed)) {
+      const visual = trimmed.replace(/^Visual:\s*/i, "");
+      if (visual.length > 10) visualLines.push(visual);
+      continue;
+    }
+
+    // Skip metadata attributions (Scene, Music, Duration, …)
+    if (METADATA_PREFIXES.test(trimmed)) continue;
+
+    // Skip spoken lines — quoted or unquoted (Chase:, Everyone (sings):, …)
+    if (SPEAKER_RE.test(trimmed)) continue;
+
+    // Skip continuation lines of quoted dialogue (only the first line of a
+    // multi-line quote carries the attribution)
+    if (/["\u201D]$/.test(trimmed)) continue;
 
     // Skip music/lyrics
-    if (/^[🎵\u{1F3B5}\u{1F3B6}]/.test(trimmed)) continue;
+    if (/^[\u{1F3B5}\u{1F3B6}]/u.test(trimmed)) continue;
 
     // Skip Final Screen
     if (/^Final\s+Screen/i.test(trimmed)) continue;
 
-    // Extract Visual: prefixed lines
-    if (/^Visual:/i.test(trimmed)) {
-      const visual = trimmed.replace(/^Visual:\s*/i, "");
-      if (visual.length > 10) visualLines.push(visual);
-    } else if (
-      !trimmed.endsWith('"') &&
-      !trimmed.endsWith("\u201D") &&
-      !trimmed.endsWith("!\u201D") &&
-      !/^[A-Z][a-z]+\s*[:"\u201C]/.test(trimmed) &&
-      !/^Everyone\s+(shouts|sings|laughs|cheers)/i.test(trimmed) &&
-      trimmed.length > 10
-    ) {
-      visualLines.push(trimmed);
-    }
+    if (trimmed.length > 10) visualLines.push(trimmed);
   }
 
   return visualLines.join(" ").trim();
@@ -218,14 +253,23 @@ function extractDialogue(text: string): string {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // Match CharacterName: "dialogue" patterns
-    if (/^[A-Z][a-zA-Z\s]+:\s*["\u201C]/.test(trimmed)) {
+    // Metadata attributions are never dialogue
+    if (METADATA_PREFIXES.test(trimmed)) continue;
+
+    // Spoken lines: Narrator:, Miss Rachel:, Chase & Marshall:,
+    // Everyone (all together, singing):, Chorus: — quoted OR unquoted
+    if (SPEAKER_RE.test(trimmed)) {
       dialogueLines.push(trimmed);
+      continue;
     }
-    if (/^Narrator:\s*/i.test(trimmed)) {
-      dialogueLines.push(trimmed);
-    }
-    if (/^Everyone\s/.test(trimmed) && /:["\u201C]/.test(trimmed)) {
+
+    // Continuation lines of a multi-line quote (no attribution, ends with a
+    // closing quote) belong to the previous spoken line
+    if (
+      dialogueLines.length > 0 &&
+      /^["\u201C]/.test(trimmed) &&
+      /["\u201D]$/.test(trimmed)
+    ) {
       dialogueLines.push(trimmed);
     }
   }
@@ -245,13 +289,17 @@ function detectCharacterNames(text: string): string[] {
     /^([A-Z]{2,}(?:\s+[A-Z]{2,})?)\s*:/gm,
     // CamelCase names (e.g., SuperKitties:, CoComelon:)
     /^([A-Z][a-z]+[A-Z][a-z]+(?:[A-Z][a-z]+)*)\s*:/gm,
+    // Compound speakers: "Chase & Marshall:", "Spidey and Friends:"
+    /^([A-Z][a-z]+)\s*(?:&|\+|and)\s+([A-Z][a-z]+)\s*:/gm,
   ];
 
   for (const pattern of patterns) {
     const matches = [...text.matchAll(pattern)];
     for (const m of matches) {
-      if (m[1] && m[1].length > 1 && m[1].length < 30) {
-        names.add(m[1].trim());
+      for (const g of [m[1], m[2]]) {
+        if (g && g.length > 1 && g.length < 30) {
+          names.add(g.trim());
+        }
       }
     }
   }
@@ -268,7 +316,7 @@ function detectCharacterNames(text: string): string[] {
     }
   }
 
-  return [...names].filter((n) => !["Visual", "Scene", "Final", "Remember", "Everyone", "The"].includes(n));
+  return [...names].filter((n) => !NON_CHARACTER_SPEAKERS.has(n));
 }
 
 // Known words to exclude when scanning for proper nouns
@@ -297,31 +345,37 @@ const EXCLUDE_WORDS = new Set([
 // Detect the honoree (birthday child, celebrant, etc.) from the script
 function detectHonoree(fullPrompt: string): string | null {
   // Pattern 1: "for [Name] who is X years old"
-  const agePattern = /(?:for|about)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+who\s+(?:is\s+|just\s+(?:a\s+)?(?:small\s+)?(?:boy|girl),?\s*)?(?:\d+|turning|now)\s+(?:years?\s+)?old/i;
+  // Name stays case-sensitive (a Capitalized Word) — only the trailing
+  // structure words tolerate any case, so lowercase filler ("for a boy who…")
+  // can never be captured as a name.
+  const agePattern = /(?:[Ff]or|[Aa]bout)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+[Ww]ho\s+(?:[Ii]s\s+|[Jj]ust\s+(?:[Aa]\s+)?(?:[Ss]mall\s+)?(?:[Bb]oy|[Gg]irl),?\s*)?(?:\d+|[Tt]urning|[Nn]ow)\s+(?:[Yy]ears?\s+)?[Oo]ld/;
   const ageMatch = fullPrompt.match(agePattern);
   if (ageMatch && ageMatch[1]) {
-    const name = ageMatch[1].trim();
+    const name = ageMatch[1].trim().split(/\s+/)[0];
     // Don't match generic words
     if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
       return name;
     }
   }
 
-  // Pattern 2: "Birthday Story for [Name]"
-  const titlePattern = /(?:birthday|celebration|party|adventure)\s+(?:story|video|movie|special)\s+for\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i;
+  // Pattern 2: "Birthday Story Video for [Name]" — the tail words may chain
+  // ("story video", "movie special") so each is repeatable.
+  const titlePattern = /(?:[Bb]irthday|[Cc]elebration|[Pp]arty|[Aa]dventure)\s+(?:[Ss]tory|[Vv]ideo|[Mm]ovie|[Ss]pecial)(?:\s+(?:[Ss]tory|[Vv]ideo|[Mm]ovie|[Ss]pecial))*\s+[Ff]or\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/;
   const titleMatch = fullPrompt.match(titlePattern);
   if (titleMatch && titleMatch[1]) {
-    const name = titleMatch[1].trim();
+    const name = titleMatch[1].trim().split(/\s+/)[0];
     if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
       return name;
     }
   }
 
-  // Pattern 3: "HAPPY BIRTHDAY [NAME]" in all caps
-  const capsPattern = /HAPPY\s+BIRTHDAY\s+([A-Z]{2,}(?:\s+[A-Z]{2,})*)/i;
+  // Pattern 3: "HAPPY BIRTHDAY [NAME]" in ALL CAPS — strictly case-sensitive:
+  // mixed-case "happy birthday dear friend" must NOT be captured as a name.
+  const capsPattern = /HAPPY\s+BIRTHDAY\s+([A-Z]{2,}(?:\s+[A-Z]{2,})*)/;
   const capsMatch = fullPrompt.match(capsPattern);
   if (capsMatch && capsMatch[1]) {
-    const name = capsMatch[1].trim();
+    const name = capsMatch[1].trim().split(/\s+/)[0]
+      .charAt(0).toUpperCase() + capsMatch[1].trim().split(/\s+/)[0].slice(1).toLowerCase();
     if (name.length > 1 && name.length < 30 && !EXCLUDE_WORDS.has(name)) {
       return name;
     }
@@ -340,8 +394,9 @@ function detectHonoree(fullPrompt: string): string | null {
     }
   }
 
-  // Also check "Happy Birthday, [Name]" and "[Name]'s birthday"
-  const possessivePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'s?\s+birthday/i;
+  // Also check "[Name]'s birthday" — name part stays case-sensitive so
+  // lowercase filler ("for a friend's birthday") can't be captured.
+  const possessivePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'s?\s+[Bb]irthday/;
   const possessiveMatch = fullPrompt.match(possessivePattern);
   if (possessiveMatch && possessiveMatch[1]) {
     const name = possessiveMatch[1].trim();
@@ -442,13 +497,38 @@ export async function POST(req: NextRequest) {
     const targetSec = Math.max(10, Math.min(300, targetDuration));
     const desiredSceneCount = Math.max(1, Math.ceil(targetSec / CLIP_DURATION));
 
+    // ── On-screen text intelligence ──
+    // Normalize a trailing bare celebration line (e.g. "🎉 HAPPY BIRTHDAY
+    // GIANNIS! 🎉") into an explicit "Final Screen:" line so both the scene
+    // extractor and the final-screen builder recognize it.
+    const normalizedPrompt = normalizeFinalScreenLine(prompt);
+    const celebrationText = buildCelebrationText(normalizedPrompt);
+    const defaultMusic = pickDefaultMusic(normalizedPrompt);
+
     // Step 1: Try to extract pre-defined scenes from the prompt
-    const predefinedScenes = extractDefinedScenes(prompt);
+    const predefinedScenes = extractDefinedScenes(normalizedPrompt);
 
     if (predefinedScenes && predefinedScenes.length >= 2) {
+      // The user wrote these scenes on purpose — keep them all (capped)
+      // instead of silently dropping them to match targetDuration.
+      const keptScenes = predefinedScenes.slice(0, MAX_SCRIPT_SCENES);
+
+      // Build the closing title-card scene from the "Final Screen:" line —
+      // previously this line was silently discarded by the extractor.
+      const finalLine = extractFinalScreenLine(normalizedPrompt);
+      if (finalLine) {
+        keptScenes.push(buildFinalScreenScene(finalLine, celebrationText));
+      }
+
+      // Inject cake/banner/gift inscription instructions so the video model
+      // actually renders the celebration text users expect to SEE.
+      if (celebrationText) {
+        injectInscriptionInstructions(keptScenes, celebrationText);
+      }
+
       // Detect all characters across the full script
       const allCharacterNames = new Set<string>();
-      for (const scene of predefinedScenes) {
+      for (const scene of keptScenes) {
         if (scene.characterNames) {
           scene.characterNames.forEach((n) => allCharacterNames.add(n));
         }
@@ -458,19 +538,25 @@ export async function POST(req: NextRequest) {
       const skipTeamEntries = new Set(["paw patrol", "cocomelon"]);
       for (const [key] of Object.entries(KNOWN_CHARACTERS)) {
         if (skipTeamEntries.has(key)) continue;
-        if (prompt.toLowerCase().includes(key.toLowerCase())) {
+        if (normalizedPrompt.toLowerCase().includes(key.toLowerCase())) {
           allCharacterNames.add(displayNameForKey(key));
         }
       }
-      const characterList = buildCharacterDescriptions([...allCharacterNames], prompt);
+      const characterList = buildCharacterDescriptions([...allCharacterNames], normalizedPrompt);
 
-      console.log(`Extracted ${predefinedScenes.length} scenes and ${characterList.length} characters from script`);
+      console.log(
+        `Extracted ${keptScenes.length} scenes (${finalLine ? "+final screen" : "no final screen"}) ` +
+        `and ${characterList.length} characters from script` +
+        (celebrationText ? `; inscription: "${celebrationText}"` : "")
+      );
       return NextResponse.json({
         success: true,
-        scenes: predefinedScenes.slice(0, desiredSceneCount),
+        scenes: keptScenes,
         characters: characterList,
-        count: predefinedScenes.length,
-        estimatedDuration: predefinedScenes.length * CLIP_DURATION,
+        count: keptScenes.length,
+        estimatedDuration: keptScenes.length * CLIP_DURATION,
+        celebrationText: celebrationText || undefined,
+        defaultMusic: defaultMusic || undefined,
         source: "predefined",
       });
     }
@@ -504,7 +590,7 @@ export async function POST(req: NextRequest) {
 
     const raw = await zai.chat({
       systemPrompt,
-      userPrompt: prompt,
+      userPrompt: normalizedPrompt,
       thinking: "disabled",
       retry: { label: "Split scenes AI", timeoutMs: 90_000, maxRetries: 3 },
     });
@@ -573,6 +659,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── On-screen text intelligence (AI path) ──
+    // The LLM rewrites scenes, so the explicit "Final Screen:" line may have
+    // been folded into a scene or dropped — rebuild it as its own scene.
+    const finalLineAi = extractFinalScreenLine(normalizedPrompt);
+    if (finalLineAi) {
+      scenes.push(buildFinalScreenScene(finalLineAi, celebrationText));
+    }
+    if (celebrationText) {
+      injectInscriptionInstructions(scenes, celebrationText);
+    }
+
     if (scenes.length === 0) {
       return NextResponse.json({
         success: true,
@@ -585,10 +682,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      scenes: scenes.slice(0, desiredSceneCount),
+      scenes: scenes.slice(0, desiredSceneCount + (finalLineAi ? 1 : 0)),
       characters,
       count: scenes.length,
       estimatedDuration: scenes.length * CLIP_DURATION,
+      celebrationText: celebrationText || undefined,
+      defaultMusic: defaultMusic || undefined,
       source: "ai",
     });
   } catch (error) {

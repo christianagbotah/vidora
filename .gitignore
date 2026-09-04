@@ -92,3 +92,6 @@ prisma/schema.prisma.postgres-backup
 
 # Persistent generated-media store (runtime artifacts, survives rebuilds)
 /generated-store/
+
+# agent scratch (local testing only)
+.scratch/

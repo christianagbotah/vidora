@@ -43,7 +43,7 @@ export async function POST(
     if (!authResult.ok) return authResult.response;
 
     const body = await req.json();
-    const { prompt, enhancedPrompt, duration, transition, characterIds, characterNames } = body;
+    const { prompt, enhancedPrompt, duration, transition, characterIds, characterNames, dialogue, visualNote, musicTrackUrl, musicMood, musicVolume } = body;
 
     if (!prompt) {
       return NextResponse.json(
@@ -107,9 +107,20 @@ export async function POST(
         sceneNumber: nextSceneNumber,
         prompt,
         enhancedPrompt: enhancedPrompt || null,
+        // Dialogue drives the auto TTS voices at generation time and the
+        // export voice mix — dropping it here silently muted every character.
+        dialogue: typeof dialogue === "string" && dialogue.trim() ? dialogue : null,
+        visualNote: typeof visualNote === "string" && visualNote.trim() ? visualNote : null,
         duration: duration || 3,
         transition: transition || "fade",
         characterIds: linkedCharacterIds,
+        // Smart defaults: the script analyzer may pre-assign a background
+        // music track (celebration scripts get a matching mood).
+        musicTrackUrl: typeof musicTrackUrl === "string" && musicTrackUrl ? musicTrackUrl : null,
+        musicMood: typeof musicMood === "string" && musicMood ? musicMood : null,
+        ...(typeof musicVolume === "number" && !Number.isNaN(musicVolume)
+          ? { musicVolume: Math.max(0, Math.min(100, Math.round(musicVolume))) }
+          : {}),
       },
     });
 

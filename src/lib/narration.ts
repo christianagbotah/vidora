@@ -36,6 +36,35 @@ export const TTS_VOICES = [
 
 export const DEFAULT_TTS_VOICE = "tongtong";
 
+/**
+ * A spoken-line attribution prefix: Narrator:, Miss Rachel:,
+ * Chase & Marshall:, Everyone (all together, singing):, Chorus:.
+ * Used to strip labels before TTS so the voice doesn't literally say
+ * "Chase: surprise!".
+ */
+const ATTRIBUTION_PREFIX_RE =
+  /^\s*(?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?\s*:\s*/;
+
+/**
+ * Strip speaker attributions and surrounding quotes from dialogue lines so
+ * TTS reads only the spoken words: 'Narrator: "Wake up!"' → 'Wake up!'.
+ */
+export function stripSpeakerAttributions(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(ATTRIBUTION_PREFIX_RE, "")
+        .trim()
+        .replace(/^["\u201C]+/, "")
+        .replace(/["\u201D]+$/, "")
+        .trim()
+    )
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
 /** Split text into chunks that fit within the TTS char limit. */
 export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   if (text.length <= maxLen) return [text];
@@ -107,7 +136,13 @@ export async function generateSceneNarration(opts: {
   voice?: string;
   speed?: number;
 }): Promise<NarrationResult> {
-  const { sceneId, text, voice = DEFAULT_TTS_VOICE, speed = 1.0 } = opts;
+  const { sceneId, voice = DEFAULT_TTS_VOICE, speed = 1.0 } = opts;
+  // Dialogue extracted from scripts carries speaker labels — strip them so
+  // the voice speaks the line, not the attribution.
+  const text = stripSpeakerAttributions(opts.text);
+  if (!text) {
+    throw new Error("No speakable text after stripping speaker attributions");
+  }
   const clampedSpeed = Math.max(0.5, Math.min(2.0, speed || 1.0));
 
   ensureAudioDir();

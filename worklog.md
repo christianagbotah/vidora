@@ -2832,3 +2832,42 @@ Stage Summary:
 - Sound now exists at EVERY stage: generated CogVideoX clips carry native ambient audio; character dialogue voices are auto-generated the moment each scene finishes rendering (correct voice via character casting); the studio plays voice + video together in sync; the export mixes voices + music + the clips' own ambience at the correct timeline positions
 - Export can no longer be silent for dialogue-free projects (ambience layer), and the export reuses generation-time voices (no duplicate TTS, no wasted quota)
 - Old projects are unaffected: silent clips simply get no ambience layer, and their missing voices are still auto-generated at export
+
+---
+Task ID: script-smarts-1
+Agent: main
+Task: Make scripts actually produce what users wrote — on-screen text (cake/banner inscriptions + "Final Screen" title card), character voices from dialogue, and default background music
+
+User report: "check this script. expect the background music, narrations, and the voices of all the characters to show. even the 'Happy Birthday Giannis' inscription is not on the cake and decors. so the app should be smart and intelligent enough to add all these and produce real videos and outputs"
+
+Root causes found (all in the script → scene pipeline):
+1. src/lib/onscreen-text.ts existed but was imported NOWHERE — inscription injection, final-screen building, and celebration detection were dead code
+2. The scenes POST route DROPPED `dialogue` (schema field existed; body never persisted it) → every wizard-created scene had NO dialogue → autoNarrateScene returned "no dialogue" → no voices ever, even after the gen-audio-1 sound fixes
+3. The projects POST route DROPPED `voiceId` → characters had no assigned voices → pickSceneNarrationVoice always fell back to the default narrator
+4. extractDialogue only matched `Name: "quoted"` lines — "Chase & Marshall:", "Everyone (all together, singing):", and unquoted lines were lost (some even leaked into visual prompts)
+5. The script's "Final Screen:" line was discarded by the extractor (closing title never rendered); structured scripts were sliced to targetDuration (user's explicit 6 scenes could be cut)
+6. No default background music anywhere — /public/music tracks existed but nothing assigned them
+
+Fixes:
+- onscreen-text.ts: extractFinalScreenLine tolerates heading-only + next-line forms; normalizeFinalScreenLine rewrites a trailing bare celebration line ("🎉 HAPPY BIRTHDAY GIANNIS! 🎉") into an explicit Final Screen line; pickDefaultMusic maps celebration kinds → curated tracks (birthday→joyful etc.); generic-friendly types; extractCelebrantName pattern-2 chains ("Birthday story video for X")
+- split-scenes route: wired in — normalize → celebration text → default music; predefined scripts keep ALL their scenes (capped 12) instead of slicing to targetDuration; "Final Screen" line becomes a real 3D-letters title-card scene (appended after the script's scenes); injectInscriptionInstructions adds quoted cake/banner/gift-tag text to matching scene prompts; same wiring on the AI-split path; response gains celebrationText + defaultMusic
+- Dialogue extraction rewritten around shared SPEAKER_RE (compound "Chase & Marshall", parenthetical "Everyone (singing):", quoted OR unquoted) + METADATA_PREFIXES blocklist (Visual/Scene/Music/… never count as speech); multi-line quote continuations captured; visual extraction skips the same lines; detectCharacterNames splits compound speakers; group speakers (Chorus/All/Everyone) excluded from characters
+- Honoree detection fixed: capsPattern's /i flag made "happy birthday dear friend" capture the junk name "dear friend" — now strictly case-sensitive; titlePattern chains "story video"; name captures stay case-sensitive so lowercase filler can never become the honoree
+- scenes POST: persists dialogue + visualNote + musicTrackUrl/musicMood/musicVolume (dialogue drives auto TTS voices at generation + the export mix)
+- projects POST: persists character voiceId + AUTO-ASSIGNS a distinct TTS voice per character (round-robin pool chuichui/luodo/kazi/douji/xiaochen/jam/tongtong; Narrator characters get the dedicated tongtong narrator voice) — so every character speaks with their own voice
+- narration.ts: NEW stripSpeakerAttributions (labels + surrounding quotes removed per line) applied inside generateSceneNarration — the voice says "Wake up, birthday boy!", never "Miss Rachel: Wake up…"
+- page.tsx: handleAnalyzeScript stores celebrationText + defaultMusic; scene creation passes the music defaults; Script Analysis Preview gains smart badges ("🎂 'Happy Birthday Giannis' on cake, banners & title card", "🎵 joyful background music added", "🎙 Character voices auto-generated") and the Final Screen scene shows a distinct "🎬 Ending" badge; dialogue renders with line breaks
+
+Verification (sandbox, live ZAI APIs, admin session):
+- POST /api/split-scenes with the 6-scene Giannis birthday script: 7 scenes (6 + Final Screen 3D-letters card), celebrationText "Happy Birthday Giannis", defaultMusic joyful; inscriptions injected into scenes 2/5/6 (cake frosting, banner, gift tag); dialogue extracted for all speaker forms incl. "Chase & Marshall:" and "Everyone (all together, singing):"; honoree correctly "Giannis" (the "dear friend" junk name eliminated); characters: Miss Rachel, Chase, Marshall, JJ, Bluey, Bingo, Spidey, SuperKitties, Buddy, Giannis
+- Unit tests: stripSpeakerAttributions (all 5 attribution forms → clean spoken text), extractFinalScreenLine (inline + next-line + emoji), buildCelebrationText, pickDefaultMusic (birthday→joyful, non-celebration→null), extractCelebrantName rejects "dear friend", normalizeFinalScreenLine rewrites the trailing celebration line
+- Full creation flow (HTTP): project created → characters persisted with DISTINCT voiceIds (chuichui/kazi/xiaochen/tongtong/douji/jam/luodo) → scenes persisted with dialogue + joyful music + character links
+- Live generation: Scene 1 completed (CogVideoX-3, h264+aac native ambience) → autoNarrate fired automatically → voice=chuichui (Miss Rachel's voice) narration wav (11s, mean −19 dB); Scene 2 completed → voice=kazi (Chase's) — different characters get different voices; scenes 3/4 hit ZAI 429 rate limits and failed with the friendly message + one-click Retry (verified: retry resets to pending, restarts generation, skips completed scenes, charges only the retry)
+- Live export (background job): 26% → 67% → 80% → 100% in ~15s; final mp4 = h264+aac, 19.45s (2 scenes − crossfade), summary "2 voiced scenes (0 regenerated — reused generation-time voices), music on 2 scenes"; mean −22.8 dB / max −5.3 dB (real mixed audio)
+- Studio UI (agent-browser): Script Analysis Preview shows the celebration/music/voices badges + 🎬 Ending scene; scene cards show the full dialogue and "AI voice — plays along with the video above"
+- ESLint 0 errors; test artifacts fully cleaned (project, scenes, characters, jobs, finals, clips, thumbs, narration wavs, admin tokens back to 1000, DB back to 0 projects)
+
+Stage Summary:
+- Scripts now produce what they describe: the celebration text is explicitly instructed onto cakes/banners/gift tags AND gets a real 3D-letters closing title card; dialogue is extracted from every speaker form, persisted on scenes, and turned into per-character TTS voices automatically; celebration scripts get a matching background-music track by default
+- The "no sound at all" class of bug is closed at the source: dialogue no longer dies at scene creation, characters no longer lack voices, and TTS text no longer includes speaker labels
+- Scene count honors the user's script (no more silent slicing), and group speakers (Chorus/Everyone) narrate without becoming bogus characters

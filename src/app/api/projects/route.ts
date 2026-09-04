@@ -74,15 +74,39 @@ export async function POST(req: NextRequest) {
 
     // ── Pre-process character images ──
     // If a character has imageBase64, save it to disk and compute the URL
+    // Also auto-assign a distinct TTS voice per character (round-robin) so
+    // every character speaks with their own voice in generated narrations
+    // and exports — users can change it per character in the studio.
+    const CHARACTER_VOICE_POOL = ["chuichui", "luodo", "kazi", "douji", "xiaochen", "jam", "tongtong"];
+    const usedVoiceIds = new Set<string>();
+
     const processedCharacters = characters?.length
       ? await Promise.all(
-          characters.map(async (c: Record<string, string>) => {
+          characters.map(async (c: Record<string, string>, idx: number) => {
+            // Narrator characters keep the dedicated narrator voice
+            const isNarrator = /narrator/i.test(String(c.name || "")) || String(c.role || "").toLowerCase() === "narrator";
+            const requested = typeof c.voiceId === "string" && c.voiceId ? c.voiceId : null;
+
+            let voiceId: string | null = requested;
+            if (!voiceId) {
+              if (isNarrator) {
+                voiceId = "tongtong"; // warm & friendly narrator voice
+              } else {
+                // Round-robin over the pool, skipping voices already used in
+                // this project so each character sounds distinct.
+                const pool = CHARACTER_VOICE_POOL.filter((v) => !usedVoiceIds.has(v));
+                voiceId = pool[idx % pool.length] || CHARACTER_VOICE_POOL[idx % CHARACTER_VOICE_POOL.length];
+              }
+            }
+            if (voiceId) usedVoiceIds.add(voiceId);
+
             const result: Record<string, string> = {
               name: c.name,
               role: c.role || "supporting",
               description: c.description || null,
               stylePrompt: c.stylePrompt || null,
               imageUrl: c.imageUrl || null,
+              voiceId: voiceId || null,
             };
 
             if (c.imageBase64) {

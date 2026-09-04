@@ -1652,6 +1652,11 @@ function VidoraApp() {
   const [generatingScenes, setGeneratingScenes] = useState<Set<string>>(new Set());
   const [characters, setCharacters] = useState<Character[]>([]);
   const [parsedScenes, setParsedScenes] = useState<ParsedSceneResult[]>([]);
+  // Smart script-analysis extras: the celebration inscription text (rendered on
+  // cakes/banners + the closing title card) and the auto-picked background
+  // music track for celebration scripts.
+  const [parsedCelebration, setParsedCelebration] = useState<string | null>(null);
+  const [parsedDefaultMusic, setParsedDefaultMusic] = useState<{ mood: string; url: string } | null>(null);
   const [parsedCharacters, setParsedCharacters] = useState<DetectedCharacter[]>([]);
   const [isAnalyzingScript, setIsAnalyzingScript] = useState(false);
   const [isEnhancingPrompt, setIsEnhancingPrompt] = useState(false);
@@ -3269,6 +3274,8 @@ function VidoraApp() {
       if (data.success) {
         setParsedScenes(data.scenes);
         setParsedCharacters(data.characters || []);
+        setParsedCelebration(data.celebrationText || null);
+        setParsedDefaultMusic(data.defaultMusic || null);
         toast({
           title: "Script analyzed",
           description: `Found ${data.scenes.length} scene${data.scenes.length > 1 ? "s" : ""}${data.characters?.length ? ` and ${data.characters.length} character${data.characters.length > 1 ? "s" : ""}` : ""}`,
@@ -3399,9 +3406,13 @@ function VidoraApp() {
             prompt: s.prompt,
             title: s.title || undefined,
             dialogue: s.dialogue || undefined,
+            visualNote: s.visualNote || undefined,
             characterIds: sceneCharIds.length > 0 ? sceneCharIds : undefined,
             characterNames: s.characterNames || undefined,
             duration: Math.floor(effectiveDuration / scenesToCreate.length),
+            // Smart music default: celebration scripts get a matching
+            // background track the moment scenes exist (mixable in export).
+            ...(parsedDefaultMusic ? { musicTrackUrl: parsedDefaultMusic.url, musicMood: parsedDefaultMusic.mood } : {}),
           }),
         });
         if (!sceneRes.ok) {
@@ -3424,6 +3435,8 @@ function VidoraApp() {
       setCreateStep(0); // reset wizard for next time
       setParsedScenes([]);
       setParsedCharacters([]);
+      setParsedCelebration(null);
+      setParsedDefaultMusic(null);
       setScriptText("");
       setTextPrompt("");
       setEnhancedText("");
@@ -5997,16 +6010,35 @@ function VidoraApp() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="overflow-hidden">
+                    {(parsedCelebration || parsedDefaultMusic) && (
+                      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                        {parsedCelebration && (
+                          <Badge className="text-xs gap-1 bg-pink-50 text-pink-700 border-pink-200">
+                            🎂 “{parsedCelebration}” on cake, banners & title card
+                          </Badge>
+                        )}
+                        {parsedDefaultMusic && (
+                          <Badge className="text-xs gap-1 bg-amber-50 text-amber-700 border-amber-200">
+                            🎵 {parsedDefaultMusic.mood} background music added
+                          </Badge>
+                        )}
+                        <Badge className="text-xs gap-1 bg-violet-50 text-violet-700 border-violet-200">
+                          🎙 Character voices auto-generated
+                        </Badge>
+                      </div>
+                    )}
                     <div className="max-h-[50vh] overflow-y-auto space-y-3 pr-1">
                       {parsedScenes.map((s, i) => (
                         <div key={i} className="p-3 rounded-lg border border-slate-100 bg-slate-50/50 space-y-1.5">
                           <div className="flex items-center gap-2 min-w-0">
-                            <Badge className="shrink-0 text-xs bg-violet-100 text-violet-700 border-violet-200">Scene {i + 1}</Badge>
+                            <Badge className={`shrink-0 text-xs ${/final screen/i.test(s.title || "") ? "bg-pink-100 text-pink-700 border-pink-200" : "bg-violet-100 text-violet-700 border-violet-200"}`}>
+                              {/final screen/i.test(s.title || "") ? "🎬 Ending" : `Scene ${i + 1}`}
+                            </Badge>
                             {s.title && <span className="text-xs font-bold truncate">{s.title}</span>}
                           </div>
                           <p className="text-sm text-muted-foreground break-words">{s.prompt}</p>
                           {s.dialogue && (
-                            <p className="text-xs text-violet-500 italic break-words">"{s.dialogue}"</p>
+                            <p className="text-xs text-violet-500 italic break-words whitespace-pre-line">{s.dialogue}</p>
                           )}
                           {s.visualNote && (
                             <p className="text-xs text-amber-600 break-words">📷 {s.visualNote}</p>

@@ -102,7 +102,7 @@ const NAME_STOPWORDS = new Set([
 export function extractCelebrantName(script: string): string | null {
   const patterns: RegExp[] = [
     /\b(?:happy|dear|for)\s+birthday[,\s]+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)/i,
-    /\bbirthday\s+(?:story|video|movie|special|adventure)\s+for\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)/i,
+    /\bbirthday\s+(?:story|video|movie|special|adventure)(?:\s+(?:story|video|movie|special|adventure))*\s+for\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)/i,
     /\bfor\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)\s+(?:who\s+is|turning|celebrating)\b/i,
     /\b([A-Za-z][A-Zaz'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)'s\s+\d+(?:st|nd|rd|th)?\s+birthday/i,
     /\b([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)'s\s+birthday\b/i,
@@ -143,6 +143,30 @@ export function buildCelebrationText(script: string): string | null {
 }
 
 /* ── Inscription injection ──────────────────────────────────────────────── */
+
+/**
+ * Users often end celebration scripts with a bare line like
+ *   "🎉 HAPPY BIRTHDAY GIANNIS! 🎉"
+ * Rewrites that trailing line into an explicit "Final Screen: <text>" line so
+ * the scene extractor stops the last scene before it and the final-screen
+ * builder picks it up. Returns the (possibly unchanged) script.
+ */
+export function normalizeFinalScreenLine(script: string): string {
+  const celebration = buildCelebrationText(script);
+  if (!celebration) return script;
+
+  const lines = script.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t) continue; // skip trailing blank lines
+    const cleaned = stripDecorativeEmoji(t).replace(/[!,.?]+$/g, "").trim();
+    if (cleaned.toLowerCase() === celebration.toLowerCase()) {
+      lines[i] = `Final Screen: ${celebration}!`;
+    }
+    break; // only the last non-empty line
+  }
+  return lines.join("\n");
+}
 
 /** True when a scene's prompt already carries the inscription text. */
 function alreadyCarriesText(prompt: string, text: string): boolean {
