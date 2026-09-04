@@ -9,7 +9,7 @@ import { PRICING } from "@/lib/pricing";
 
 export const runtime = "nodejs";
 
-const SYSTEM_PROMPT = `You are Vidora AI Assistant, the friendly help bot for Vidora — a professional AI video creation studio.
+const SYSTEM_PROMPT = `You are Vidora Studio Assistant, the friendly help bot for Vidora Studio — a professional AI video creation studio.
 
 YOUR ROLE: Help signed-in users understand Vidora's features and guide them to success.
 

@@ -473,7 +473,7 @@ async function generateTitleCard(
       "-f", "lavfi", "-i", `color=c=black:s=${size.w}x${size.h}:d=${titleDuration}:r=24`,
       "-vf",
       `drawtext=textfile=${escapeFilterPath(titleFile)}:expansion=none:fontcolor=white:fontsize=${fontSize}:x=(w-text_w)/2:y=(h-text_h)/2-20,` +
-      `drawtext=text='Vidora AI':fontcolor=gray:fontsize=${subFontSize}:x=(w-text_w)/2:y=(h-text_h)/2+${Math.round(fontSize / 1.4)}:enable='between(t,0.3,2.7)'`,
+      `drawtext=text='Vidora Studio':fontcolor=gray:fontsize=${subFontSize}:x=(w-text_w)/2:y=(h-text_h)/2+${Math.round(fontSize / 1.4)}:enable='between(t,0.3,2.7)'`,
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
       "-t", String(titleDuration),
       titleCardPath,
