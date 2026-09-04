@@ -6,6 +6,7 @@ on:
       - production-hardening/p0-security-billing
     paths:
       - .github/workflows/one-shot-export-worker-cutover.yml
+      - scripts/export-worker-cutover.py
 
 permissions:
   contents: write
