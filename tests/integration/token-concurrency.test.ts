@@ -21,7 +21,6 @@ afterAll(async () => {
   for (const id of createdUsers) {
     await db.user.delete({ where: { id } }).catch(() => undefined);
   }
-  await db.$disconnect();
 });
 
 describe("token ledger concurrency", () => {
@@ -45,9 +44,7 @@ describe("token ledger concurrency", () => {
     const current = await db.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(current.tokens).toBe(0);
 
-    const ledger = await db.tokenTransaction.findMany({
-      where: { userId: user.id, type: "spend" },
-    });
+    const ledger = await db.tokenTransaction.findMany({ where: { userId: user.id, type: "spend" } });
     expect(ledger).toHaveLength(5);
     expect(ledger.reduce((sum, row) => sum + row.amount, 0)).toBe(-10);
   });
