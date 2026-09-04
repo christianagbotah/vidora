@@ -120,9 +120,6 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
 
   try {
     const result = await db.$transaction(async (tx) => {
-      // Serialize settlement attempts on the actual payment row. This avoids
-      // pg_advisory_xact_lock()'s PostgreSQL void return type, which Prisma
-      // cannot deserialize, while keeping the lock transaction-scoped.
       const locked = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id"
         FROM "Payment"
@@ -135,9 +132,33 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
       if (!current) throw new Error("Payment not found");
       if (current.status === "refunded") throw new Error("Refunded payment cannot be settled");
 
-      if (current.settledAt || current.status === "completed") {
+      if (current.settledAt) {
         const user = await tx.user.findUnique({ where: { id: current.userId }, select: { tokens: true } });
         return { alreadySettled: true, totalCredited: 0, newBalance: user?.tokens ?? 0 };
+      }
+
+      // Older code could mark a payment completed before token crediting. For a
+      // completed row without settledAt, inspect the ledger while holding the
+      // payment lock. If a purchase ledger entry already exists, normalize the
+      // settlement marker; otherwise continue below and credit exactly once.
+      if (current.status === "completed") {
+        const existingPurchase = await tx.tokenTransaction.findFirst({
+          where: {
+            userId: current.userId,
+            referenceId: current.id,
+            type: "purchase",
+          },
+          select: { id: true },
+        });
+        if (existingPurchase) {
+          const recoveredAt = new Date();
+          await tx.payment.update({
+            where: { id: current.id },
+            data: { settledAt: recoveredAt },
+          });
+          const user = await tx.user.findUnique({ where: { id: current.userId }, select: { tokens: true } });
+          return { alreadySettled: true, totalCredited: 0, newBalance: user?.tokens ?? 0 };
+        }
       }
 
       const settledAt = new Date();
