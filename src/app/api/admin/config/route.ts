@@ -2,13 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/admin";
 import { resetZaiClient } from "@/lib/zai";
-import {
-  SECRET_CONFIG_KEYS,
-  getConfigValue,
-  isMaskedSecret,
-  maskSecret,
-  setConfigValue,
-} from "@/lib/secure-config";
+import { SECRET_CONFIG_KEYS, setConfigValue } from "@/lib/secure-config";
 
 const CONFIG_SCHEMA: Record<string, string> = {
   payment_gateway: "Active payment gateway (paystack, hubtel, stripe)",
@@ -32,6 +26,17 @@ const CONFIG_SCHEMA: Record<string, string> = {
   zai_api_key: "Z.ai API key (from your z.ai dashboard)",
 };
 
+const SECRET_ENV: Record<string, string> = {
+  paystack_secret_key: "PAYSTACK_SECRET_KEY",
+  paystack_webhook_secret: "PAYSTACK_SECRET_KEY",
+  hubtel_client_id: "HUBTEL_CLIENT_ID",
+  hubtel_client_secret: "HUBTEL_CLIENT_SECRET",
+  hubtel_api_key: "HUBTEL_API_KEY",
+  stripe_secret_key: "STRIPE_SECRET_KEY",
+  stripe_webhook_secret: "STRIPE_WEBHOOK_SECRET",
+  zai_api_key: "ZAI_API_KEY",
+};
+
 export async function GET(req: NextRequest) {
   const { error } = await requireAdmin(req);
   if (error) return error;
@@ -39,45 +44,38 @@ export async function GET(req: NextRequest) {
   try {
     const rows = await db.systemConfig.findMany({ orderBy: { key: "asc" } });
     const rowMap = new Map(rows.map((row) => [row.key, row]));
-    const result: Record<string, { value: string; description: string; configured?: boolean; secret?: boolean }> = {};
+    const result: Record<string, { value: string; description: string; configured: boolean; secret: boolean; source?: string }> = {};
 
     for (const [key, description] of Object.entries(CONFIG_SCHEMA)) {
       if (SECRET_CONFIG_KEYS.has(key)) {
-        let plaintext = "";
-        try {
-          const envName: Record<string, string> = {
-            paystack_secret_key: "PAYSTACK_SECRET_KEY",
-            paystack_webhook_secret: "PAYSTACK_SECRET_KEY",
-            hubtel_client_id: "HUBTEL_CLIENT_ID",
-            hubtel_client_secret: "HUBTEL_CLIENT_SECRET",
-            hubtel_api_key: "HUBTEL_API_KEY",
-            stripe_secret_key: "STRIPE_SECRET_KEY",
-            stripe_webhook_secret: "STRIPE_WEBHOOK_SECRET",
-            zai_api_key: "ZAI_API_KEY",
-          };
-          plaintext = await getConfigValue(key, envName[key]);
-        } catch {
-          // Never leak decryption/config diagnostics in the admin response.
-          plaintext = "";
-        }
+        const envName = SECRET_ENV[key];
+        const fromEnv = Boolean(envName && process.env[envName]?.trim());
+        const legacyDbConfigured = Boolean(rowMap.get(key)?.value);
         result[key] = {
-          value: plaintext ? maskSecret(plaintext) : "",
+          value: fromEnv || legacyDbConfigured ? "********" : "",
           description,
-          configured: Boolean(plaintext),
+          configured: fromEnv || legacyDbConfigured,
           secret: true,
+          source: fromEnv ? "environment" : legacyDbConfigured ? "legacy-db" : "none",
         };
         continue;
       }
 
+      const value = rowMap.get(key)?.value || "";
       result[key] = {
-        value: rowMap.get(key)?.value || "",
+        value,
         description,
-        configured: Boolean(rowMap.get(key)?.value),
+        configured: Boolean(value),
         secret: false,
+        source: value ? "database" : "none",
       };
     }
 
-    return NextResponse.json({ success: true, configs: result });
+    return NextResponse.json({
+      success: true,
+      configs: result,
+      secretPolicy: "Provider secrets are write-disabled in the web admin and must be managed through server environment variables.",
+    });
   } catch (error) {
     console.error("Admin get config error:", error);
     return NextResponse.json({ success: false, error: "Failed to get config" }, { status: 500 });
@@ -96,24 +94,29 @@ export async function PUT(req: NextRequest) {
     }
 
     const updatedKeys: string[] = [];
+    const blockedSecretKeys: string[] = [];
+
     for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
       if (!(key in CONFIG_SCHEMA)) continue;
-      const strValue = String(value ?? "").trim();
+      if (SECRET_CONFIG_KEYS.has(key)) {
+        blockedSecretKeys.push(key);
+        continue;
+      }
 
-      // The UI receives masked secret placeholders. Sending the placeholder
-      // back must never replace the real credential.
-      if (SECRET_CONFIG_KEYS.has(key) && isMaskedSecret(strValue)) continue;
-
-      await setConfigValue(key, strValue, CONFIG_SCHEMA[key]);
+      await setConfigValue(key, String(value ?? "").trim(), CONFIG_SCHEMA[key]);
       updatedKeys.push(key);
     }
 
-    if (updatedKeys.includes("zai_base_url") || updatedKeys.includes("zai_api_key")) {
-      resetZaiClient();
-    }
+    if (updatedKeys.includes("zai_base_url")) resetZaiClient();
 
-    // Never echo raw configuration values, particularly provider credentials.
-    return NextResponse.json({ success: true, updatedKeys });
+    return NextResponse.json({
+      success: true,
+      updatedKeys,
+      blockedSecretKeys,
+      ...(blockedSecretKeys.length
+        ? { warning: "Provider secrets were not changed. Update them in the VPS environment and restart the application." }
+        : {}),
+    });
   } catch (error) {
     console.error("Admin update config error:", error);
     return NextResponse.json({ success: false, error: "Failed to update config" }, { status: 500 });
