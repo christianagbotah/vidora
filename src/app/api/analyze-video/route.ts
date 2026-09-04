@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
       "Analyze this video and provide a detailed scene description that could be used to recreate a similar video with AI. Describe the visual style, camera work, subjects, actions, environment, lighting, mood, and color palette. Be specific and cinematic. Then on a new line starting with 'PROMPT:', provide a concise 1-2 sentence prompt that could be used for AI image generation to recreate this scene.";
 
     const content = await zai.vision({
+      model: process.env.ZAI_VISION_MODEL || process.env.ZAI_CHAT_MODEL || "glm-4-plus",
       thinking: "enabled",
       messages: [
         {
