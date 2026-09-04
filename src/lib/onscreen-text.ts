@@ -39,14 +39,23 @@ export function stripDecorativeEmoji(s: string): string {
 /**
  * The script's explicit closing title, e.g.
  *   "Final Screen: 🎉 HAPPY BIRTHDAY GIANNIS! 🎉"
+ * Also tolerates the text sitting on the NEXT line after a bare
+ * "Final Screen:" heading.
  * Returns the cleaned text (emojis stripped) or null.
  */
 export function extractFinalScreenLine(script: string): string | null {
   const m = script.match(
-    /^[ \t]*(?:final\s*screen|title\s*card|end\s*card|closing\s*(?:title|card)|ending\s*title)[ \t]*:[ \t]*(.+)$/im
+    /^[ \t]*(?:final\s*screen|title\s*card|end\s*card|closing\s*(?:title|card)|ending\s*title)[ \t]*:(.*)$/im
   );
-  if (!m || !m[1]) return null;
-  const text = stripDecorativeEmoji(m[1]).replace(/^[-–—•\s]+/, "").trim();
+  if (!m) return null;
+  let raw = (m[1] || "").trim();
+  if (!raw) {
+    // Heading-only line — take the first non-empty line after it
+    const after = script.slice((m.index ?? 0) + m[0].length);
+    const next = after.match(/^[ \t]*(\S[^\n]*)$/m);
+    raw = next ? next[1].trim() : "";
+  }
+  const text = stripDecorativeEmoji(raw).replace(/^[-–—•\s]+/, "").trim();
   // Keep the closing punctuation (often "!") but strip leftover symbols
   return text.replace(/[~*#_|]+/g, "").trim() || null;
 }
@@ -147,10 +156,10 @@ function alreadyCarriesText(prompt: string, text: string): boolean {
  * celebration text ("Happy Birthday Giannis") where the user expects it.
  * Mutates and returns the scenes (only when a celebration text exists).
  */
-export function injectInscriptionInstructions(
-  scenes: OnScreenTextScene[],
+export function injectInscriptionInstructions<T extends OnScreenTextScene>(
+  scenes: T[],
   celebrationText: string
-): OnScreenTextScene[] {
+): T[] {
   for (const scene of scenes) {
     if (!scene.prompt) continue;
     if (alreadyCarriesText(scene.prompt, celebrationText)) continue;
@@ -209,4 +218,32 @@ export function buildFinalScreenScene(
     characterNames: undefined,
     visualNote: undefined,
   };
+}
+
+/* ── Smart background music ───────────────────────────────────────────────── */
+
+export interface DefaultMusic {
+  mood: string;
+  /** Public URL of the curated track in /public/music. */
+  url: string;
+}
+
+const CELEBRATION_MUSIC: Record<CelebrationKind, DefaultMusic> = {
+  birthday: { mood: "joyful", url: "/music/joyful.m4a" },
+  wedding: { mood: "joyful", url: "/music/joyful.m4a" },
+  anniversary: { mood: "joyful", url: "/music/joyful.m4a" },
+  graduation: { mood: "epic", url: "/music/epic.m4a" },
+  baby: { mood: "calm", url: "/music/calm.m4a" },
+  congratulations: { mood: "epic", url: "/music/epic.m4a" },
+};
+
+/**
+ * Pick a sensible default background-music track for a script.
+ * Only celebration scripts get an automatic track (users can always swap or
+ * mute it per scene in the studio); everything else stays music-free unless
+ * the user picks a mood.
+ */
+export function pickDefaultMusic(script: string): DefaultMusic | null {
+  const kind = detectCelebrationKind(script);
+  return kind ? CELEBRATION_MUSIC[kind] : null;
 }
