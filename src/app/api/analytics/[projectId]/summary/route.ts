@@ -1,70 +1,107 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
+import {
+  shareAccessCookieName,
+  verifyShareAccessToken,
+} from "@/lib/share-access";
 
 /**
- * GET /api/analytics/[projectId]/summary
- * Returns aggregate analytics for a project.
- *
- * Access:
- *  - Owner + Admin: full analytics
- *  - Guest on demo project (userId === null): allowed (demo is interactive)
- *  - Public viewer on a public/shared project (isPublic=true): allowed
- *    so the share page can display a view count.
- *  - Otherwise: 403
+ * Owners/admins receive full aggregate analytics. Anonymous share viewers get
+ * only the total view count needed by the public player; referers, trends,
+ * completion/watch metrics remain private.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   try {
     const { projectId } = await params;
-
-    // Look up the project to check visibility
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      select: { id: true, userId: true, isPublic: true },
+      select: {
+        id: true,
+        userId: true,
+        isPublic: true,
+        sharePassword: true,
+      },
     });
     if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 }
+      );
     }
 
-    // Public projects and guest demo projects can be viewed by anyone.
-    // Private projects require owner/admin access.
-    const isPubliclyVisible = project.isPublic || project.userId === null;
-    if (!isPubliclyVisible) {
-      const authResult = await requireProjectAccess(projectId, false);
-      if (!authResult.ok) return authResult.response;
+    let shareViewerAllowed = false;
+    if (project.isPublic) {
+      if (!project.sharePassword) {
+        shareViewerAllowed = true;
+      } else {
+        const token = req.cookies.get(shareAccessCookieName(project.id))?.value;
+        shareViewerAllowed = verifyShareAccessToken(token, project.id);
+      }
+    }
+
+    const access = await requireProjectAccess(projectId, false);
+    const ownerOrAdmin =
+      access.ok &&
+      access.session.userId !== "guest" &&
+      (access.session.userId === project.userId || access.session.role === "admin");
+
+    if (!ownerOrAdmin) {
+      if (!shareViewerAllowed && project.userId !== null) {
+        return access.ok
+          ? NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 })
+          : access.response;
+      }
+
+      const totalViews = await db.videoView.count({ where: { projectId } });
+      return NextResponse.json(
+        { success: true, totalViews },
+        { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+      );
     }
 
     const views = await db.videoView.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
+      select: {
+        viewerId: true,
+        watchDuration: true,
+        isComplete: true,
+        createdAt: true,
+        referer: true,
+      },
     });
 
     const totalViews = views.length;
-    const uniqueViewers = new Set(views.map(v => v.viewerId)).size;
-    const totalWatchTime = views.reduce((sum, v) => sum + (v.watchDuration || 0), 0);
-    const avgWatchTime = totalViews > 0 ? Math.round(totalWatchTime / totalViews) : 0;
-    const completions = views.filter(v => v.isComplete).length;
-    const completionRate = totalViews > 0 ? Math.round((completions / totalViews) * 100) : 0;
+    const uniqueViewers = new Set(views.map((view) => view.viewerId)).size;
+    const totalWatchTime = views.reduce(
+      (sum, view) => sum + (view.watchDuration || 0),
+      0
+    );
+    const avgWatchTime =
+      totalViews > 0 ? Math.round(totalWatchTime / totalViews) : 0;
+    const completions = views.filter((view) => view.isComplete).length;
+    const completionRate =
+      totalViews > 0 ? Math.round((completions / totalViews) * 100) : 0;
 
-    // Last 7 days trend
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const recentViews = views.filter(v => v.createdAt > sevenDaysAgo);
+    const recentViews = views.filter((view) => view.createdAt > sevenDaysAgo);
     const trend: { date: string; views: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
+    for (let i = 6; i >= 0; i -= 1) {
       const day = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
       const dayStr = day.toISOString().slice(0, 10);
-      const dayViews = recentViews.filter(v => v.createdAt.toISOString().slice(0, 10) === dayStr).length;
+      const dayViews = recentViews.filter(
+        (view) => view.createdAt.toISOString().slice(0, 10) === dayStr
+      ).length;
       trend.push({ date: dayStr, views: dayViews });
     }
 
-    // Top referers
     const refererCounts: Record<string, number> = {};
-    views.forEach(v => {
-      const ref = v.referer || "Direct";
-      // Shorten long referer URLs to just the hostname for readability
+    for (const view of views) {
+      const ref = view.referer || "Direct";
       let label = ref;
       try {
         if (ref !== "Direct" && ref.startsWith("http")) {
@@ -74,9 +111,9 @@ export async function GET(
         label = ref.slice(0, 50);
       }
       refererCounts[label] = (refererCounts[label] || 0) + 1;
-    });
+    }
     const topReferers = Object.entries(refererCounts)
-      .sort(([,a], [,b]) => b - a)
+      .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
       .map(([source, count]) => ({ source, count }));
 
@@ -92,7 +129,13 @@ export async function GET(
       topReferers,
     });
   } catch (error) {
-    console.error("[analytics summary GET]", error);
-    return NextResponse.json({ success: false, error: "Failed to load analytics" }, { status: 500 });
+    console.error(
+      "[analytics summary GET]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to load analytics" },
+      { status: 500 }
+    );
   }
 }
