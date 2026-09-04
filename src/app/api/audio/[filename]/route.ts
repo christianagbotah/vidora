@@ -44,7 +44,6 @@ export async function GET(
     const projectId = directScene?.projectId ?? translation?.scene.projectId;
     const project = directScene?.project ?? translation?.scene.project;
     if (!projectId || !project) {
-      // Do not expose orphaned files simply because a filename is guessed.
       return NextResponse.json({ error: "Audio file not found" }, { status: 404 });
     }
 
@@ -58,6 +57,7 @@ export async function GET(
       return NextResponse.json({ error: "Audio file not found" }, { status: 404 });
     }
     const buffer = await readAudioFile(filename);
+    const responseBody = Uint8Array.from(buffer);
 
     const ext = path.extname(filename).toLowerCase();
     const contentType =
@@ -67,7 +67,7 @@ export async function GET(
       ext === ".m4a" ? "audio/mp4" :
       "application/octet-stream";
 
-    return new NextResponse(buffer, {
+    return new NextResponse(responseBody, {
       headers: {
         "Content-Type": contentType,
         "Content-Length": buffer.length.toString(),
