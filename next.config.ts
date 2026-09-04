@@ -1,13 +1,31 @@
 import type { NextConfig } from "next";
 
-// Production builds get the full security header set (X-Frame-Options DENY + HSTS).
-// Dev builds omit them so the sandbox preview panel can embed the app in an iframe.
+// Production builds get the full security header set. Dev keeps iframe support
+// for the local/Z.ai preview environment but still receives a useful CSP.
 const isProduction = process.env.NODE_ENV === "production";
 
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "form-action 'self'",
+  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' data: blob: https:",
+  "font-src 'self' data: https:",
+  `connect-src 'self' https: wss:${isProduction ? "" : " ws: http:"}`,
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  ...(isProduction ? ["upgrade-insecure-requests"] : []),
+]
+  .filter(Boolean)
+  .join("; ");
+
 const securityHeaders = [
-  // Prevent clickjacking (production only — dev preview requires iframes)
+  // Prevent clickjacking. A dedicated embed surface can later opt into a
+  // narrowly-scoped frame-ancestors policy; the main app stays fail-closed.
   ...(isProduction ? [{ key: "X-Frame-Options", value: "DENY" }] : []),
-  // HSTS — enforce HTTPS (production only)
   ...(isProduction
     ? [
         {
@@ -16,14 +34,16 @@ const securityHeaders = [
         },
       ]
     : []),
-  // Prevent MIME type sniffing
+  { key: "Content-Security-Policy", value: contentSecurityPolicy },
   { key: "X-Content-Type-Options", value: "nosniff" },
-  // XSS protection (legacy, but still helps older browsers)
-  { key: "X-XSS-Protection", value: "1; mode=block" },
-  // Referrer policy — send origin only
+  // Disable the obsolete browser XSS auditor; CSP is the modern control.
+  { key: "X-XSS-Protection", value: "0" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  // Permissions policy — restrict browser features
-  { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=()" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(self), geolocation=()",
+  },
+  { key: "Origin-Agent-Cluster", value: "?1" },
 ];
 
 const nextConfig: NextConfig = {
@@ -37,29 +57,23 @@ const nextConfig: NextConfig = {
   // Production builds must fail closed when TypeScript compilation fails.
   // Do not re-enable `typescript.ignoreBuildErrors`.
   reactStrictMode: false,
-  allowedDevOrigins: ["localhost", "127.0.0.1", "21.0.6.50", "*.space-z.ai", "space-z.ai"],
+  allowedDevOrigins: [
+    "localhost",
+    "127.0.0.1",
+    "21.0.6.50",
+    "*.space-z.ai",
+    "space-z.ai",
+  ],
 
-  // ── Security Headers ──
   async headers() {
-    const rules = [
+    return [
       {
         source: "/(.*)",
         headers: securityHeaders,
       },
     ];
-    // Allow iframe embedding for shared project pages only (production)
-    if (isProduction) {
-      rules.push({
-        source: "/api/share/:path*",
-        headers: [
-          { key: "X-Frame-Options", value: "ALLOW-FROM https://vidora.lightworldtech.com" },
-        ],
-      });
-    }
-    return rules;
   },
 
-  // ── CORS ──
   // In production behind Caddy, CORS is handled by the reverse proxy.
   async rewrites() {
     return [];
