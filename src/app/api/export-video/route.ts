@@ -1425,7 +1425,20 @@ export async function GET(req: NextRequest) {
     const projectIdParam = searchParams.get("projectId");
 
     let projectId = projectIdParam;
-    let job = null;
+    let job: {
+      id: string;
+      projectId: string;
+      userId: string | null;
+      activeKey: string | null;
+      status: string;
+      progress: number;
+      step: string;
+      params: string | null;
+      result: string | null;
+      error: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    } | null = null;
 
     if (jobId) {
       job = await db.exportJob.findUnique({ where: { id: jobId } });
