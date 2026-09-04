@@ -15,66 +15,81 @@ export async function POST(req: NextRequest) {
 
     const userId = (session.user as Record<string, unknown>).id as string;
     const body = await req.json();
-    const { amount, tokensPurchased, currency, gateway: gatewayOverride, packageId } = body;
+    const packageId = typeof body.packageId === "string" ? body.packageId.trim() : "";
+    if (!packageId) {
+      return NextResponse.json({ success: false, error: "packageId is required" }, { status: 400 });
+    }
 
-    if (!amount || !tokensPurchased) {
+    const packages = await getActivePackages();
+    const pkg = packages.find((p) => p.id === packageId || p.slug === packageId);
+    if (!pkg || !pkg.isActive) {
+      return NextResponse.json({ success: false, error: "Token package is unavailable" }, { status: 400 });
+    }
+
+    const gateway = await getActiveGateway();
+    const gatewayName = gateway.getName();
+    if (body.gateway && String(body.gateway) !== gatewayName) {
       return NextResponse.json(
-        { success: false, error: "Amount and tokens are required" },
+        { success: false, error: `The requested payment gateway is not currently enabled` },
         { status: 400 }
       );
     }
 
-    // Calculate bonus tokens from the DB package at purchase time
-    let bonusTokens = 0;
-    try {
-      const packages = await getActivePackages();
-      const pkg = packageId
-        ? packages.find((p) => p.id === packageId || p.slug === packageId)
-        : packages.find((p) => p.tokens === tokensPurchased);
-      if (pkg) {
-        bonusTokens = Math.round((pkg.tokens * pkg.bonusPct) / 100);
-      }
-    } catch { /* fallback: 0 bonus */ }
-
-    // Determine gateway
-    let gatewayName = gatewayOverride;
-    if (!gatewayName) {
-      const config = await db.systemConfig.findUnique({ where: { key: "payment_gateway" } });
-      gatewayName = config?.value || "paystack";
+    let currency = String(body.currency || (gatewayName === "stripe" ? "USD" : "GHS")).toUpperCase();
+    if (!new Set(["GHS", "USD"]).has(currency)) {
+      return NextResponse.json({ success: false, error: "Unsupported currency" }, { status: 400 });
+    }
+    if (gatewayName === "hubtel" && currency !== "GHS") {
+      return NextResponse.json({ success: false, error: "Hubtel checkout is available in GHS only" }, { status: 400 });
     }
 
-    const reference = `VID-${uuid().slice(0, 8)}-${Date.now()}`;
-    const callbackUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/payments/verify`;
+    // Financial entitlement is derived exclusively from the server-side
+    // package. Client-provided amount/tokens/bonus fields are intentionally ignored.
+    const amount = currency === "USD" ? pkg.priceUSD : pkg.priceGHS;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return NextResponse.json({ success: false, error: "Package price is not configured" }, { status: 422 });
+    }
+    const amountMinor = Math.round(amount * 100);
+    const baseTokens = pkg.tokens;
+    const bonusTokens = Math.round((pkg.tokens * pkg.bonusPct) / 100);
 
-    // Create payment record with bonus stored in metadata
+    const reference = `VID-${uuid().replace(/-/g, "").slice(0, 16)}-${Date.now()}`;
+    const callbackUrl = `${process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/payments/verify`;
+    const purchaseSnapshot = {
+      packageId: pkg.id,
+      packageSlug: pkg.slug,
+      baseTokens,
+      bonusTokens,
+      amountMinor,
+      currency,
+      gateway: gatewayName,
+      packageUpdatedAt: pkg.updatedAt.toISOString(),
+    };
+
     const payment = await db.payment.create({
       data: {
         userId,
         gateway: gatewayName,
         amount,
-        currency: currency || "GHS",
-        tokensPurchased,
+        currency,
+        tokensPurchased: baseTokens,
         gatewayRef: reference,
         status: "pending",
-        metadata: JSON.stringify({ bonusTokens, packageId: packageId || null }),
+        metadata: JSON.stringify({ purchaseSnapshot }),
       },
     });
 
-    // Fetch user details for Hubtel payee info (optional)
-    const user = await db.user.findUnique({ where: { id: userId } });
-
-    // Initialize with the gateway
-    const gateway = await getActiveGateway();
+    const user = await db.user.findUnique({ where: { id: userId }, select: { name: true } });
     const result = await gateway.initializePayment({
       email: session.user.email!,
       amount,
-      currency: currency || "GHS",
+      currency,
       reference,
       callbackUrl,
       metadata: {
         paymentId: payment.id,
-        userId,
-        tokens: String(tokensPurchased),
+        packageSlug: pkg.slug,
+        tokens: String(baseTokens + bonusTokens),
         ...(user?.name ? { userName: user.name } : {}),
         ...(body.phone ? { phone: String(body.phone) } : {}),
       },
@@ -83,14 +98,12 @@ export async function POST(req: NextRequest) {
     if (!result.success) {
       await db.payment.update({
         where: { id: payment.id },
-        data: { status: "failed", metadata: result.error },
-      }).catch(() => {/* ignore update failure — don't mask the original error */});
-      console.error("Payment gateway init failed:", { gateway: gatewayName, reference, error: result.error });
-      // 422 = gateway/config error (not a server crash). The error message is actionable.
-      return NextResponse.json(
-        { success: false, error: result.error || "Payment initialization failed" },
-        { status: 422 }
-      );
+        data: {
+          status: "failed",
+          metadata: JSON.stringify({ purchaseSnapshot, initializationError: result.error || "gateway initialization failed" }),
+        },
+      }).catch(() => undefined);
+      return NextResponse.json({ success: false, error: result.error || "Payment initialization failed" }, { status: 422 });
     }
 
     return NextResponse.json({
@@ -99,13 +112,18 @@ export async function POST(req: NextRequest) {
       directCheckoutUrl: result.directCheckoutUrl,
       paymentId: payment.id,
       reference,
+      package: {
+        id: pkg.id,
+        slug: pkg.slug,
+        currency,
+        amount,
+        baseTokens,
+        bonusTokens,
+        totalTokens: baseTokens + bonusTokens,
+      },
     });
   } catch (error) {
-    console.error("Payment init error:", error);
-    const message = error instanceof Error ? error.message : "Payment initialization failed";
-    return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
-    );
+    console.error("Payment initialization error", error instanceof Error ? error.message : "unknown error");
+    return NextResponse.json({ success: false, error: "Payment initialization failed" }, { status: 500 });
   }
 }
