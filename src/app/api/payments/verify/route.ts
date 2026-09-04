@@ -1,156 +1,77 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { creditPurchase } from "@/lib/tokens";
+import { requireAuth } from "@/lib/project-auth";
+import { verifyAndSettleByReference } from "@/lib/payment-settlement";
 
 /**
- * Extract bonusTokens from payment metadata (stored at creation time).
+ * Authenticated client verification. The caller may only verify their own
+ * payment (admins may assist), and settlement always uses provider-side
+ * verification plus the shared exactly-once transaction.
  */
-function getBonusTokens(payment: { metadata: string | null }): number {
-  try {
-    if (payment.metadata) {
-      const meta = JSON.parse(payment.metadata);
-      return typeof meta.bonusTokens === "number" ? meta.bonusTokens : 0;
-    }
-  } catch { /* ignore */ }
-  return 0;
-}
-
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { paymentId, reference } = body;
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
-    if (!paymentId && !reference) {
-      return NextResponse.json(
-        { success: false, error: "paymentId or reference is required" },
-        { status: 400 }
-      );
+    const body = await req.json().catch(() => ({}));
+    const paymentId = typeof body.paymentId === "string" ? body.paymentId.trim() : "";
+    const reference = typeof body.reference === "string" ? body.reference.trim() : "";
+    if ((!paymentId && !reference) || paymentId.length > 200 || reference.length > 200) {
+      return NextResponse.json({ success: false, error: "A valid paymentId or reference is required" }, { status: 400 });
     }
 
-    // Find payment record
     const payment = paymentId
       ? await db.payment.findUnique({ where: { id: paymentId } })
       : await db.payment.findFirst({ where: { gatewayRef: reference } });
 
-    if (!payment) {
-      return NextResponse.json(
-        { success: false, error: "Payment not found" },
-        { status: 404 }
-      );
+    if (!payment || !payment.gatewayRef) {
+      return NextResponse.json({ success: false, error: "Payment not found" }, { status: 404 });
+    }
+    if (payment.userId !== auth.session.userId && auth.session.role !== "admin") {
+      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
     }
 
-    if (payment.status === "completed") {
-      return NextResponse.json({
-        success: true,
-        verified: true,
-        tokensPurchased: payment.tokensPurchased,
-      });
-    }
-
-    // Verify with gateway (import dynamically to avoid circular deps)
-    const { getActiveGateway } = await import("@/lib/payments");
-    const gateway = await getActiveGateway();
-    const result = await gateway.verifyPayment(payment.gatewayRef || reference);
-
-    if (result.success && result.verified) {
-      const bonusTokens = getBonusTokens(payment);
-
-      // Update payment
-      await db.payment.update({
-        where: { id: payment.id },
-        data: { status: "completed" },
-      });
-
-      // Credit tokens with bonus using creditPurchase (atomic, records transactions)
-      const creditResult = await creditPurchase({
-        userId: payment.userId,
-        baseTokens: payment.tokensPurchased,
-        bonusTokens,
-        paymentId: payment.id,
-        description: `Purchased ${payment.tokensPurchased} tokens via ${payment.gateway}`,
-      });
-
-      return NextResponse.json({
-        success: true,
-        verified: true,
-        tokensPurchased: payment.tokensPurchased + bonusTokens,
-        bonusTokens,
-        newBalance: creditResult.newBalance,
-      });
-    }
-
-    if (result.error) {
-      await db.payment.update({
-        where: { id: payment.id },
-        data: { status: "failed" },
-      });
+    const result = await verifyAndSettleByReference(payment.gatewayRef);
+    if (!result.success) {
+      return NextResponse.json({ success: false, verified: false, error: result.error }, { status: result.status });
     }
 
     return NextResponse.json({
       success: true,
-      verified: false,
-      error: result.error,
+      verified: true,
+      alreadySettled: result.alreadySettled,
+      tokensCredited: result.totalCredited,
+      newBalance: result.newBalance,
     });
   } catch (error) {
-    console.error("Payment verify error:", error);
-    return NextResponse.json(
-      { success: false, error: "Verification failed" },
-      { status: 500 }
-    );
+    console.error("Payment verification error", error instanceof Error ? error.message : "unknown error");
+    return NextResponse.json({ success: false, error: "Verification failed" }, { status: 500 });
   }
 }
 
-// Also support GET for callback redirect verification
+/**
+ * Browser/provider return endpoint. Query-string status values are never proof
+ * of payment or cancellation and therefore never mutate Payment. The stored
+ * provider reference is verified server-to-server before settlement.
+ */
 export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const reference = searchParams.get("reference");
-    const status = searchParams.get("status");
-
-    if (!reference) {
-      return NextResponse.redirect(new URL("/?payment=error", req.url));
-    }
-
-    const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
-
-    if (!payment) {
-      return NextResponse.redirect(new URL("/?payment=error", req.url));
-    }
-
-    if (payment.status === "completed") {
-      return NextResponse.redirect(new URL("/?payment=success", req.url));
-    }
-
-    if (status === "cancelled") {
-      await db.payment.update({
-        where: { id: payment.id },
-        data: { status: "failed" },
-      });
-      return NextResponse.redirect(new URL("/?payment=cancelled", req.url));
-    }
-
-    // Try verification
-    const { getActiveGateway } = await import("@/lib/payments");
-    const gateway = await getActiveGateway();
-    const result = await gateway.verifyPayment(reference);
-
-    if (result.success && result.verified) {
-      const bonusTokens = getBonusTokens(payment);
-
-      await db.payment.update({ where: { id: payment.id }, data: { status: "completed" } });
-
-      await creditPurchase({
-        userId: payment.userId,
-        baseTokens: payment.tokensPurchased,
-        bonusTokens,
-        paymentId: payment.id,
-        description: `Purchased ${payment.tokensPurchased} tokens via ${payment.gateway}`,
-      });
-      return NextResponse.redirect(new URL("/?payment=success", req.url));
-    }
-
+  const reference = req.nextUrl.searchParams.get("reference")?.trim() || "";
+  if (!reference || reference.length > 200) {
     return NextResponse.redirect(new URL("/?payment=error", req.url));
-  } catch {
+  }
+
+  try {
+    const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
+    if (!payment) return NextResponse.redirect(new URL("/?payment=error", req.url));
+
+    if (payment.status === "completed" && payment.settledAt) {
+      return NextResponse.redirect(new URL("/?payment=success", req.url));
+    }
+
+    const result = await verifyAndSettleByReference(reference);
+    return NextResponse.redirect(new URL(result.success ? "/?payment=success" : "/?payment=error", req.url));
+  } catch (error) {
+    console.error("Payment callback verification error", error instanceof Error ? error.message : "unknown error");
     return NextResponse.redirect(new URL("/?payment=error", req.url));
   }
 }

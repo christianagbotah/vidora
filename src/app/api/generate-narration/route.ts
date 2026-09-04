@@ -1,42 +1,74 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
+import { requireSceneAccess } from "@/lib/project-auth";
 import { generateSceneNarration, TTS_VOICES } from "@/lib/narration";
+import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  let session: { userId: string; role: string; email: string } | null = null;
+
   try {
-    const { projectId, sceneId, text, voice = "tongtong", speed = 1.0 } = await req.json();
-
-    if (!projectId || !sceneId) {
-      return NextResponse.json({ success: false, error: "Project ID and Scene ID are required" }, { status: 400 });
+    const body = await req.json();
+    const sceneId = typeof body.sceneId === "string" ? body.sceneId : "";
+    if (!sceneId) {
+      return NextResponse.json(
+        { success: false, error: "Scene ID is required" },
+        { status: 400 }
+      );
     }
 
-    // Determine the narration text
-    let narrationText = text || "";
+    const authResult = await requireSceneAccess(sceneId, true);
+    if (!authResult.ok) return authResult.response;
+    session = authResult.session;
 
+    const scene = await db.videoScene.findUnique({ where: { id: sceneId } });
+    if (!scene) {
+      return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
+    }
+    if (body.projectId && String(body.projectId) !== scene.projectId) {
+      return NextResponse.json(
+        { success: false, error: "Scene does not belong to the supplied project" },
+        { status: 400 }
+      );
+    }
+
+    const narrationText =
+      typeof body.text === "string" && body.text.trim()
+        ? body.text.trim()
+        : scene.dialogue?.trim() || "";
     if (!narrationText) {
-      const scene = await db.videoScene.findUnique({ where: { id: sceneId } });
-      if (!scene) {
-        return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
-      }
-      if (!scene.dialogue) {
-        return NextResponse.json({ success: false, error: "No narration text provided and scene has no dialogue" }, { status: 400 });
-      }
-      narrationText = scene.dialogue;
+      return NextResponse.json(
+        { success: false, error: "No narration text provided and scene has no dialogue" },
+        { status: 400 }
+      );
+    }
+    if (narrationText.length > 12_000) {
+      return NextResponse.json(
+        { success: false, error: "Narration text is too long" },
+        { status: 413 }
+      );
     }
 
-    const result = await generateSceneNarration({ sceneId, text: narrationText, voice, speed });
+    const voice = typeof body.voice === "string" ? body.voice.toLowerCase() : "tongtong";
+    const speed = Number(body.speed ?? 1);
+    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) {
+      return NextResponse.json(
+        { success: false, error: "Invalid narration speed" },
+        { status: 400 }
+      );
+    }
 
-    await db.videoScene.update({
-      where: { id: sceneId },
-      data: { narrationUrl: result.url, narrationVoice: voice },
+    // Billing, idempotency, provider invocation and persistence all live in
+    // the shared narration helper. Keeping one authority prevents route-level
+    // double charges and protects background callers such as export/auto-voice.
+    const result = await generateSceneNarration({
+      sceneId,
+      text: narrationText,
+      voice,
+      speed,
     });
-
-    console.log(`Narration generated for scene ${sceneId}: ${result.url} (${result.chunks} chunk(s), concatenated=${result.concatenated})`);
 
     return NextResponse.json({
       success: true,
@@ -45,10 +77,11 @@ export async function POST(req: NextRequest) {
       voice,
       chunks: result.chunks,
       concatenated: result.concatenated,
+      tokensCharged: result.tokensCharged,
+      remainingTokens: result.remainingTokens,
+      replayed: result.replayed ?? false,
     });
   } catch (error) {
-    console.error("Failed to generate narration:", error);
-    const session = await getServerSession(authOptions).catch(() => null);
     return zaiErrorResponse(error, {
       session,
       logLabel: "generate-narration",
@@ -56,7 +89,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET handler to return available voices
 export async function GET() {
   return NextResponse.json({ success: true, voices: TTS_VOICES });
 }

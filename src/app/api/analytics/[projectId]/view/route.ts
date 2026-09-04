@@ -1,12 +1,39 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
+import {
+  shareAccessCookieName,
+  verifyShareAccessToken,
+} from "@/lib/share-access";
+
+const analyticsViewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 180,
+  keyGenerator: (req) => {
+    const headers = new Headers(req.headers);
+    const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const ip = forwarded || headers.get("x-real-ip") || "unknown";
+    return `${ip}:${new URL(req.url).pathname}`;
+  },
+});
+
+function anonymizeIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const ip = forwarded || req.headers.get("x-real-ip") || "unknown";
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret || ip === "unknown") return "unknown";
+  return crypto
+    .createHmac("sha256", secret)
+    .update(ip, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
 
 /**
- * POST /api/analytics/[projectId]/view
- * Records a video view or updates watch duration.
- * Body: { viewerId, watchDuration?, isComplete? }
- *
- * Public (no auth) — called from the public share page to track views.
+ * Record public share watch progress. Private projects are never writable
+ * through this unauthenticated endpoint; password-protected shares require the
+ * short-lived signed capability created by the share unlock endpoint.
  */
 export async function POST(
   req: NextRequest,
@@ -14,23 +41,54 @@ export async function POST(
 ) {
   try {
     const { projectId } = await params;
-    const body = await req.json().catch(() => ({}));
-    const { viewerId, watchDuration, isComplete } = body;
-
-    if (!viewerId) {
-      return NextResponse.json({ success: false, error: "viewerId required" }, { status: 400 });
+    const { limited } = analyticsViewLimiter(req);
+    if (limited) {
+      return NextResponse.json(
+        { success: false, error: "Too many analytics updates" },
+        { status: 429 }
+      );
     }
 
-    // Verify the project exists (don't record views for non-existent projects)
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      select: { id: true },
+      select: { id: true, isPublic: true, sharePassword: true },
     });
-    if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    if (!project?.isPublic) {
+      return NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 }
+      );
     }
 
-    // Find the most recent view from this viewer for this project (within last 30 min)
+    if (project.sharePassword) {
+      const token = req.cookies.get(shareAccessCookieName(project.id))?.value;
+      if (!verifyShareAccessToken(token, project.id)) {
+        return NextResponse.json(
+          { success: false, error: "Share access required" },
+          { status: 401 }
+        );
+      }
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const viewerId = typeof body.viewerId === "string" ? body.viewerId.trim() : "";
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(viewerId)) {
+      return NextResponse.json(
+        { success: false, error: "Valid viewerId required" },
+        { status: 400 }
+      );
+    }
+
+    const requestedWatch = Number(body.watchDuration ?? 0);
+    if (!Number.isFinite(requestedWatch) || requestedWatch < 0) {
+      return NextResponse.json(
+        { success: false, error: "watchDuration must be a non-negative number" },
+        { status: 400 }
+      );
+    }
+    const watchDuration = Math.min(60, Math.floor(requestedWatch));
+    const isComplete = body.isComplete === true;
+
     const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
     const recent = await db.videoView.findFirst({
       where: {
@@ -42,37 +100,39 @@ export async function POST(
     });
 
     if (recent) {
-      // Update existing view
       await db.videoView.update({
         where: { id: recent.id },
         data: {
-          watchDuration: (recent.watchDuration || 0) + (watchDuration || 0),
+          watchDuration: Math.min(
+            24 * 60 * 60,
+            (recent.watchDuration || 0) + watchDuration
+          ),
           isComplete: isComplete || recent.isComplete,
         },
       });
     } else {
-      // Create new view
-      const forwarded = req.headers.get("x-forwarded-for");
-      const ip = forwarded ? forwarded.split(",")[0].trim() : "unknown";
-      const ua = req.headers.get("user-agent") || "";
-      const referer = req.headers.get("referer") || "";
-
       await db.videoView.create({
         data: {
           projectId,
           viewerId,
-          ipAddress: ip,
-          userAgent: ua.slice(0, 500),
-          referer: referer.slice(0, 500),
-          watchDuration: watchDuration || 0,
-          isComplete: isComplete || false,
+          ipAddress: anonymizeIp(req),
+          userAgent: (req.headers.get("user-agent") || "").slice(0, 500),
+          referer: (req.headers.get("referer") || "").slice(0, 500),
+          watchDuration,
+          isComplete,
         },
       });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("[analytics view POST]", error);
-    return NextResponse.json({ success: false, error: "Failed to record view" }, { status: 500 });
+    console.error(
+      "[analytics view POST]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to record view" },
+      { status: 500 }
+    );
   }
 }

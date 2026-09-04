@@ -1,67 +1,106 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
+import { PRICING } from "@/lib/pricing";
 
-// ─── Token Cost Calculator ────────────────────────────────────────
-// Based on video quality and duration
-// ───────────────────────────────────────────────────────────────────
-
-const QUALITY_TOKEN_COST: Record<string, { base: number; label: string }> = {
-  draft:    { base: 1,  label: "720p Draft" },
-  standard: { base: 2,  label: "1080p Standard" },
-  high:     { base: 4,  label: "1080p High Quality" },
-  ultra:    { base: 8,  label: "4K Ultra" },
+const QUALITY_LABELS: Record<string, string> = {
+  draft: "720p Draft",
+  standard: "1080p Standard",
+  high: "1080p High Quality",
+  ultra: "4K Ultra",
 };
 
+/**
+ * Quote the cost of downloading an already-exported file. Quality selection is
+ * an export-time concern; this endpoint does not re-encode media, so download
+ * cost must stay aligned with PRICING.download (zero tokens).
+ */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { projectId, quality } = body;
+    const body = await req.json().catch(() => ({}));
+    const projectId = typeof body.projectId === "string" ? body.projectId : "";
+    const qualityKey =
+      typeof body.quality === "string" && body.quality
+        ? body.quality
+        : "standard";
 
     if (!projectId) {
-      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Project ID is required" },
+        { status: 400 }
+      );
+    }
+    if (!QUALITY_LABELS[qualityKey]) {
+      return NextResponse.json(
+        { success: false, error: `Invalid quality: ${qualityKey}` },
+        { status: 400 }
+      );
     }
 
-    const qualityKey = quality || "standard";
-    const qualityConfig = QUALITY_TOKEN_COST[qualityKey];
-    if (!qualityConfig) {
-      return NextResponse.json({ success: false, error: `Invalid quality: ${qualityKey}` }, { status: 400 });
+    const access = await requireProjectAccess(projectId, false);
+    if (!access.ok) return access.response;
+    if (!access.session.userId || access.session.userId === "guest") {
+      return NextResponse.json(
+        { success: false, error: "Please sign in to download exported videos" },
+        { status: 401 }
+      );
     }
 
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: {
-        scenes: { where: { videoUrl: { not: null } }, orderBy: { sceneNumber: "asc" } },
+      select: {
+        userId: true,
+        finalVideoUrl: true,
+        scenes: {
+          where: { videoUrl: { not: null } },
+          select: { duration: true },
+        },
       },
     });
-
     if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 }
+      );
+    }
+    if (
+      project.userId !== access.session.userId &&
+      access.session.role !== "admin"
+    ) {
+      return NextResponse.json(
+        { success: false, error: "Not authorized" },
+        { status: 403 }
+      );
     }
 
-    const completedScenes = project.scenes;
-    const estimatedDuration = completedScenes.reduce((sum, s) => sum + s.duration, 0) || 10;
-
-    // Duration-based token bonus
-    let durationBonus = 0;
-    if (estimatedDuration > 30) durationBonus = 1;
-    if (estimatedDuration > 60) durationBonus = 2;
-    if (estimatedDuration > 120) durationBonus = 3;
-    if (estimatedDuration > 300) durationBonus = 5;
-
-    const totalTokens = qualityConfig.base + durationBonus;
+    const estimatedDuration =
+      project.scenes.reduce((sum, scene) => sum + scene.duration, 0) || 0;
 
     return NextResponse.json({
       success: true,
-      tokenCost: totalTokens,
+      tokenCost: PRICING.download.tokens,
       quality: qualityKey,
-      qualityLabel: qualityConfig.label,
+      qualityLabel: QUALITY_LABELS[qualityKey],
       estimatedDuration,
-      sceneCount: completedScenes.length,
-      breakdown: { qualityBase: qualityConfig.base, durationBonus, total: totalTokens },
-      message: `This video will cost ${totalTokens} token${totalTokens > 1 ? "s" : ""} to download`,
+      sceneCount: project.scenes.length,
+      exported: Boolean(project.finalVideoUrl),
+      breakdown: {
+        qualityBase: 0,
+        durationBonus: 0,
+        total: PRICING.download.tokens,
+      },
+      message: project.finalVideoUrl
+        ? "Existing exports are free to download."
+        : "Export the project first; downloading the resulting export is free.",
     });
   } catch (error) {
-    console.error("Calculate download cost error:", error);
-    return NextResponse.json({ success: false, error: "Failed to calculate token cost" }, { status: 500 });
+    console.error(
+      "[calculate download cost]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to calculate download cost" },
+      { status: 500 }
+    );
   }
 }

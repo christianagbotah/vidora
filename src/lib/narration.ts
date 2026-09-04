@@ -1,29 +1,30 @@
 /**
- * ───────────────────────────────────────────────────────────────────────────
- *  Vidora — Shared Scene Narration (TTS) Library
- * ───────────────────────────────────────────────────────────────────────────
+ * Vidora — shared scene narration (TTS) library.
  *
- * Generates narration audio (WAV) for a scene's dialogue using Z.ai TTS.
- * Shared by:
- *   - POST /api/generate-narration   (studio "Narrate" button)
- *   - POST /api/export-video         (auto-voices during final export)
- *
- * Files are written to the OS temp dir (/tmp/vidora-audio) via bash so they
- * land on the REAL filesystem (Turbopack intercepts fs writes in dev — see
- * src/lib/audio-storage.ts) and are served by /api/audio/<filename>.
+ * Every provider TTS call for scene narration passes through this module.
+ * Billing is therefore enforced at the provider boundary rather than being
+ * left to individual API routes or background callers.
  */
 
+import crypto from "crypto";
 import { zai } from "@/lib/zai";
 import { db } from "@/lib/db";
-import { execFile, execFileSync } from "child_process";
+import { PRICING } from "@/lib/pricing";
+import { deductTokensForOperation } from "@/lib/tokens";
+import { execFile } from "child_process";
 import { promisify } from "util";
-import { unlink } from "fs/promises";
+import { copyFile, unlink, writeFile } from "fs/promises";
 import path from "path";
-import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
+import {
+  writeAudioFile,
+  deleteAudioFile,
+  getAudioPath,
+  ensureAudioDir,
+  audioFileExists,
+} from "@/lib/audio-storage";
 
 const execFileAsync = promisify(execFile);
 
-// Default TTS voice catalog (kept in sync with the frontend picker)
 export const TTS_VOICES = [
   { id: "tongtong", label: "TongTong", desc: "Warm & friendly (narrator)" },
   { id: "chuichui", label: "ChuiChui", desc: "Playful & cute (kids)" },
@@ -36,19 +37,9 @@ export const TTS_VOICES = [
 
 export const DEFAULT_TTS_VOICE = "tongtong";
 
-/**
- * A spoken-line attribution prefix: Narrator:, Miss Rachel:,
- * Chase & Marshall:, Everyone (all together, singing):, Chorus:.
- * Used to strip labels before TTS so the voice doesn't literally say
- * "Chase: surprise!".
- */
 const ATTRIBUTION_PREFIX_RE =
   /^\s*(?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?\s*:\s*/;
 
-/**
- * Strip speaker attributions and surrounding quotes from dialogue lines so
- * TTS reads only the spoken words: 'Narrator: "Wake up!"' → 'Wake up!'.
- */
 export function stripSpeakerAttributions(text: string): string {
   return text
     .split("\n")
@@ -65,7 +56,6 @@ export function stripSpeakerAttributions(text: string): string {
     .trim();
 }
 
-/** Split text into chunks that fit within the TTS char limit. */
 export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   if (text.length <= maxLen) return [text];
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
@@ -83,52 +73,77 @@ export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
 }
 
-/**
- * Concatenate wav chunks via ffmpeg's concat demuxer.
- * For single-chunk, copies the file to the output path.
- * Uses bash for file operations to bypass Turbopack's fs interception.
- */
 export async function concatWavChunks(chunkPaths: string[], outputPath: string): Promise<boolean> {
   if (chunkPaths.length === 1) {
     try {
-      execFileSync("bash", ["-c", `cp "${chunkPaths[0]}" "${outputPath}"`]);
+      await copyFile(chunkPaths[0], outputPath);
       return true;
     } catch (err) {
-      console.error("[narration] single-chunk copy failed:", err);
+      console.error(
+        "[narration] single-chunk copy failed:",
+        err instanceof Error ? err.message : "unknown error"
+      );
       return false;
     }
   }
-  const listFile = outputPath + ".concat.txt";
-  const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
-  execFileSync("bash", ["-c", `cat > "${listFile}"`], { input: listContent });
+
+  const listFile = `${outputPath}.concat.txt`;
+  const listContent = chunkPaths
+    .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
+    .join("\n");
   try {
-    await execFileAsync("ffmpeg", [
-      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
-    ], { timeout: 30_000 });
-    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
+    await writeFile(listFile, listContent, "utf8");
+    await execFileAsync(
+      "ffmpeg",
+      ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath],
+      { timeout: 30_000 }
+    );
     return true;
   } catch (err) {
-    console.error("[narration] ffmpeg concat failed:", err);
-    execFileSync("bash", ["-c", `rm -f "${listFile}"`]);
+    console.error(
+      "[narration] ffmpeg concat failed:",
+      err instanceof Error ? err.message : "unknown error"
+    );
     return false;
+  } finally {
+    await unlink(listFile).catch(() => undefined);
   }
 }
 
 export interface NarrationResult {
-  /** Public URL for the audio file (served by /api/audio/<filename>) */
   url: string;
-  /** Absolute filesystem path of the final wav */
   path: string;
-  /** Number of TTS chunks generated */
   chunks: number;
-  /** Whether chunks were concatenated into one file */
   concatenated: boolean;
+  tokensCharged: number;
+  remainingTokens?: number;
+  transactionId?: string;
+  replayed?: boolean;
+}
+
+function narrationFingerprint(opts: {
+  sceneId: string;
+  text: string;
+  voice: string;
+  speed: number;
+}): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(opts), "utf8")
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function narrationFilename(sceneId: string, fingerprint: string): string {
+  const safeScene = sceneId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  return `narration_${safeScene}_${fingerprint}.wav`;
 }
 
 /**
- * Generate narration audio for a scene via Z.ai TTS and persist it to the
- * audio store. Does NOT write to the database — callers own the DB update.
- * Throws on TTS failure (callers decide how to degrade).
+ * Generate narration and charge the owning user exactly once for the logical
+ * text/voice/speed operation. A failed/ambiguous provider call is NOT
+ * automatically refunded: retrying the same intent reuses the same token
+ * transaction instead of charging the user again.
  */
 export async function generateSceneNarration(opts: {
   sceneId: string;
@@ -136,65 +151,153 @@ export async function generateSceneNarration(opts: {
   voice?: string;
   speed?: number;
 }): Promise<NarrationResult> {
-  const { sceneId, voice = DEFAULT_TTS_VOICE, speed = 1.0 } = opts;
-  // Dialogue extracted from scripts carries speaker labels — strip them so
-  // the voice speaks the line, not the attribution.
+  const scene = await db.videoScene.findUnique({
+    where: { id: opts.sceneId },
+    select: {
+      id: true,
+      narrationUrl: true,
+      project: { select: { userId: true } },
+    },
+  });
+  if (!scene) throw new Error("Scene not found");
+  const userId = scene.project.userId;
+  if (!userId) {
+    throw new Error("Guest/demo projects cannot use billable narration generation");
+  }
+
+  const voice = (opts.voice || DEFAULT_TTS_VOICE).toLowerCase();
+  const speed = Math.max(0.5, Math.min(2, Number(opts.speed) || 1));
   const text = stripSpeakerAttributions(opts.text);
   if (!text) {
     throw new Error("No speakable text after stripping speaker attributions");
   }
-  const clampedSpeed = Math.max(0.5, Math.min(2.0, speed || 1.0));
+  if (text.length > 12_000) {
+    throw new Error("Narration text is too long");
+  }
+
+  const chunks = splitTextIntoChunks(text);
+  const fingerprint = narrationFingerprint({ sceneId: scene.id, text, voice, speed });
+  const finalFilename = narrationFilename(scene.id, fingerprint);
+  const finalPath = getAudioPath(finalFilename);
+  const finalUrl = `/api/audio/${finalFilename}`;
+  const operationKey = `tts:${userId}:${scene.id}:${fingerprint}`;
+  const tokensToCharge = chunks.length * PRICING.tts.tokens;
+  const costUsd = chunks.length * PRICING.tts.costUsd;
+
+  // A matching persisted file is reusable only when the ledger also proves
+  // that this exact logical operation was charged previously.
+  if (scene.narrationUrl === finalUrl && audioFileExists(finalFilename)) {
+    const existingCharge = await db.tokenTransaction.findUnique({
+      where: { idempotencyKey: operationKey },
+      select: { id: true, userId: true },
+    });
+    if (existingCharge?.userId === userId) {
+      const balance = await db.user.findUnique({
+        where: { id: userId },
+        select: { tokens: true },
+      });
+      return {
+        url: finalUrl,
+        path: finalPath,
+        chunks: chunks.length,
+        concatenated: true,
+        tokensCharged: 0,
+        remainingTokens: balance?.tokens,
+        transactionId: existingCharge.id,
+        replayed: true,
+      };
+    }
+  }
+
+  const deduction = await deductTokensForOperation({
+    userId,
+    operation: "tts",
+    description: `Generate narration for scene ${scene.id} (${chunks.length} TTS call${chunks.length === 1 ? "" : "s"})`,
+    referenceId: scene.id,
+    idempotencyKey: operationKey,
+    customTokens: tokensToCharge,
+    customCostUsd: costUsd,
+  });
+  if (!deduction.success) {
+    throw new Error(deduction.error || "Insufficient tokens for narration generation");
+  }
+
+  // If the file appeared between the pre-check and the atomic debit, reuse it.
+  // This covers concurrent retries without another provider call.
+  if (audioFileExists(finalFilename)) {
+    await db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationUrl: finalUrl, narrationVoice: voice },
+    });
+    return {
+      url: finalUrl,
+      path: finalPath,
+      chunks: chunks.length,
+      concatenated: true,
+      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,
+      remainingTokens: deduction.remainingTokens,
+      transactionId: deduction.transactionId,
+      replayed: true,
+    };
+  }
 
   ensureAudioDir();
-  const chunks = splitTextIntoChunks(text);
   const tempChunkPaths: string[] = [];
-
   try {
     for (let i = 0; i < chunks.length; i++) {
       const arrayBuffer = await zai.tts({
         input: chunks[i],
         voice,
-        speed: clampedSpeed,
-        retry: { label: `TTS chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
+        speed,
+        retry: {
+          label: `TTS chunk ${i + 1}/${chunks.length}`,
+          timeoutMs: 120_000,
+          maxRetries: 4,
+        },
       });
-
       const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-      // Z.ai TTS returns WAV audio (API rejects "mp3" response_format).
-      const chunkFilename = `chunk_${sceneId}_${i}_${Date.now()}.wav`;
-      tempChunkPaths.push(writeAudioFile(chunkFilename, buffer));
+      const tempFilename = `chunk_${scene.id}_${fingerprint}_${i}_${crypto.randomUUID()}.wav`;
+      tempChunkPaths.push(writeAudioFile(tempFilename, buffer));
     }
 
-    const finalFilename = `narration_${sceneId}_${Date.now()}.wav`;
-    const finalPath = getAudioPath(finalFilename);
     const concatenated = await concatWavChunks(tempChunkPaths, finalPath);
+    let url = finalUrl;
+    let resolvedPath = finalPath;
 
-    let url: string;
-    let resolvedPath: string;
     if (concatenated) {
-      url = `/api/audio/${finalFilename}`;
-      resolvedPath = finalPath;
-      for (const p of tempChunkPaths) {
-        deleteAudioFile(path.basename(p));
-      }
+      for (const p of tempChunkPaths) deleteAudioFile(path.basename(p));
     } else {
-      // Fallback: use the first chunk
+      // Provider work was already consumed, so keep the successful first chunk
+      // as a recoverable result rather than refunding an ambiguous operation.
       url = `/api/audio/${path.basename(tempChunkPaths[0])}`;
       resolvedPath = tempChunkPaths[0];
     }
 
-    return { url, path: resolvedPath, chunks: chunks.length, concatenated };
+    await db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationUrl: url, narrationVoice: voice },
+    });
+
+    return {
+      url,
+      path: resolvedPath,
+      chunks: chunks.length,
+      concatenated,
+      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,
+      remainingTokens: deduction.remainingTokens,
+      transactionId: deduction.transactionId,
+      replayed: false,
+    };
   } catch (err) {
-    // Clean up any orphaned chunk files on failure
     for (const p of tempChunkPaths) {
-      await unlink(p).catch(() => {});
+      await unlink(p).catch(() => undefined);
     }
+    // Do not auto-refund. A provider timeout/failure can be ambiguous, and
+    // retrying this exact fingerprint will reuse the existing charge.
     throw err;
   }
 }
 
-// ─── Auto-narration (generation flow) ────────────────────────────────────────
-
-/** The scene fields the voice picker needs. */
 export interface NarratableScene {
   id: string;
   dialogue?: string | null;
@@ -203,12 +306,6 @@ export interface NarratableScene {
   characterIds?: string | null;
 }
 
-/**
- * Pick the best TTS voice for a scene: explicit scene voice → any linked
- * character's assigned voice → the default narrator. Shared by the
- * generation flow (auto-voices right after a scene renders) and the final
- * export (fallback for scenes that never got a voice).
- */
 export async function pickSceneNarrationVoice(scene: NarratableScene): Promise<string> {
   if (scene.narrationVoice) return scene.narrationVoice;
   try {
@@ -220,33 +317,33 @@ export async function pickSceneNarrationVoice(scene: NarratableScene): Promise<s
       const withVoice = chars.find((c) => c.voiceId);
       if (withVoice?.voiceId) return withVoice.voiceId;
     }
-  } catch { /* ignore bad JSON */ }
+  } catch {
+    // Legacy malformed characterIds falls back to the default voice.
+  }
   return DEFAULT_TTS_VOICE;
 }
 
 export interface AutoNarrateResult {
   ok: boolean;
-  /** Public /api/audio/... URL when a voice was generated (or already existed). */
   url?: string;
-  /** Why nothing was generated — useful for logs, never user-facing. */
   reason?: string;
 }
 
 /**
- * Ensure a scene with dialogue has a voice: if it has no narrationUrl yet,
- * generate the TTS with the best-matching voice and persist it. Called by
- * the generation routes the moment a scene's video completes, so character
- * voices exist in the studio immediately — the export then simply reuses
- * them instead of generating from scratch.
- *
- * NON-FATAL by contract: never throws. A failed TTS just leaves the scene
- * voiceless (the export's auto-voice pass is the safety net).
+ * Non-fatal automatic narration. The shared generator performs authorization
+ * of billable ownership and token charging before any TTS provider request.
  */
 export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResult> {
   try {
     const scene = await db.videoScene.findUnique({
       where: { id: sceneId },
-      select: { id: true, dialogue: true, narrationUrl: true, narrationVoice: true, characterIds: true },
+      select: {
+        id: true,
+        dialogue: true,
+        narrationUrl: true,
+        narrationVoice: true,
+        characterIds: true,
+      },
     });
     if (!scene) return { ok: false, reason: "scene not found" };
     if (scene.narrationUrl) return { ok: true, url: scene.narrationUrl };
@@ -255,20 +352,17 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
     }
 
     const voice = await pickSceneNarrationVoice(scene);
-    console.log(`[autoNarrate] scene=${sceneId} generating voice (voice=${voice})…`);
     const result = await generateSceneNarration({
       sceneId: scene.id,
       text: scene.dialogue,
       voice,
     });
-    await db.videoScene.update({
-      where: { id: scene.id },
-      data: { narrationUrl: result.url, narrationVoice: voice },
-    });
-    console.log(`[autoNarrate] scene=${sceneId} voice ready: ${result.url}`);
     return { ok: true, url: result.url };
   } catch (err) {
-    console.warn(`[autoNarrate] scene=${sceneId} voice generation failed (non-fatal):`, err);
-    return { ok: false, reason: "tts failed" };
+    console.warn(
+      `[autoNarrate] scene=${sceneId} voice generation skipped/failed:`,
+      err instanceof Error ? err.message : "unknown error"
+    );
+    return { ok: false, reason: "tts unavailable or not funded" };
   }
 }

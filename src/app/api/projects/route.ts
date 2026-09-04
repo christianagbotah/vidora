@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
             }
             if (voiceId) usedVoiceIds.add(voiceId);
 
-            const result: Record<string, string> = {
+            const result: Record<string, string | null> = {
               name: c.name,
               role: c.role || "supporting",
               description: c.description || null,

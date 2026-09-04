@@ -1,8 +1,10 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
+import { deductTokensForOperation } from "@/lib/tokens";
 import { saveGeneratedFile } from "@/lib/generated-store";
 import { buildCharacterPortraitPrompt, portraitImageSizeForAspect } from "@/lib/image-prompt";
 
@@ -12,34 +14,26 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; characterId: string }> }
 ) {
-  // Hoisted so the catch handler can reference it (it scopes the admin
-  // detail in the error response) even when the try block fails early.
   let authResult: Awaited<ReturnType<typeof requireProjectAccess>> | null = null;
   try {
     const { id, characterId } = await params;
-    authResult = await requireProjectAccess(id, true); // write access
+    authResult = await requireProjectAccess(id, true);
     if (!authResult.ok) return authResult.response;
 
-    // Verify the character belongs to this project
     const character = await db.character.findFirst({
       where: { id: characterId, projectId: id },
     });
     if (!character) {
-      return NextResponse.json({ success: false, error: "Character not found in this project" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Character not found in this project" },
+        { status: 404 }
+      );
     }
 
-    // Project style steers the portrait's rendering style; the portrait is
-    // generated at the PROJECT'S aspect ratio so it works as an
-    // image-to-video reference without flipping the output orientation
-    // (e.g. square portrait → landscape video in a 9:16 project).
     const project = await db.videoProject.findUnique({
       where: { id },
       select: { style: true, aspectRatio: true },
     });
-
-    // Build a character-reference prompt that leads with the name + full
-    // appearance description so the model renders the described character
-    // as exactly as possible.
     const portraitPrompt = buildCharacterPortraitPrompt(
       {
         id: character.id,
@@ -51,33 +45,53 @@ export async function POST(
       project?.style
     );
 
+    const operationId = crypto.randomUUID();
+    const deduction = await deductTokensForOperation({
+      userId: authResult.session.userId,
+      operation: "image_gen",
+      description: `Generate project character image: ${character.name}`,
+      referenceId: characterId,
+      idempotencyKey: `character-image:${characterId}:${operationId}`,
+    });
+    if (!deduction.success) {
+      return NextResponse.json(
+        { success: false, error: deduction.error || "Insufficient tokens" },
+        { status: 402 }
+      );
+    }
+
     const imageBase64 = await zai.generateImage({
       prompt: portraitPrompt,
       size: portraitImageSizeForAspect(project?.aspectRatio),
-      retry: { label: `Character ${character.name} image generation`, timeoutMs: 120_000, maxRetries: 4 },
+      retry: {
+        label: `Character ${character.name} image generation`,
+        timeoutMs: 120_000,
+        maxRetries: 4,
+      },
     });
 
-    const buffer = Buffer.from(imageBase64, "base64");
-    const filename = `char_${characterId.slice(0, 8)}_${Date.now()}.png`;
-    const imageUrl = await saveGeneratedFile(`characters/${filename}`, buffer);
-
-    // Update character with generated image and style prompt
+    const imageUrl = await saveGeneratedFile(
+      `characters/char_${characterId.slice(0, 8)}_${Date.now()}.png`,
+      Buffer.from(imageBase64, "base64")
+    );
     const updated = await db.character.update({
       where: { id: characterId },
-      data: {
-        imageUrl,
-        imageBase64,
-        stylePrompt: portraitPrompt,
-      },
+      data: { imageUrl, imageBase64, stylePrompt: portraitPrompt },
     });
 
     return NextResponse.json({
       success: true,
       character: updated,
       imageUrl,
+      tokensCharged: deduction.alreadyApplied ? 0 : 1,
+      remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    console.error("Failed to generate character image:", error);
+    console.error(
+      "Failed to generate character image:",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    // Do not auto-refund provider operations on ambiguous failures.
     return zaiErrorResponse(error, {
       session: authResult?.ok ? authResult.session : null,
       logLabel: "character-image",

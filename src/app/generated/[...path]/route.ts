@@ -1,19 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
 import { readGeneratedFile, sanitizeRelPath } from "@/lib/generated-store";
+import {
+  shareAccessCookieName,
+  verifyShareAccessToken,
+} from "@/lib/share-access";
 
 export const runtime = "nodejs";
-
-/**
- * GET /generated/[...path]
- *
- * Serves runtime-generated media (thumbnails, portraits, exports,
- * previews) from the persistent generated-store — which survives
- * `next build` + standalone deploys, unlike public/generated.
- * Falls back to legacy public/generated for pre-migration files.
- *
- * Supports HTTP Range requests so exported videos can be seeked /
- * played on iOS Safari.
- */
 
 const MIME: Record<string, string> = {
   ".png": "image/png",
@@ -31,6 +25,89 @@ const MIME: Record<string, string> = {
   ".vtt": "text/vtt; charset=utf-8",
 };
 
+type MediaAccess = { allowed: boolean; publicCache: boolean };
+
+async function authorizeGeneratedMedia(
+  req: NextRequest,
+  rel: string
+): Promise<MediaAccess> {
+  // Watermarked acquisition previews contain no private project data.
+  if (rel.startsWith("previews/")) {
+    return { allowed: true, publicCache: true };
+  }
+
+  if (rel.startsWith("users/")) {
+    const ownerId = rel.split("/")[1] || "";
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed: auth.session.userId === ownerId || auth.session.role === "admin",
+      publicCache: false,
+    };
+  }
+
+  const mediaUrl = `/generated/${rel}`;
+  const project = await db.videoProject.findFirst({
+    where: {
+      OR: [
+        { finalVideoUrl: mediaUrl },
+        {
+          scenes: {
+            some: {
+              OR: [
+                { imageUrl: mediaUrl },
+                { videoUrl: mediaUrl },
+                { referenceImageUrl: mediaUrl },
+                { musicTrackUrl: mediaUrl },
+              ],
+            },
+          },
+        },
+        { characters: { some: { imageUrl: mediaUrl } } },
+      ],
+    },
+    select: {
+      id: true,
+      isPublic: true,
+      sharePassword: true,
+    },
+  });
+
+  if (project) {
+    if (project.isPublic && !project.sharePassword) {
+      return { allowed: true, publicCache: true };
+    }
+
+    if (project.isPublic && project.sharePassword) {
+      const token = req.cookies.get(shareAccessCookieName(project.id))?.value;
+      if (verifyShareAccessToken(token, project.id)) {
+        return { allowed: true, publicCache: false };
+      }
+    }
+
+    // Owners/admins can still access the media through their authenticated
+    // account even when a public-share password is configured.
+    const access = await requireProjectAccess(project.id, false);
+    return { allowed: access.ok, publicCache: false };
+  }
+
+  const brand = await db.brandKit.findFirst({
+    where: { logoUrl: mediaUrl },
+    select: { userId: true },
+  });
+  if (brand) {
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed:
+        auth.session.userId === brand.userId || auth.session.role === "admin",
+      publicCache: false,
+    };
+  }
+
+  return { allowed: false, publicCache: false };
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -44,22 +121,29 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
+  const access = await authorizeGeneratedMedia(req, rel);
+  if (!access.allowed) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const buffer = await readGeneratedFile(rel);
   if (!buffer) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const ext = rel.slice(rel.lastIndexOf(".")).toLowerCase();
+  const dot = rel.lastIndexOf(".");
+  const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : "";
   const contentType = MIME[ext] ?? "application/octet-stream";
   const total = buffer.length;
-
   const baseHeaders: Record<string, string> = {
     "Content-Type": contentType,
     "Accept-Ranges": "bytes",
-    "Cache-Control": "public, max-age=31536000, immutable",
+    "Cache-Control": access.publicCache
+      ? "public, max-age=300"
+      : "private, no-store, max-age=0",
+    "X-Content-Type-Options": "nosniff",
   };
 
-  // ── Range request support (video seeking / Safari playback) ──
   const range = req.headers.get("range");
   if (range) {
     const match = /bytes=(\d*)-(\d*)/.exec(range);
@@ -69,7 +153,12 @@ export async function GET(
       let start = startRaw ? parseInt(startRaw, 10) : 0;
       let end = endRaw ? parseInt(endRaw, 10) : total - 1;
 
-      if (Number.isNaN(start) || Number.isNaN(end) || start >= total || start > end) {
+      if (
+        Number.isNaN(start) ||
+        Number.isNaN(end) ||
+        start >= total ||
+        start > end
+      ) {
         return new NextResponse(null, {
           status: 416,
           headers: { "Content-Range": `bytes */${total}` },
@@ -79,7 +168,8 @@ export async function GET(
       end = Math.min(total - 1, end);
 
       const chunk = buffer.subarray(start, end + 1);
-      return new NextResponse(chunk, {
+      const responseChunk = Uint8Array.from(chunk);
+      return new NextResponse(responseChunk, {
         status: 206,
         headers: {
           ...baseHeaders,
@@ -90,7 +180,8 @@ export async function GET(
     }
   }
 
-  return new NextResponse(buffer, {
+  const responseBody = Uint8Array.from(buffer);
+  return new NextResponse(responseBody, {
     status: 200,
     headers: {
       ...baseHeaders,

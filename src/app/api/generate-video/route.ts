@@ -1,506 +1,188 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { zai, ZAIError } from "@/lib/zai";
-import { zaiErrorResponse, friendlySceneError } from "@/lib/zai-errors";
-import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
-import { PRICING, calculateProjectCost } from "@/lib/pricing";
+import { requireAuth } from "@/lib/project-auth";
+import { zaiErrorResponse } from "@/lib/zai-errors";
+import { checkTokens, deductTokensForOperation } from "@/lib/tokens";
+import { PRICING } from "@/lib/pricing";
 import { getEngineChargeInfo } from "@/lib/storefront";
-import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
 import { resolveModelForRequest } from "@/lib/video-models";
-import { ensureReferenceAspect } from "@/lib/aspect-normalize";
-import { autoNarrateScene } from "@/lib/narration";
-import {
-  buildSceneImagePrompt,
-  buildSceneVideoPrompt,
-  type CharacterLike,
-} from "@/lib/image-prompt";
 
 export const runtime = "nodejs";
 
-const VIDEO_SIZE_MAP: Record<string, string> = {
-  "16:9": "1920x1080",
-  "9:16": "1080x1920",
-  "1:1": "1080x1080",
-  "4:3": "1440x1080",
-  "21:9": "2560x1080",
-};
-
-const THUMB_SIZE_MAP: Record<string, string> = {
-  "16:9": "1344x768",
-  "9:16": "768x1344",
-  "1:1": "1024x1024",
-  "4:3": "1152x864",
-  "21:9": "1440x720",
-};
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * How long to wait (ms) after a rate-limit error before trying the next scene.
- * The ZAI video API rate limit window is typically 2-5 minutes.
- */
-const RATE_LIMIT_COOLDOWN_MS = 120_000; // 2 minutes
-
-async function createSceneTask(
-  scene: {
-    id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null;
-    imageUrl?: string | null; referenceImageUrl?: string | null; characterIds?: string | null;
-  },
-  videoSize: string,
-  origin: string,
-  ctx: { style: string; characters: CharacterLike[]; aspectRatio: string; videoModel: string | null }
-): Promise<string | null> {
-  const scenePrompt = scene.enhancedPrompt || scene.prompt;
-
-  // NOTE: thumbnails are generated AFTER task creation (in a parallel
-  // background pass) — the video task does not depend on them, and
-  // generating them inline delayed each task by 30-60s.
-
-  // Determine reference image URL — must be absolute so the ZAI API
-  // can fetch it (local /generated/... paths are unreachable).
-  // Orientation guard: image-to-video engines follow the INPUT image's
-  // orientation, so a mismatched reference (legacy square portrait, etc.)
-  // is center-cropped to the project's aspect ratio before it is sent.
-  let referenceImage: string | undefined;
-  if (scene.referenceImageUrl) {
-    // Skip base64 data URLs — too large for the API
-    if (!scene.referenceImageUrl.startsWith("data:")) {
-      referenceImage = scene.referenceImageUrl;
-    }
-  } else if (scene.characterIds) {
-    try {
-      const charIds: string[] = JSON.parse(scene.characterIds);
-      if (charIds.length > 0) {
-        const firstChar = await db.character.findUnique({ where: { id: charIds[0] } });
-        if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
-          referenceImage = firstChar.imageUrl;
-        }
-      }
-    } catch { /* ignore parse errors */ }
+function hasProviderReference(
+  scene: { referenceImageUrl: string | null; characterIds: string | null },
+  characters: Array<{ id: string; imageUrl: string | null }>
+): boolean {
+  if (scene.referenceImageUrl && !scene.referenceImageUrl.startsWith("data:")) {
+    return true;
   }
-  if (referenceImage) {
-    referenceImage = await ensureReferenceAspect(
-      referenceImage,
-      ctx.aspectRatio,
-      `Scene ${scene.sceneNumber}`
+  if (!scene.characterIds) return false;
+  try {
+    const parsed: unknown = JSON.parse(scene.characterIds);
+    if (!Array.isArray(parsed)) return false;
+    const ids = new Set(parsed.filter((id): id is string => typeof id === "string"));
+    return characters.some(
+      (character) =>
+        ids.has(character.id) &&
+        Boolean(character.imageUrl) &&
+        !character.imageUrl!.startsWith("data:")
     );
-    referenceImage = toAbsoluteUrl(referenceImage, origin) ?? undefined;
+  } catch {
+    return false;
   }
-
-  // Character-aware video prompt (≤512 chars): appends a compact digest of
-  // the linked/mentioned characters' appearance so the video model knows
-  // who is in the frame.
-  const videoPrompt = buildSceneVideoPrompt({
-    scenePrompt,
-    characters: ctx.characters,
-    linkedCharacterIds: scene.characterIds,
-  });
-
-  // Create video generation task via centralized wrapper.
-  // The model is resolved per-scene: image-dependent models gracefully
-  // substitute their text-capable sibling when no reference image exists.
-  // withAudio: CogVideoX-3 renders native ambient sound for the prompt
-  // (Vidu models simply omit the flag — their clips stay silent and the
-  // scene's TTS voice is layered on top instead). Character DIALOGUE is
-  // always the TTS narration (correct voice), never the raw video track.
-  const model = resolveModelForRequest(ctx.videoModel, Boolean(referenceImage));
-  const taskId = await zai.generateVideo({
-    prompt: videoPrompt,
-    size: videoSize,
-    duration: 10,
-    quality: "quality",
-    withAudio: true,
-    ...(referenceImage ? { imageUrl: referenceImage } : {}),
-    model,
-    aspectRatio: ctx.aspectRatio,
-    style: ctx.style,
-    retry: { label: `Scene ${scene.sceneNumber} video task`, timeoutMs: 120_000, maxRetries: 2 },
-  });
-  if (model !== (ctx.videoModel ?? "CogVideoX-3")) {
-    console.log(`Scene ${scene.sceneNumber}: no reference image — model substituted ${ctx.videoModel ?? "default"} → ${model}`);
-  }
-
-  await db.videoScene.update({
-    where: { id: scene.id },
-    data: { taskId, status: "generating", errorMessage: null },
-  });
-  console.log(`Scene ${scene.sceneNumber}: video task ${taskId} created (queued → generating)`);
-  return taskId;
-}
-
-/** Generate thumbnails for scenes that are missing one — runs in parallel
- * with the polling phase (non-fatal on failure). Prompts are character-aware:
- * linked/mentioned characters' full appearance descriptions are merged in so
- * the thumbnail matches the described characters. */
-async function generateMissingThumbnails(
-  scenes: { id: string; sceneNumber: number; prompt: string; enhancedPrompt: string | null; characterIds?: string | null; imageUrl?: string | null }[],
-  thumbSize: string,
-  ctx: { style: string; characters: CharacterLike[] }
-): Promise<void> {
-  for (const scene of scenes) {
-    if (scene.imageUrl) continue;
-    try {
-      const imagePrompt = buildSceneImagePrompt({
-        scenePrompt: scene.enhancedPrompt || scene.prompt,
-        style: ctx.style,
-        characters: ctx.characters,
-        linkedCharacterIds: scene.characterIds,
-      });
-      const imageBase64 = await zai.generateImage({
-        prompt: imagePrompt,
-        size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
-        retry: { label: `Scene ${scene.sceneNumber} thumbnail`, timeoutMs: 120_000, maxRetries: 4 },
-      });
-      const buffer = Buffer.from(imageBase64, "base64");
-      const filename = `thumb_${Date.now()}_${scene.sceneNumber}.png`;
-      const imageUrl = await saveGeneratedFile(filename, buffer);
-      await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl } });
-      console.log(`Scene ${scene.sceneNumber}: thumbnail saved`);
-    } catch (imgErr) {
-      console.error(`Scene ${scene.sceneNumber}: thumbnail failed (non-fatal)`, imgErr);
-    }
-  }
-}
-
-async function pollTaskUntilDone(
-  taskId: string,
-  sceneId: string,
-  sceneNumber: number
-): Promise<string | null> {
-  const result = await zai.pollVideoTask({
-    taskId,
-    maxAttempts: 80,
-    intervalMs: 15_000,
-  });
-
-  if (result.status === "success" && result.videoUrl) {
-    await db.videoScene.update({
-      where: { id: sceneId },
-      data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
-    });
-    console.log(`Scene ${sceneNumber}: video ready! URL: ${result.videoUrl.slice(0, 80)}...`);
-    // Auto-generate the character's voice for this scene's dialogue right
-    // away, so the studio has sound the moment the user plays the clip —
-    // and the export reuses it instead of generating from scratch.
-    // Fire-and-forget + non-fatal: a flaky TTS call must never hold up
-    // the remaining scenes' polling loop.
-    void autoNarrateScene(sceneId);
-    return result.videoUrl;
-  }
-
-  if (result.status === "timeout") {
-    // Timeout — leave in "generating" state so the frontend can keep polling
-    console.warn(`Scene ${sceneNumber}: polling timed out, scene left in "generating" state for client polling`);
-    return null;
-  }
-
-  // Failed
-  const errorMsg = friendlySceneError(
-    result.error || "Video generation task failed on the server"
-  );
-  console.error(`Scene ${sceneNumber}: task failed. ${result.error || errorMsg}`);
-  await db.videoScene.update({
-    where: { id: sceneId },
-    data: { status: "failed", errorMessage: errorMsg },
-  });
-  return null;
-}
-
-/**
- * Extract a user-friendly, actionable error message from a ZAIError or
- * generic error (stored in scene.errorMessage — see friendlySceneError).
- * Rate-limit detection is preserved so the batch loop can stop early.
- */
-function getErrorInfo(err: unknown): { message: string; isRateLimit: boolean } {
-  if (err instanceof ZAIError) {
-    const isRateLimit = err.kind === "rate_limit";
-    const message = isRateLimit
-      ? "Video generation is currently rate-limited. Please wait a few minutes and try again."
-      : friendlySceneError(err.message);
-    return { message, isRateLimit };
-  }
-  return {
-    message: friendlySceneError(err instanceof Error ? err.message : String(err)),
-    isRateLimit: false,
-  };
 }
 
 export async function POST(req: NextRequest) {
+  let authResult: Awaited<ReturnType<typeof requireAuth>> | null = null;
   try {
-    // ── Authentication ──
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { success: false, error: "Please sign in to generate videos" },
-        { status: 401 }
-      );
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
+    authResult = await requireAuth();
+    if (!authResult.ok) return authResult.response;
+    const userId = authResult.session.userId;
 
     const { projectId } = await req.json();
-    if (!projectId) {
-      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
-    }
+    if (!projectId) return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
 
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: {
-        scenes: { orderBy: { sceneNumber: "asc" } },
-        characters: { orderBy: { createdAt: "asc" } },
-      },
+      include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: { orderBy: { createdAt: "asc" } } },
     });
-    if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
-    }
-    // Ensure the user owns this project
-    if (project.userId && project.userId !== userId) {
+    if (!project) return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    if (!project.userId || project.userId !== userId) {
       return NextResponse.json({ success: false, error: "You don't have access to this project" }, { status: 403 });
     }
-    if (project.scenes.length === 0) {
-      return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
-    }
+    if (!project.scenes.length) return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
 
-    // Process pending scenes only (also retry scenes stuck in "generating" with no taskId,
-    // stale "queued" scenes from an interrupted run, and scenes that failed
-    // due to rate limits — they can be retried)
-    //
-    // "queued" = marked for this batch but its ZAI task hasn't been created
-    // yet (tasks are created sequentially ~15s apart). Freshly queued scenes
-    // belong to an ACTIVE run — reprocessing them would double-charge and
-    // duplicate tasks, so only STALE queued scenes (> 5 min without a task)
-    // are picked up (interrupted/crashed run recovery).
-    const QUEUED_STALE_MS = 5 * 60_000;
-    const scenesToProcess = project.scenes.filter(
-      (s) => !s.videoUrl && (
-        s.status === "pending" ||
-        (s.status === "queued" && Date.now() - new Date(s.updatedAt).getTime() > QUEUED_STALE_MS) ||
-        (s.status === "generating" && !s.taskId) ||
-        (s.status === "failed" && s.errorMessage?.toLowerCase().includes("rate"))
-      )
-    );
-
-    // A run is considered ACTIVE when any scene is genuinely rendering
-    // (has a live task) or is freshly queued (inside the task-creation window).
-    const runActive = project.scenes.some(
-      (s) => (s.status === "generating" && s.taskId) ||
-        (s.status === "queued" && !s.videoUrl && Date.now() - new Date(s.updatedAt).getTime() <= QUEUED_STALE_MS)
-    );
-
-    if (scenesToProcess.length === 0) {
-      if (runActive) {
-        return NextResponse.json({
-          success: true,
-          message: "Generation already in progress.",
-          sceneCount: 0,
-          alreadyRunning: true,
-        });
-      }
-      await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
+    const activeKey = `project:${projectId}`;
+    const existingRun = await db.generationRun.findUnique({ where: { activeKey } });
+    if (existingRun) {
       return NextResponse.json({
         success: true,
-        message: "All scenes already have videos.",
-        sceneCount: project.scenes.length,
-        alreadyDone: true,
+        message: "Generation already in progress.",
+        alreadyRunning: true,
+        generationRunId: existingRun.id,
       });
     }
 
-    // ── Token Check ──
-    // Per-engine pricing (admin-managed): each engine has its own token cost
-    // per clip. Falls back to the flat PRICING.video_gen default when the
-    // engine has no admin-set row (or the DB is unreachable).
-    const engineCharge = await getEngineChargeInfo(project.videoModel);
-    const tokensPerScene = engineCharge.tokensPerClip + PRICING.image_gen.tokens;
-    const costUsdPerScene = engineCharge.costUsdPerClip + PRICING.image_gen.costUsd;
-    const totalTokensNeeded = scenesToProcess.length * tokensPerScene;
+    const QUEUED_STALE_MS = 5 * 60_000;
+    const scenesToProcess = project.scenes.filter((s) => !s.videoUrl && (
+      s.status === "pending" ||
+      (s.status === "queued" && Date.now() - s.updatedAt.getTime() > QUEUED_STALE_MS) ||
+      (s.status === "generating" && !s.taskId) ||
+      (s.status === "failed" && s.errorMessage?.toLowerCase().includes("rate"))
+    ));
+    const legacyRunActive = project.scenes.some((s) =>
+      (s.status === "generating" && s.taskId) ||
+      (s.status === "queued" && !s.videoUrl && Date.now() - s.updatedAt.getTime() <= QUEUED_STALE_MS)
+    );
 
-    const tokenCheck = await checkTokens(userId, totalTokensNeeded);
-    if (!tokenCheck.hasEnough) {
-      const costBreakdown = calculateProjectCost(scenesToProcess.length, { withNarration: false });
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Insufficient tokens. You need ${totalTokensNeeded} tokens to generate ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}, but you have ${tokenCheck.balance}.`,
-          tokensNeeded: totalTokensNeeded,
-          tokensAvailable: tokenCheck.balance,
-          costBreakdown,
-        },
-        { status: 402 }
-      );
+    if (!scenesToProcess.length) {
+      if (legacyRunActive) return NextResponse.json({ success: true, message: "Generation already in progress.", sceneCount: 0, alreadyRunning: true });
+      await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
+      return NextResponse.json({ success: true, message: "All scenes already have videos.", sceneCount: project.scenes.length, alreadyDone: true });
     }
 
-    // ── Deduct Tokens ──
+    const sceneCharges = await Promise.all(
+      scenesToProcess.map(async (scene) => {
+        const resolvedModel = resolveModelForRequest(
+          project.videoModel,
+          hasProviderReference(scene, project.characters)
+        );
+        const engineCharge = await getEngineChargeInfo(resolvedModel);
+        const needsThumbnail = !scene.imageUrl;
+        return {
+          sceneId: scene.id,
+          model: resolvedModel,
+          tokens: engineCharge.tokensPerClip + (needsThumbnail ? PRICING.image_gen.tokens : 0),
+          costUsd: engineCharge.costUsdPerClip + (needsThumbnail ? PRICING.image_gen.costUsd : 0),
+          needsThumbnail,
+        };
+      })
+    );
+    const totalTokensNeeded = sceneCharges.reduce((sum, charge) => sum + charge.tokens, 0);
+    const totalCostUsd = sceneCharges.reduce((sum, charge) => sum + charge.costUsd, 0);
+    const tokensPerScene = Math.ceil(totalTokensNeeded / scenesToProcess.length);
+    const costUsdPerScene = totalCostUsd / scenesToProcess.length;
+    const tokenCheck = await checkTokens(userId, totalTokensNeeded);
+    if (!tokenCheck.hasEnough) {
+      return NextResponse.json({
+        success: false,
+        error: `Insufficient tokens. You need ${totalTokensNeeded} tokens but have ${tokenCheck.balance}.`,
+        tokensNeeded: totalTokensNeeded,
+        tokensAvailable: tokenCheck.balance,
+        costBreakdown: {
+          sceneCount: scenesToProcess.length,
+          thumbnailCount: sceneCharges.filter((charge) => charge.needsThumbnail).length,
+          totalTokens: totalTokensNeeded,
+        },
+      }, { status: 402 });
+    }
+
+    let run;
+    try {
+      run = await db.generationRun.create({
+        data: {
+          projectId,
+          userId,
+          sceneIds: JSON.stringify(scenesToProcess.map((scene) => scene.id)),
+          activeKey,
+          status: "queued",
+          totalTokens: totalTokensNeeded,
+          tokensPerScene,
+          costUsdPerScene,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const active = await db.generationRun.findUnique({ where: { activeKey } });
+        return NextResponse.json({ success: true, alreadyRunning: true, generationRunId: active?.id, message: "Generation already in progress." });
+      }
+      throw error;
+    }
+
     const deduction = await deductTokensForOperation({
       userId,
       operation: "video_gen",
-      description: `Generate ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""} for "${project.title}"`,
+      description: `Generate ${scenesToProcess.length} scenes for "${project.title}"`,
       referenceId: projectId,
+      idempotencyKey: `generation:${run.id}:charge`,
       customTokens: totalTokensNeeded,
-      customCostUsd: scenesToProcess.length * costUsdPerScene,
+      customCostUsd: totalCostUsd,
     });
-
     if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Failed to process tokens" },
-        { status: 402 }
-      );
+      await db.generationRun.update({
+        where: { id: run.id },
+        data: { status: "failed", activeKey: null, error: deduction.error || "Token charge failed" },
+      }).catch(() => undefined);
+      return NextResponse.json({ success: false, error: deduction.error || "Failed to process tokens" }, { status: 402 });
     }
 
+    await db.generationRun.update({
+      where: { id: run.id },
+      data: { status: "running", chargeTransactionId: deduction.transactionId || null },
+    });
     await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
 
-    const videoSize = VIDEO_SIZE_MAP[project.aspectRatio] || "1920x1080";
-    const thumbSize = THUMB_SIZE_MAP[project.aspectRatio] || "1344x768";
-    // Capture the public origin while we still have the request — the
-    // background task needs it to build absolute reference-image URLs.
-    const origin = publicOrigin(req);
-
-    // Character context for character-aware generation prompts (video + thumbnails),
-    // plus the project's video engine selection and aspect ratio (used by Vidu models)
-    const genCtx = {
-      style: project.style || "cinematic",
-      characters: (project.characters || []) as CharacterLike[],
-      aspectRatio: project.aspectRatio || "16:9",
-      videoModel: project.videoModel ?? null,
-    };
-
-    // Mark scenes as "queued" immediately — they flip to "generating"
-    // one-by-one as their ZAI tasks are actually created (sequentially,
-    // ~15s apart), so the UI can show a real queue → rendering progression
-    // instead of everything appearing to render at once.
     for (const scene of scenesToProcess) {
-      await db.videoScene.update({ where: { id: scene.id }, data: { status: "queued", errorMessage: null } });
+      await db.videoScene.update({ where: { id: scene.id }, data: { status: "queued", taskId: null, errorMessage: null } });
     }
 
-    // Return immediately — all work happens in background
-    (async () => {
-      try {
-        const taskIds: { sceneId: string; sceneNumber: number; taskId: string }[] = [];
-        let hitRateLimit = false;
+    // Durable handoff: the PostgreSQL-backed generation worker claims this
+    // GenerationRun and performs all provider submission/polling outside the
+    // Next.js process. A web restart after this response cannot lose the job.
 
-        // Phase 1: Create video tasks sequentially
-        for (let i = 0; i < scenesToProcess.length; i++) {
-          const scene = scenesToProcess[i];
-          try {
-            const taskId = await createSceneTask(scene, videoSize, origin, genCtx);
-            if (taskId) {
-              taskIds.push({ sceneId: scene.id, sceneNumber: scene.sceneNumber, taskId });
-            }
-          } catch (err) {
-            const { message, isRateLimit } = getErrorInfo(err);
-            console.error(`Scene ${scene.sceneNumber}: failed to create task`, message);
-            await db.videoScene.update({
-              where: { id: scene.id },
-              data: { status: "failed", errorMessage: message },
-            }).catch(() => {});
-
-            if (isRateLimit) {
-              hitRateLimit = true;
-              // Stop trying more scenes — they'll all hit the same limit.
-              // Mark remaining pending scenes as failed with rate limit message.
-              for (let j = i + 1; j < scenesToProcess.length; j++) {
-                const remaining = scenesToProcess[j];
-                await db.videoScene.update({
-                  where: { id: remaining.id },
-                  data: { status: "failed", errorMessage: message },
-                }).catch(() => {});
-              }
-              break;
-            }
-          }
-          // Wait between scenes to avoid rate limits.
-          // After a successful task creation, wait a short delay.
-          // The actual video processing happens async, so we just need
-          // to avoid hammering the task creation endpoint.
-          if (i < scenesToProcess.length - 1 && !hitRateLimit) {
-            await sleep(15_000); // 15 seconds between scene task creations
-          }
-        }
-
-        // Phase 1.5: Generate missing thumbnails IN PARALLEL with polling —
-        // the video tasks are already running, so the thumbnails just fill
-        // in the scene previews while we wait.
-        const thumbnailPromise = generateMissingThumbnails(scenesToProcess, thumbSize, genCtx)
-          .catch((e) => console.error("Thumbnail pass crashed (non-fatal):", e));
-
-        // Phase 2: Poll for completion sequentially
-        console.log(`Project ${projectId}: ${taskIds.length} tasks created, polling...`);
-        for (const entry of taskIds) {
-          try {
-            await pollTaskUntilDone(entry.taskId, entry.sceneId, entry.sceneNumber);
-          } catch (err) {
-            const { message } = getErrorInfo(err);
-            console.error(`Scene ${entry.sceneNumber}: polling crashed`, message);
-            await db.videoScene.update({
-              where: { id: entry.sceneId },
-              data: { status: "failed", errorMessage: message },
-            }).catch(() => {});
-          }
-          await sleep(3_000);
-        }
-
-        // Make sure the parallel thumbnail pass finished before the
-        // final status updates below (it's non-fatal either way).
-        await thumbnailPromise;
-
-        // Phase 3: Update project status
-        const allScenes = await db.videoScene.findMany({ where: { projectId } });
-        const allDone = allScenes.every((s) => s.videoUrl);
-        if (allDone) {
-          await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
-          console.log(`Project ${projectId}: all scenes completed!`);
-        } else {
-          const completed = allScenes.filter((s) => s.videoUrl).length;
-          const failed = allScenes.filter((s) => s.status === "failed").length;
-          const pending = allScenes.filter((s) => !s.videoUrl && s.status !== "failed").length;
-          console.log(`Project ${projectId}: done with ${completed} completed, ${failed} failed, ${pending} pending`);
-
-          // ── Refund tokens for failed scenes ──
-          if (failed > 0) {
-            const refundAmount = failed * tokensPerScene;
-            await refundTokens({
-              userId,
-              amount: refundAmount,
-              description: `Refund: ${failed} failed scene${failed > 1 ? "s" : ""} in "${project.title}"`,
-              referenceId: projectId,
-              operation: "video_gen",
-            }).catch((e) => console.error("Failed to refund tokens:", e));
-            console.log(`Project ${projectId}: refunded ${refundAmount} tokens for ${failed} failed scenes`);
-          }
-        }
-      } catch (fatalErr) {
-        console.error(`Project ${projectId}: background generation crashed`, fatalErr);
-        await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } }).catch(() => {});
-        await db.videoScene.updateMany({
-          where: { projectId, status: { in: ["generating", "queued"] } },
-          data: { status: "failed", errorMessage: "An unexpected error occurred during generation." },
-        }).catch(() => {});
-
-        await refundTokens({
-          userId,
-          amount: totalTokensNeeded,
-          description: `Full refund: generation failed for "${project.title}"`,
-          referenceId: projectId,
-          operation: "video_gen",
-        }).catch((e) => console.error("Failed to refund tokens on crash:", e));
-      }
-    })();
-
-    const skipped = project.scenes.length - scenesToProcess.length;
     return NextResponse.json({
       success: true,
-      message: `Generating ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}${skipped > 0 ? ` (${skipped} already done)` : ""}. Videos will appear as they complete.`,
+      message: `Generating ${scenesToProcess.length} scene${scenesToProcess.length > 1 ? "s" : ""}.`,
+      generationRunId: run.id,
       sceneCount: scenesToProcess.length,
       totalScenes: project.scenes.length,
       tokensCharged: totalTokensNeeded,
       remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    const sess = await getServerSession(authOptions).catch(() => null);
     return zaiErrorResponse(error, {
-      session: sess,
+      session: authResult?.ok ? authResult.session : null,
       logLabel: "generate-video",
     });
   }

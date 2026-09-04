@@ -1,129 +1,153 @@
 #!/usr/bin/env bash
-#
-# ───────────────────────────────────────────────────────────────────────────
-#  Vidora — Production Deploy Script
-# ───────────────────────────────────────────────────────────────────────────
-#
-#  Usage:
-#    ./deploy.sh              # full deploy (pull + build + restart)
-#    ./deploy.sh --no-pull    # build + restart only (skip git pull)
-#    ./deploy.sh --db-push    # also run prisma db push after build
-#
-#  IMPORTANT: This script is designed to run ON the VPS at
-#  /home/lightworld/webapps/vidora. It pulls from GitHub, builds,
-#  and restarts PM2.
-# ───────────────────────────────────────────────────────────────────────────
+# Vidora production deployment — backup-first, migration-based, fail-closed.
 set -euo pipefail
 
 PROJECT_DIR="/home/lightworld/webapps/vidora"
 cd "$PROJECT_DIR"
 
-echo "═══════════════════════════════════════════════════════════"
-echo "  Vidora Production Deploy"
-echo "═══════════════════════════════════════════════════════════"
-echo ""
-
-# ── Step 1: Pull latest code (unless --no-pull) ──
-if [[ "${1:-}" != "--no-pull" ]]; then
-  echo "▶ [1/6] Pulling latest code from git..."
-  git pull origin main
-else
-  echo "▶ [1/6] Skipping git pull (--no-pull)"
+NO_PULL=false
+if [[ "${1:-}" == "--no-pull" ]]; then
+  NO_PULL=true
+elif [[ -n "${1:-}" ]]; then
+  echo "Unsupported option: $1"
+  echo "Usage: ./deploy.sh [--no-pull]"
+  exit 2
 fi
-echo ""
 
-# ── Safety: verify schema.prisma is PostgreSQL (AFTER pull) ──
-if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
-  echo "❌ FATAL: prisma/schema.prisma is NOT PostgreSQL!"
-  echo "   It currently has: $(head -30 prisma/schema.prisma | grep 'provider =')"
-  echo "   The VPS needs the PostgreSQL schema. Aborting deploy."
-  echo "   Fix: re-push the correct schema from dev."
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+required_env=(
+  DATABASE_URL
+  NEXTAUTH_URL
+  NEXTAUTH_SECRET
+  NEXT_PUBLIC_BASE_URL
+  CONFIG_ENCRYPTION_KEY
+  GENERATED_DIR
+  BACKUP_DIR
+)
+for name in "${required_env[@]}"; do
+  if [[ -z "${!name:-}" ]]; then
+    echo "FATAL: required environment variable $name is missing"
+    exit 1
+  fi
+done
+
+if [[ ${#NEXTAUTH_SECRET} -lt 32 ]] || [[ "$NEXTAUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$NEXTAUTH_SECRET" == "vidora-secret-change-in-production-2024" ]]; then
+  echo "FATAL: NEXTAUTH_SECRET is weak, default, or a placeholder"
+  exit 1
+fi
+if [[ ! "$CONFIG_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]] && [[ ${#CONFIG_ENCRYPTION_KEY} -lt 43 ]]; then
+  echo "FATAL: CONFIG_ENCRYPTION_KEY must represent 32 random bytes"
+  exit 1
+fi
+if [[ "$GENERATED_DIR" != /* ]]; then
+  echo "FATAL: GENERATED_DIR must be an absolute path"
+  exit 1
+fi
+case "$GENERATED_DIR" in
+  "$PROJECT_DIR/.next"|"$PROJECT_DIR/.next/"*)
+    echo "FATAL: GENERATED_DIR must live outside .next so deploys cannot erase media"
+    exit 1
+    ;;
+esac
+if [[ "$BACKUP_DIR" != /* ]]; then
+  echo "FATAL: BACKUP_DIR must be an absolute path"
   exit 1
 fi
 
-echo "✅ Schema check passed (PostgreSQL)"
-echo ""
-
-# ── Step 2: Install any new dependencies ──
-echo "▶ [2/6] Checking dependencies..."
-if [[ -f package.json ]]; then
-  bun install --frozen-lockfile 2>/dev/null || bun install
-fi
-echo ""
-
-# ── Step 3: Push schema changes to database (if --db-push) ──
-if [[ "${1:-}" == "--db-push" ]]; then
-  echo "▶ [3/6] Pushing Prisma schema to database..."
-  npx prisma db push --accept-data-loss
-  npx prisma generate
-  echo "  ✅ Schema pushed and client generated."
-  echo ""
-else
-  echo "▶ [3/6] Generating Prisma client (no schema push)..."
-  npx prisma generate
-  echo ""
-fi
-
-# ── Step 4: Build the standalone production bundle ──
-echo "▶ [4/6] Building Next.js standalone bundle..."
-echo "  (this takes 2-3 minutes — please wait)"
-bun run build
-echo ""
-
-# ── Step 5: Ensure logs directory exists ──
-mkdir -p logs
-
-# ── Step 6: Recreate PM2 process with fresh env ──
-echo "▶ [6/6] Restarting PM2 process (delete + start)..."
-# MUST delete + start, NOT just restart — restart reuses stale env vars
-# and won't pick up changes to ecosystem.config.js or .env
-pm2 delete vidora 2>/dev/null || true
-pm2 start ecosystem.config.js
-pm2 save
-echo ""
-
-# ── Verify ──
-echo "═══════════════════════════════════════════════════════════"
-echo "  Verifying server is up..."
-echo "═══════════════════════════════════════════════════════════"
-sleep 3
-
-echo ""
-echo "▶ Port 3004 binding:"
-ss -tlnp | grep 3004 || echo "  ⚠  Nothing listening on port 3004!"
-echo ""
-# ── Basic reachability check (fast, 5s) ──
-echo "▶ Reachability check:"
-REACHABLE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://localhost:3004/ || echo "000")
-if [[ "$REACHABLE" == "200" ]]; then
-  echo "  ✅ Server responding (HTTP 200)"
-else
-  echo "  ⚠  Server returned HTTP $REACHABLE or didn't respond"
-fi
-echo ""
-# ── AI Health check (slower, 20s — may fail if ZAI API is slow) ──
-echo "▶ AI Health check (20s timeout):"
-HEALTH=$(curl -s -m 20 http://localhost:3004/api/ai/health || echo "FAILED")
-echo "  $HEALTH"
-echo ""
-
-if echo "$REACHABLE" | grep -q '200'; then
-  if echo "$HEALTH" | grep -q '"status":"ok"'; then
-    echo "✅ Deploy successful — AI service is operational."
-  elif echo "$HEALTH" | grep -q '"status":"degraded"'; then
-    echo "⚠  Deploy successful — AI service is degraded (check Z.ai credentials/balance)."
-  elif echo "$HEALTH" | grep -q '"status":"down"'; then
-    echo "⚠  Deploy successful — but AI service is down (check Z.ai credentials)."
-    echo "   Run: pm2 logs vidora --lines 30 --nostream"
-  elif echo "$HEALTH" | grep -q 'FAILED\|timed out'; then
-    echo "⚠  Deploy successful — but AI health check timed out."
-    echo "   The server is running. Check Z.ai credentials in Admin Portal."
-  else
-    echo "✅ Deploy successful — server is running."
+if [[ "$NO_PULL" == false ]]; then
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "FATAL: production working tree is dirty; refusing to overwrite local changes"
+    exit 1
   fi
-else
-  echo "❌ Server is NOT responding on port 3004."
-  echo "   Run: pm2 logs vidora --lines 30 --nostream"
+  git fetch --prune origin
+  git checkout main
+  git pull --ff-only origin main
 fi
-echo ""
-echo "Done. Site: https://vidora.lightworldtech.com"
+
+RELEASE_SHA="$(git rev-parse HEAD)"
+echo "Deploying Vidora commit $RELEASE_SHA"
+
+if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
+  echo "FATAL: canonical Prisma schema is not PostgreSQL"
+  exit 1
+fi
+
+# Dependency install is intentionally frozen. Never silently rewrite bun.lock on production.
+bun install --frozen-lockfile
+
+# Preflight quality checks happen before backup/migrations/restart.
+bunx prisma validate
+bunx prisma generate
+bun run lint
+bun run typecheck
+bun run test:unit
+bun run build
+
+# Mandatory backups before any production schema mutation/restart.
+mkdir -p "$BACKUP_DIR" "$GENERATED_DIR"
+chmod 700 "$BACKUP_DIR"
+chmod 750 "$GENERATED_DIR"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_FILE="$BACKUP_DIR/vidora_db_${STAMP}_${RELEASE_SHA:0:12}.sql.gz"
+MEDIA_BACKUP_FILE="$BACKUP_DIR/vidora_media_${STAMP}_${RELEASE_SHA:0:12}.tar.gz"
+
+echo "Creating PostgreSQL backup: $BACKUP_FILE"
+pg_dump --no-owner --no-privileges "$DATABASE_URL" | gzip -9 > "$BACKUP_FILE"
+if [[ ! -s "$BACKUP_FILE" ]]; then
+  echo "FATAL: database backup is empty"
+  rm -f "$BACKUP_FILE"
+  exit 1
+fi
+gzip -t "$BACKUP_FILE"
+chmod 600 "$BACKUP_FILE"
+
+echo "Creating generated-media backup: $MEDIA_BACKUP_FILE"
+tar -C "$GENERATED_DIR" -czf "$MEDIA_BACKUP_FILE" .
+if [[ ! -s "$MEDIA_BACKUP_FILE" ]]; then
+  echo "FATAL: generated-media backup is empty or was not created"
+  rm -f "$MEDIA_BACKUP_FILE"
+  exit 1
+fi
+tar -tzf "$MEDIA_BACKUP_FILE" >/dev/null
+chmod 600 "$MEDIA_BACKUP_FILE"
+
+# Production schema changes are versioned and reviewable. db push is forbidden.
+bunx prisma migrate deploy
+
+mkdir -p logs
+pm2 startOrReload ecosystem.config.js --update-env
+pm2 save
+
+# Fail closed on web reachability. AI dependency may report degraded, but the
+# endpoint itself must remain reachable so operations can distinguish outage types.
+HTTP_CODE="000"
+for attempt in 1 2 3 4 5; do
+  HTTP_CODE="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3004/ || true)"
+  [[ "$HTTP_CODE" == "200" ]] && break
+  sleep 2
+done
+if [[ "$HTTP_CODE" != "200" ]]; then
+  echo "FATAL: Vidora did not become reachable after deploy (HTTP $HTTP_CODE)"
+  pm2 logs vidora --lines 80 --nostream || true
+  exit 1
+fi
+
+HEALTH="$(curl -sS -m 20 http://127.0.0.1:3004/api/ai/health || true)"
+if [[ -z "$HEALTH" ]]; then
+  echo "FATAL: AI health endpoint did not respond"
+  exit 1
+fi
+
+echo "Deploy complete"
+echo "Commit: $RELEASE_SHA"
+echo "Database backup: $BACKUP_FILE"
+echo "Media backup: $MEDIA_BACKUP_FILE"
+echo "Web: HTTP $HTTP_CODE"
+echo "AI health: $HEALTH"

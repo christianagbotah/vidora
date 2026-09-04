@@ -9,416 +9,423 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  name          String?
-  password      String?   // bcrypt hash for credentials auth
-  image         String?
-  role          String    @default("user")  // "user" | "admin"
-  tokens        Int       @default(0)      // credit/token balance
-  isActive      Boolean   @default(true)
-  // ── Free Preview rate-limiting (resets daily) ──
-  // previewDate is the YYYY-MM-DD of the current usage window.
-  // When it doesn't match today, counters reset to 0.
-  previewDate             String?  // YYYY-MM-DD
-  previewStoryboardCount  Int      @default(0)  // max 10/day
-  previewImageCount       Int      @default(0)  // max 3/day
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  projects      VideoProject[]
-  payments      Payment[]
-  transactions  TokenTransaction[]
-  brandKit      BrandKit?
-  socialConnections SocialConnection[]
-  workspaces    WorkspaceMember[]
+  id                       String    @id @default(cuid())
+  email                    String    @unique
+  name                     String?
+  password                 String?
+  image                    String?
+  role                     String    @default("user")
+  tokens                   Int       @default(0)
+  isActive                 Boolean   @default(true)
+  sessionVersion           Int       @default(0)
+  previewDate              String?
+  previewStoryboardCount   Int       @default(0)
+  previewImageCount        Int       @default(0)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  projects                 VideoProject[]
+  payments                 Payment[]
+  transactions             TokenTransaction[]
+  brandKit                 BrandKit?
+  socialConnections        SocialConnection[]
+  workspaces               WorkspaceMember[]
 }
 
 model VideoProject {
-  id             String     @id @default(cuid())
-  userId         String?
-  user           User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
-  title          String
-  description    String?   @db.Text
-  style          String     @default("cinematic")
-  aspectRatio    String     @default("16:9")
-  status         String     @default("draft")
+  id              String     @id @default(cuid())
+  userId          String?
+  user            User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title           String
+  description     String?    @db.Text
+  style           String     @default("cinematic")
+  aspectRatio     String     @default("16:9")
+  status          String     @default("draft")
   targetDuration  Int        @default(60)
-  projectType    String     @default("custom")   // custom, birthday, commercial, event, social
-  // ── Video engine selection (see src/lib/video-models.ts) ──
-  // null = CogVideoX-3 (the default). Values: "CogVideoX-3" | "vidu2-image" |
-  // "vidu2-reference" | "viduq1-text" | "viduq1-image"
-  videoModel     String?                        // Z.ai video model id used for generation
-  finalVideoUrl  String?   @db.Text
-  // ── Sharing ──
-  shareSlug      String?    @unique  // public share URL slug
-  isPublic       Boolean    @default(false)  // visible on public share page
-  sharePassword  String?    // bcrypt hash; null = no password
-  allowEmbed     Boolean    @default(true)   // allow iframe embedding
-  // ── Brand Kit ──
-  brandKitId     String?
-  brandKit       BrandKit?  @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
-  // ── Workspace ──
-  workspaceId    String?
-  workspace      Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  scenes         VideoScene[]
-  characters     Character[]
-  views          VideoView[]
-  socialPosts    SocialPublish[]
-  exportJobs     ExportJob[]
+  projectType     String     @default("custom")
+  videoModel      String?
+  finalVideoUrl   String?    @db.Text
+  shareSlug       String?    @unique
+  isPublic        Boolean    @default(false)
+  sharePassword   String?
+  allowEmbed      Boolean    @default(true)
+  brandKitId      String?
+  brandKit        BrandKit?  @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
+  workspaceId     String?
+  workspace       Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  scenes          VideoScene[]
+  characters      Character[]
+  views           VideoView[]
+  socialPosts     SocialPublish[]
+  exportJobs      ExportJob[]
+  generationRuns  GenerationRun[]
+
   @@index([userId])
   @@index([shareSlug])
 }
 
 model VideoScene {
-  id             String   @id @default(cuid())
-  projectId      String
-  project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sceneNumber    Int
-  title          String?
-  prompt         String    @db.Text
-  enhancedPrompt String?  @db.Text // extracted visual direction
-  visualNote     String?   @db.Text // extracted visual direction
-  dialogue       String?   @db.Text // extracted dialogue/narration
-  characterIds   String?   @db.Text // JSON array of character IDs involved in scene
-  referenceImageUrl String?                   @db.Text // uploaded/generated reference image for scene
-  narrationUrl   String?   @db.Text // generated TTS narration audio URL
-  narrationVoice String?                       // which TTS voice was used
-  mood           String?                       // emotional mood of the scene (dramatic, happy, dark, etc.)
-  cameraMove     String?                       // camera movement directive (zoom_in, pan_left, tracking, etc.)
-  lighting       String?                       // lighting style (golden hour, neon glow, studio lighting, etc.)
-  musicMood      String?                       // background music mood (epic, calm, tense, joyful)
-  musicTrackUrl  String?   @db.Text // selected background music file URL
-  musicVolume    Int       @default(30)         // 0-100 background music volume level
-  // ── Subtitles ──
-  subtitleSrt    String?   @db.Text // SRT format subtitle text
-  subtitleStatus String?                       // "pending" | "generating" | "ready" | "failed"
-  subtitleLang   String?                       // language code (en, fr, twi, etc.)
-  burnSubtitles  Boolean   @default(false)     // burn subtitles into exported video
-  // ── Dubbing / Translation ──
-  narrationLang  String?                       // language of the narration (en, fr, twi, etc.)
-  imageUrl       String?   @db.Text
-  imageBase64    String?   @db.Text
-  videoUrl       String?   @db.Text
-  taskId         String?
-  duration       Int      @default(10)
-  transition     String   @default("fade")
-  status         String   @default("pending")
-  errorMessage   String?   @db.Text // why generation failed (rate_limit, server, etc.)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @default(now())
-  translations   SceneTranslation[]
+  id                String       @id @default(cuid())
+  projectId         String
+  project           VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sceneNumber       Int
+  title             String?
+  prompt            String       @db.Text
+  enhancedPrompt    String?      @db.Text
+  visualNote        String?      @db.Text
+  dialogue          String?      @db.Text
+  characterIds      String?      @db.Text
+  referenceImageUrl String?      @db.Text
+  narrationUrl      String?      @db.Text
+  narrationVoice    String?
+  mood              String?
+  cameraMove        String?
+  lighting          String?
+  musicMood         String?
+  musicTrackUrl     String?      @db.Text
+  musicVolume       Int          @default(30)
+  subtitleSrt       String?      @db.Text
+  subtitleStatus    String?
+  subtitleLang      String?
+  burnSubtitles     Boolean      @default(false)
+  narrationLang     String?
+  imageUrl          String?      @db.Text
+  imageBase64       String?      @db.Text
+  videoUrl          String?      @db.Text
+  taskId            String?
+  duration          Int          @default(10)
+  transition        String       @default("fade")
+  status            String       @default("pending")
+  errorMessage      String?      @db.Text
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  translations      SceneTranslation[]
+
   @@index([projectId])
 }
 
 model Character {
-  id             String   @id @default(cuid())
-  projectId      String
-  project        VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name           String
-  role           String?                       // protagonist, supporting, narrator, background
-  description    String?   @db.Text // physical appearance, clothing, personality
-  stylePrompt    String?   @db.Text // AI-optimized character description for consistency
-  voiceId        String?                       // assigned TTS voice ID for this character
-  imageUrl       String?   @db.Text // reference image (uploaded or AI-generated)
-  imageBase64    String?   @db.Text // for uploaded images stored as base64
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @default(now())
+  id          String       @id @default(cuid())
+  projectId   String
+  project     VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  role        String?
+  description String?      @db.Text
+  stylePrompt String?      @db.Text
+  voiceId     String?
+  imageUrl    String?      @db.Text
+  imageBase64 String?      @db.Text
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now())
+
   @@index([projectId])
 }
 
 model GenerationHistory {
-  id          String   @id @default(cuid())
-  prompt      String   @db.Text
-  inputType   String   @default("text")
-  style       String?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  prompt    String   @db.Text
+  inputType String   @default("text")
+  style     String?
+  createdAt DateTime @default(now())
 }
 
 model Payment {
-  id              String    @id @default(cuid())
-  userId          String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  gateway         String    // "paystack" | "hubtel" | "stripe"
-  gatewayRef      String?   // reference/transaction ID from payment gateway
-  amount          Float     // amount paid
-  currency        String    @default("GHS")  // "GHS" | "USD"
-  tokensPurchased Int       // number of tokens bought
-  status          String    @default("pending")  // "pending" | "completed" | "failed" | "refunded"
-  metadata        String?   // JSON string for gateway-specific data
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gateway               String
+  gatewayRef            String?
+  packageSlug           String?
+  amount                Float
+  expectedAmountMinor   Int      @default(0)
+  currency              String   @default("GHS")
+  tokensPurchased       Int
+  bonusTokens           Int      @default(0)
+  status                String   @default("pending")
+  providerTransactionId String?
+  settlementKey         String?  @unique
+  settledAt             DateTime?
+  metadata              String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([gateway, gatewayRef])
   @@index([userId])
+  @@index([status])
 }
 
 model TokenTransaction {
-  id            String    @id @default(cuid())
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type          String    // "purchase" | "spend" | "refund" | "bonus"
-  amount        Int       // positive = credit, negative = debit
-  description   String    @db.Text
-  referenceId   String?   // payment ID or project ID
-  // ── Cost tracking for profit analytics ──
-  // The real cost in USD that Z.ai charged YOU for this operation.
-  // Only populated for "spend" transactions (generation operations).
-  // Revenue (from Payment.amount) minus sum(costUsd) = your gross profit.
-  costUsd       Float?    // actual Z.ai API cost for this operation (USD)
-  operationType String?   // "video_gen" | "image_gen" | "llm" | "tts" | "asr" | "download" | "purchase"
-  createdAt     DateTime  @default(now())
+  id                   String   @id @default(cuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                 String
+  amount               Int
+  description          String   @db.Text
+  referenceId          String?
+  idempotencyKey       String?  @unique
+  relatedTransactionId String?
+  costUsd              Float?
+  operationType        String?
+  createdAt            DateTime @default(now())
+
   @@index([userId])
   @@index([type])
   @@index([operationType])
+  @@index([referenceId])
 }
 
 model SystemConfig {
-  id            String    @id @default(cuid())
-  key           String    @unique
-  value         String    @db.Text
-  description   String?   @db.Text
-  updatedAt     DateTime  @updatedAt
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?  @db.Text
+  updatedAt   DateTime @updatedAt
 }
 
-// ── Admin-managed token packages ──
-// Stored in DB so the admin can adjust prices, quantities, bonuses, and
-// ordering WITHOUT a code change or redeploy. Seeds mirror the hardcoded
-// defaults in src/lib/pricing.ts (TOKEN_PACKAGES) for migration safety.
 model TokenPackage {
-  id            String    @id @default(cuid())
-  // Human-readable slug kept stable across renames (e.g. "starter", "basic").
-  // Used by the checkout flow to reference a package after an admin rename.
-  slug          String    @unique
-  name          String
-  tokens        Int                       // base token count
-  priceGHS      Float
-  priceUSD      Float
-  bonusPct      Float     @default(0)     // extra tokens as % (e.g. 20 = +20%)
-  popular       Boolean   @default(false) // highlighted in the buy-tokens grid
-  isActive      Boolean   @default(true)  // soft-delete / hide from storefront
-  sortOrder     Int       @default(0)     // ascending; lower = shown first
-  features      String    @default("[]")  // JSON array of feature strings
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  tokens    Int
+  priceGHS  Float
+  priceUSD  Float
+  bonusPct  Float    @default(0)
+  popular   Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  features  String   @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([isActive, sortOrder])
 }
 
-// ── Admin-managed per-engine clip pricing ──
-// The admin sets what users pay per video clip for EACH AI engine
-// (CogVideoX-3, Vidu 2, ViduQ1...). `tokensPerClip` is what actually gets
-// deducted from a user's balance during generation; priceGHS/priceUSD are
-// the storefront display prices. `isActive` hides an engine from the picker.
 model EnginePricing {
   id            String   @id @default(cuid())
-  modelId       String   @unique // "CogVideoX-3" | "vidu2-image" | "vidu2-reference" | "viduq1-text" | "viduq1-image"
-  priceGHS      Float    @default(0)  // display price per clip (GHS)
-  priceUSD      Float    @default(0)  // display price per clip (USD)
-  tokensPerClip Int      @default(3)  // tokens deducted per generated clip
-  isActive      Boolean  @default(true) // offered in the engine picker
+  modelId       String   @unique
+  priceGHS      Float    @default(0)
+  priceUSD      Float    @default(0)
+  tokensPerClip Int      @default(3)
+  isActive      Boolean  @default(true)
   updatedAt     DateTime @updatedAt
   createdAt     DateTime @default(now())
 }
 
-// ── Admin-managed homepage pricing plans ──
-// The marketing pricing cards shown on the homepage ("Simple, Transparent
-// Pricing"). Fully admin-controlled: name, badge, price in both currencies,
-// billing period, feature bullets, CTA label/action, and ordering.
 model PricingPlan {
-  id            String   @id @default(cuid())
-  slug          String   @unique // stable reference, e.g. "starter", "pro"
-  name          String
-  badge         String?  // "FREE" | "POPULAR" | "BEST VALUE" | custom text
-  priceGHS      Float    @default(0)
-  priceUSD      Float    @default(0)
-  period        String   @default("month") // "forever" | "month" | "one-time"
-  features      String   @default("[]") @db.Text // JSON array of feature strings
-  ctaLabel      String   @default("Get Started")
-  ctaAction     String   @default("create") // "create" | "buy-tokens" | "contact"
-  highlight     Boolean  @default(false) // purple border + ribbon emphasis
-  isActive      Boolean  @default(true) // visible on homepage
-  sortOrder     Int      @default(0)
-  updatedAt     DateTime @updatedAt
-  createdAt     DateTime @default(now())
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  badge     String?
+  priceGHS  Float    @default(0)
+  priceUSD  Float    @default(0)
+  period    String   @default("month")
+  features  String   @default("[]") @db.Text
+  ctaLabel  String   @default("Get Started")
+  ctaAction String   @default("create")
+  highlight Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
   @@index([isActive, sortOrder])
 }
 
-// ════════════════════════════════════════════════════════════════
-// ADVANCED FEATURES SCHEMA
-// ════════════════════════════════════════════════════════════════
-
-// ── Brand Kit: per-user branding for watermarking exports ──
 model BrandKit {
-  id            String    @id @default(cuid())
-  userId        String    @unique
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  brandName     String
-  logoUrl       String?   @db.Text // uploaded logo file URL (/uploads/brand-*.png)
-  logoPosition  String    @default("bottom-right")  // top-left, top-right, bottom-left, bottom-right, center
-  logoOpacity   Int       @default(80)  // 0-100
-  logoScale     Int       @default(15)  // percentage of video width
-  primaryColor  String?   // hex color, e.g. #6d28d9
-  tagline       String?   @db.Text
-  website       String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  projects      VideoProject[]
+  id           String         @id @default(cuid())
+  userId       String         @unique
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brandName    String
+  logoUrl      String?        @db.Text
+  logoPosition String         @default("bottom-right")
+  logoOpacity  Int            @default(80)
+  logoScale    Int            @default(15)
+  primaryColor String?
+  tagline      String?        @db.Text
+  website      String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  projects     VideoProject[]
 }
 
-// ── Scene Translation: for multi-language dubbing ──
-// One row per scene per language. Stores the translated script + TTS audio URL.
 model SceneTranslation {
-  id            String    @id @default(cuid())
-  sceneId       String
-  scene         VideoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
-  lang          String    // language code: "en", "fr", "twi", "ga", "ha", "es", "pt", "ar", "zh"
-  langName      String    // display name: "English", "French", "Twi"
-  translatedText String?  @db.Text // translated narration/dialogue text
-  narrationUrl  String?   @db.Text // TTS audio URL in this language
-  voiceId       String?   // TTS voice used
-  status        String    @default("pending")  // "pending" | "translating" | "generating" | "ready" | "failed"
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id             String     @id @default(cuid())
+  sceneId        String
+  scene          VideoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  lang           String
+  langName       String
+  translatedText String?    @db.Text
+  narrationUrl   String?    @db.Text
+  voiceId        String?
+  status         String     @default("pending")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
   @@unique([sceneId, lang])
   @@index([sceneId])
 }
 
-// ── Social Publishing: one-click publish to YouTube/TikTok/Instagram ──
 model SocialConnection {
-  id            String    @id @default(cuid())
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  platform      String    // "youtube" | "tiktok" | "instagram" | "facebook" | "twitter"
-  accountId     String?   // platform's user/channel ID
-  accountName   String?   // display name on the platform
-  accessToken   String?   @db.Text // encrypted OAuth access token
-  refreshToken  String?   @db.Text // encrypted OAuth refresh token
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform       String
+  accountId      String?
+  accountName    String?
+  accessToken    String?  @db.Text
+  refreshToken   String?  @db.Text
   tokenExpiresAt DateTime?
-  isConnected   Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  isConnected    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
   @@unique([userId, platform])
   @@index([userId])
 }
 
 model SocialPublish {
-  id            String    @id @default(cuid())
-  projectId     String
-  project       VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  platform      String    // "youtube" | "tiktok" | "instagram" | "facebook" | "twitter"
-  externalId    String?   // post/video ID on the platform
-  externalUrl   String?   @db.Text // public URL on the platform
-  title         String?
-  description   String?   @db.Text
-  status        String    @default("pending")  // "pending" | "uploading" | "published" | "failed"
-  errorMessage  String?   @db.Text
-  publishedAt   DateTime?
-  createdAt     DateTime  @default(now())
+  id           String       @id @default(cuid())
+  projectId    String
+  project      VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform     String
+  externalId   String?
+  externalUrl  String?      @db.Text
+  title        String?
+  description  String?      @db.Text
+  status       String       @default("pending")
+  errorMessage String?      @db.Text
+  publishedAt  DateTime?
+  createdAt    DateTime     @default(now())
+
   @@index([projectId])
   @@index([platform])
 }
 
-// ── Template Marketplace: DB-backed industry templates ──
 model ProjectTemplate {
-  id            String    @id @default(cuid())
-  slug          String    @unique
-  title         String
-  description   String?   @db.Text
-  category      String    @default("custom")  // "real-estate" | "restaurant" | "birthday" | "product" | "fitness" | "event" | "education" | "travel"
-  style         String    @default("cinematic")
-  aspectRatio   String    @default("16:9")
-  targetDuration Int      @default(30)
-  coverImage    String?   @db.Text
-  accentColor   String    @default("from-violet-500 to-fuchsia-500")
-  sceneCount    Int       @default(3)
-  // JSON array of scene templates: [{ title, prompt, mood, cameraMove, musicMood, duration, transition }]
-  sceneTemplates String   @default("[]")  @db.Text
-  // JSON array of character templates
-  characterTemplates String @default("[]")  @db.Text
-  isFeatured    Boolean   @default(false)
-  isActive      Boolean   @default(true)
-  usageCount    Int       @default(0)  // how many projects created from this template
-  sortOrder     Int       @default(0)
-  createdBy     String?   // admin user ID who created it
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                 String   @id @default(cuid())
+  slug               String   @unique
+  title              String
+  description        String?  @db.Text
+  category           String   @default("custom")
+  style              String   @default("cinematic")
+  aspectRatio        String   @default("16:9")
+  targetDuration     Int      @default(30)
+  coverImage         String?  @db.Text
+  accentColor        String   @default("from-violet-500 to-fuchsia-500")
+  sceneCount         Int      @default(3)
+  sceneTemplates     String   @default("[]") @db.Text
+  characterTemplates String   @default("[]") @db.Text
+  isFeatured         Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  usageCount         Int      @default(0)
+  sortOrder          Int      @default(0)
+  createdBy          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
   @@index([isActive, category])
   @@index([isFeatured])
 }
 
-// ── Video Analytics: view tracking for shared videos ──
 model VideoView {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   projectId     String
   project       VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  viewerId      String?   // anonymous viewer cookie ID
+  viewerId      String?
   ipAddress     String?
-  userAgent     String?   @db.Text
-  referer       String?   @db.Text
+  userAgent     String?      @db.Text
+  referer       String?      @db.Text
   country       String?
-  watchDuration Int       @default(0)  // seconds watched
-  isComplete    Boolean   @default(false)  // watched to end
-  createdAt     DateTime  @default(now())
+  watchDuration Int          @default(0)
+  isComplete    Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+
   @@index([projectId])
   @@index([createdAt])
 }
 
-// ── Team Workspaces: shared project spaces for teams ──
 model Workspace {
-  id            String    @id @default(cuid())
-  name          String
-  slug          String    @unique
-  ownerId       String    // User ID of the workspace owner
-  description   String?   @db.Text
-  logoUrl       String?   @db.Text
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  members       WorkspaceMember[]
-  projects      VideoProject[]
+  id          String            @id @default(cuid())
+  name        String
+  slug        String            @unique
+  ownerId     String
+  description String?           @db.Text
+  logoUrl     String?           @db.Text
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  members     WorkspaceMember[]
+  projects    VideoProject[]
 }
 
 model WorkspaceMember {
-  id            String    @id @default(cuid())
-  workspaceId   String
-  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role          String    @default("editor")  // "owner" | "admin" | "editor" | "viewer"
-  invitedAt     DateTime  @default(now())
-  joinedAt      DateTime?
-  createdAt     DateTime  @default(now())
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String    @default("editor")
+  invitedAt   DateTime  @default(now())
+  joinedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
   @@unique([workspaceId, userId])
   @@index([workspaceId])
   @@index([userId])
 }
 
-// ── Contact Messages: submissions from the contact form ──
 model ContactMessage {
   id        String   @id @default(cuid())
   name      String
   email     String
   subject   String   @default("General Inquiry")
   message   String   @db.Text
-  status    String   @default("new")  // "new" | "read" | "replied" | "archived"
+  status    String   @default("new")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   @@index([status])
   @@index([createdAt])
 }
 
-// ── Video Export Jobs (background export pipeline, see /api/export-video) ──
 model ExportJob {
   id        String       @id @default(cuid())
   projectId String
   project   VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  userId    String?                          // owner who started it (null = guest demo project)
-  status    String       @default("queued")  // "queued" | "running" | "done" | "failed"
-  progress  Int          @default(0)         // 0-100
-  step      String       @default("Queued")  // human-readable current step
-  params    String?                          // JSON: { quality, transition, format, withTitleCard, includeAudio }
-  result    String?                          // JSON: success payload (finalVideoUrl, message, audio, …)
-  error     String?                          // friendly failure message
+  userId    String?
+  activeKey String?      @unique
+  status    String       @default("queued")
+  progress  Int          @default(0)
+  step      String       @default("Queued")
+  params    String?
+  result    String?
+  error     String?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
+
   @@index([projectId, createdAt])
+  @@index([status, updatedAt])
+}
+
+model GenerationRun {
+  id                   String       @id @default(cuid())
+  projectId            String
+  project              VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId               String
+  targetSceneId        String?
+  sceneIds             String       @default("[]") @db.Text
+  activeKey            String?      @unique
+  status               String       @default("queued")
+  totalTokens          Int
+  tokensPerScene       Int
+  costUsdPerScene      Float
+  chargeTransactionId  String?
+  refundTransactionId  String?
+  error                String?      @db.Text
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([targetSceneId])
   @@index([status, updatedAt])
 }

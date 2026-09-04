@@ -1,0 +1,92 @@
+name: Vidora CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - production-hardening/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vidora-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, typecheck, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vidora
+          POSTGRES_PASSWORD: vidora_ci_password
+          POSTGRES_DB: vidora_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U vidora -d vidora_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: postgresql://vidora:vidora_ci_password@localhost:5432/vidora_ci?schema=public
+      NEXTAUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BASE_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-only-nextauth-secret-0123456789abcdef0123456789abcdef
+      CONFIG_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      ZAI_BASE_URL: https://example.invalid/api
+      ZAI_API_KEY: ci-not-a-real-api-key
+      PAYSTACK_SECRET_KEY: sk_test_ci_not_real
+      STRIPE_SECRET_KEY: sk_test_ci_not_real
+      STRIPE_WEBHOOK_SECRET: whsec_ci_not_real
+      HUBTEL_CLIENT_ID: ci-not-real
+      HUBTEL_CLIENT_SECRET: ci-not-real
+      HUBTEL_MERCHANT_ACCOUNT_NUMBER: "000000"
+      SMTP_HOST: smtp.example.invalid
+      SMTP_PORT: "587"
+      SMTP_USER: ci@example.invalid
+      SMTP_PASSWORD: ci-not-real
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      # CI uses an empty disposable PostgreSQL database. db push is acceptable
+      # only here to bootstrap that ephemeral DB because the repository predates
+      # versioned migrations. Production deploys use prisma migrate deploy only.
+      - name: Bootstrap disposable test database
+        run: bunx prisma db push --skip-generate
+
+      - name: Lint
+        run: bun run lint
+
+      - name: TypeScript
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun run test:unit
+
+      - name: PostgreSQL integration tests
+        run: bun run test:integration
+
+      - name: Production build
+        run: bun run build

@@ -1,114 +1,126 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireAuth } from "@/lib/project-auth";
+
+const VALID_PLATFORMS = new Set([
+  "youtube",
+  "tiktok",
+  "instagram",
+  "facebook",
+  "twitter",
+]);
 
 /**
- * GET /api/social/connections
- * Returns the current user's social platform connections.
+ * Return connection metadata only. OAuth access/refresh tokens are secrets and
+ * must never be serialized to a browser response.
  */
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const connections = await db.socialConnection.findMany({ where: { userId } });
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
+
+    const connections = await db.socialConnection.findMany({
+      where: { userId: auth.session.userId },
+      select: {
+        id: true,
+        platform: true,
+        accountId: true,
+        accountName: true,
+        tokenExpiresAt: true,
+        isConnected: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { platform: "asc" },
+    });
+
     return NextResponse.json({ success: true, connections });
   } catch (error) {
-    console.error("[social connections GET]", error);
-    return NextResponse.json({ success: false, error: "Failed to load connections" }, { status: 500 });
+    console.error(
+      "[social connections GET]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to load connections" },
+      { status: 500 }
+    );
   }
 }
 
 /**
- * POST /api/social/connections
- * Stub for OAuth connection flow. In production, this would redirect to the
- * platform's OAuth consent screen. For now, it marks a platform as connected
- * with placeholder data so the UI can be tested.
- * Body: { platform: string }
+ * Social OAuth is intentionally fail-closed until a real provider-specific
+ * OAuth callback/token exchange is implemented. Never create fake connected
+ * accounts in a production API.
  */
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const { platform } = await req.json();
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
-    const validPlatforms = ["youtube", "tiktok", "instagram", "facebook", "twitter"];
-    if (!validPlatforms.includes(platform)) {
-      return NextResponse.json({ success: false, error: "Invalid platform" }, { status: 400 });
-    }
-
-    // In production, this would redirect to OAuth:
-    //   YouTube: https://accounts.google.com/o/oauth2/auth?...
-    //   TikTok:  https://www.tiktok.com/auth/authorize?...
-    //   Instagram: https://api.instagram.com/oauth/authorize?...
-    // For now, create a mock connection so the UI works.
-    const existing = await db.socialConnection.findUnique({
-      where: { userId_platform: { userId, platform } },
-    });
-
-    if (existing) {
-      const updated = await db.socialConnection.update({
-        where: { id: existing.id },
-        data: {
-          isConnected: !existing.isConnected,
-          accountName: existing.isConnected ? null : `${session.user.name || "User"}'s ${platform}`,
-          accountId: existing.isConnected ? null : `mock_${platform}_${Date.now()}`,
-        },
-      });
-      return NextResponse.json({ success: true, connection: updated });
+    const body = await req.json().catch(() => ({}));
+    const platform = typeof body.platform === "string" ? body.platform : "";
+    if (!VALID_PLATFORMS.has(platform)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid platform" },
+        { status: 400 }
+      );
     }
 
-    const connection = await db.socialConnection.create({
-      data: {
-        userId,
-        platform,
-        isConnected: true,
-        accountName: `${session.user.name || "User"}'s ${platform}`,
-        accountId: `mock_${platform}_${Date.now()}`,
+    return NextResponse.json(
+      {
+        success: false,
+        error: `${platform} account connection is not available yet. Real OAuth integration must be configured before this feature can be enabled.`,
+        code: "SOCIAL_OAUTH_NOT_CONFIGURED",
       },
-    });
-
-    return NextResponse.json({
-      success: true,
-      connection,
-      note: "OAuth stub: In production, this would redirect to the platform's consent screen. Configure real OAuth credentials in .env to enable live publishing.",
-    });
+      { status: 501 }
+    );
   } catch (error) {
-    console.error("[social connections POST]", error);
-    return NextResponse.json({ success: false, error: "Failed to connect platform" }, { status: 500 });
+    console.error(
+      "[social connections POST]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to connect platform" },
+      { status: 500 }
+    );
   }
 }
 
-/**
- * DELETE /api/social/connections?platform=xxx
- * Disconnects a social platform.
- */
+/** Disconnect a platform and erase any stored provider credentials. */
 export async function DELETE(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: "Auth required" }, { status: 401 });
-    }
-    const userId = (session.user as Record<string, unknown>).id as string;
-    const platform = req.nextUrl.searchParams.get("platform");
-    if (!platform) {
-      return NextResponse.json({ success: false, error: "Platform required" }, { status: 400 });
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
+
+    const platform = req.nextUrl.searchParams.get("platform") || "";
+    if (!VALID_PLATFORMS.has(platform)) {
+      return NextResponse.json(
+        { success: false, error: "A valid platform is required" },
+        { status: 400 }
+      );
     }
 
     await db.socialConnection.updateMany({
-      where: { userId, platform },
-      data: { isConnected: false, accessToken: null, refreshToken: null, accountId: null, accountName: null },
+      where: { userId: auth.session.userId, platform },
+      data: {
+        isConnected: false,
+        accessToken: null,
+        refreshToken: null,
+        tokenExpiresAt: null,
+        accountId: null,
+        accountName: null,
+      },
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("[social connections DELETE]", error);
-    return NextResponse.json({ success: false, error: "Failed to disconnect" }, { status: 500 });
+    console.error(
+      "[social connections DELETE]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to disconnect" },
+      { status: 500 }
+    );
   }
 }

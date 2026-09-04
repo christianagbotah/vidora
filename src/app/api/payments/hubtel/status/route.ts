@@ -1,113 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { HubtelGateway } from "@/lib/payments";
-import { creditPurchase } from "@/lib/tokens";
+import { requireAuth } from "@/lib/project-auth";
+import { verifyAndSettleByReference } from "@/lib/payment-settlement";
 
 /**
- * Extract bonusTokens from payment metadata (stored at creation time).
- */
-function getBonusTokens(payment: { metadata: string | null }): number {
-  try {
-    if (payment.metadata) {
-      const meta = JSON.parse(payment.metadata);
-      return typeof meta.bonusTokens === "number" ? meta.bonusTokens : 0;
-    }
-  } catch { /* ignore */ }
-  return 0;
-}
-
-/**
- * Hubtel Transaction Status Check (Mandatory per Hubtel docs)
+ * GET /api/payments/hubtel/status?reference=xxx
  *
- * If a callback is NOT received within 5 minutes of initiating a transaction,
- * the merchant MUST call the Transaction Status Check API to determine the
- * final status.
- *
- * Endpoint: GET /api/payments/hubtel/status?reference=xxx
+ * Hubtel status checks are owner/admin-only and never mutate payment state
+ * directly. Provider verification and token crediting are delegated to the
+ * shared exactly-once settlement service.
  */
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const reference = searchParams.get("reference");
+    const auth = await requireAuth();
+    if (!auth.ok) return auth.response;
 
-    if (!reference) {
+    const reference = req.nextUrl.searchParams.get("reference")?.trim();
+    if (!reference || reference.length > 200) {
       return NextResponse.json(
-        { success: false, error: "reference query parameter is required" },
+        { success: false, error: "A valid reference query parameter is required" },
         { status: 400 }
       );
     }
 
-    // Find the payment record
-    const payment = await db.payment.findFirst({ where: { gatewayRef: reference } });
-
+    const payment = await db.payment.findFirst({
+      where: { gatewayRef: reference },
+      select: {
+        id: true,
+        userId: true,
+        status: true,
+        settledAt: true,
+        tokensPurchased: true,
+        bonusTokens: true,
+      },
+    });
     if (!payment) {
-      return NextResponse.json(
-        { success: false, error: "Payment record not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ success: false, error: "Payment record not found" }, { status: 404 });
     }
 
-    if (payment.status === "completed") {
-      const bonusTokens = getBonusTokens(payment);
-      return NextResponse.json({
-        success: true,
-        alreadyCompleted: true,
-        paymentId: payment.id,
-        tokensPurchased: payment.tokensPurchased + bonusTokens,
-        bonusTokens,
-        message: "Payment already completed and tokens credited.",
-      });
+    if (payment.userId !== auth.session.userId && auth.session.role !== "admin") {
+      return NextResponse.json({ success: false, error: "Not authorized" }, { status: 403 });
     }
 
-    // Call Hubtel status API
-    const gateway = new HubtelGateway();
-    const result = await gateway.verifyPayment(reference);
-
-    if (result.success && result.verified) {
-      const bonusTokens = getBonusTokens(payment);
-
-      // Payment confirmed — credit tokens
-      await db.payment.update({
-        where: { id: payment.id },
-        data: { status: "completed" },
-      });
-
-      const creditResult = await creditPurchase({
-        userId: payment.userId,
-        baseTokens: payment.tokensPurchased,
-        bonusTokens,
-        paymentId: payment.id,
-        description: `Purchased ${payment.tokensPurchased} tokens via Hubtel (status check)`,
-      });
-
+    if (payment.status === "completed" && payment.settledAt) {
       return NextResponse.json({
         success: true,
         verified: true,
+        alreadySettled: true,
         paymentId: payment.id,
-        tokensPurchased: payment.tokensPurchased + bonusTokens,
-        bonusTokens,
-        newBalance: creditResult.newBalance,
-        hubtelAmount: result.amount,
-        message: "Payment verified via status check. Tokens credited.",
+        tokensPurchased: payment.tokensPurchased + payment.bonusTokens,
       });
+    }
+
+    const result = await verifyAndSettleByReference(reference);
+    if (!result.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          verified: false,
+          paymentId: payment.id,
+          error: result.error,
+        },
+        { status: result.status }
+      );
     }
 
     return NextResponse.json({
       success: true,
-      verified: false,
+      verified: true,
       paymentId: payment.id,
-      currentStatus: payment.status,
-      error: result.error || "Payment not yet completed",
-      message: "Payment has not been completed yet. The customer may still be processing the payment.",
+      alreadySettled: result.alreadySettled,
+      tokensCredited: result.totalCredited,
+      newBalance: result.newBalance,
     });
   } catch (error) {
-    console.error("[Hubtel Status Check] Error:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Status check failed",
-      },
-      { status: 500 }
-    );
+    console.error("[Hubtel Status Check] Error:", error instanceof Error ? error.message : "unknown error");
+    return NextResponse.json({ success: false, error: "Status check failed" }, { status: 500 });
   }
 }

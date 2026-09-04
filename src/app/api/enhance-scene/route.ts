@@ -1,15 +1,11 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuth } from "@/lib/project-auth";
 import { zai, cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
+import { deductTokensForOperation } from "@/lib/tokens";
 
 export const runtime = "nodejs";
-
-/**
- * AI Director Mode — Enhance scene prompts with camera movements, lighting, mood, and cinematography.
- * This is what makes Vidora unique: AI-powered director-level control over every scene.
- */
 
 const CAMERA_MOVES = [
   "slow zoom in", "slow zoom out", "pan left", "pan right", "tracking shot",
@@ -30,30 +26,58 @@ const LIGHTING = [
 ];
 
 export async function POST(req: NextRequest) {
-  try {
-    const { prompt, sceneIndex, totalScenes, style, mood, cameraMove, lighting } = await req.json();
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
 
+  try {
+    const body = await req.json();
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     if (!prompt) {
-      return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Prompt is required" },
+        { status: 400 }
+      );
+    }
+    if (prompt.length > 4_000) {
+      return NextResponse.json(
+        { success: false, error: "Prompt is too long" },
+        { status: 413 }
+      );
+    }
+
+    const sceneIndex = Number.isFinite(Number(body.sceneIndex)) ? Number(body.sceneIndex) : 0;
+    const totalScenes = Number.isFinite(Number(body.totalScenes)) ? Math.max(1, Number(body.totalScenes)) : 1;
+    const style = typeof body.style === "string" ? body.style.slice(0, 100) : "cinematic";
+    const mood = typeof body.mood === "string" ? body.mood.slice(0, 100) : "";
+    const cameraMove = typeof body.cameraMove === "string" ? body.cameraMove.slice(0, 100) : "";
+    const lighting = typeof body.lighting === "string" ? body.lighting.slice(0, 100) : "";
+
+    const operationId = crypto.randomUUID();
+    const deduction = await deductTokensForOperation({
+      userId: authResult.session.userId,
+      operation: "llm",
+      description: `AI Director enhancement for scene ${sceneIndex + 1}`,
+      referenceId: operationId,
+      idempotencyKey: `enhance-scene:${operationId}`,
+    });
+    if (!deduction.success) {
+      return NextResponse.json(
+        { success: false, error: deduction.error || "Insufficient tokens" },
+        { status: 402 }
+      );
     }
 
     const systemPrompt = [
       "You are an elite AI Film Director and Cinematographer.",
-      "Your job is to enhance a scene description for AI video generation.",
-      "You add professional cinematographic details: camera movement, lighting, mood, framing.",
-      "",
-      "RULES:",
-      "- Keep the core visual content from the original prompt",
-      "- Add ONE specific camera movement",
-      "- Add specific lighting description",
-      "- Add mood/atmosphere through visual details",
-      "- Keep the prompt under 200 words",
-      "- Return ONLY the enhanced prompt text, no explanations, no quotes, no markdown",
+      "Enhance a scene description for AI video generation.",
+      "Keep the original visual content, add one camera movement, specific lighting and visual mood.",
+      "Keep the prompt under 200 words.",
+      "Return ONLY the enhanced prompt text, no explanations, quotes, or markdown.",
     ].join("\n");
 
     const userPrompt = [
       `Scene ${sceneIndex + 1} of ${totalScenes}`,
-      `Style: ${style || "cinematic"}`,
+      `Style: ${style}`,
       mood ? `Desired Mood: ${mood}` : "",
       cameraMove ? `Camera: ${cameraMove}` : "Camera: choose the best movement for this scene",
       lighting ? `Lighting: ${lighting}` : "Lighting: choose the best lighting for this scene",
@@ -68,24 +92,20 @@ export async function POST(req: NextRequest) {
       thinking: "disabled",
       retry: { label: "AI Director prompt enhancement", timeoutMs: 45_000, maxRetries: 3 },
     });
-
     const enhancedPrompt = cleanLLMOutput(raw) || prompt;
 
-    // AI also suggests the mood, camera, and lighting it chose
     let aiMood = mood || "cinematic";
     let aiCamera = cameraMove || "tracking shot";
     let aiLighting = lighting || "golden hour";
-
-    // Simple heuristic extraction from the enhanced prompt
     const lower = enhancedPrompt.toLowerCase();
-    for (const m of MOODS) {
-      if (lower.includes(m)) { aiMood = m; break; }
+    for (const value of MOODS) {
+      if (lower.includes(value)) { aiMood = value; break; }
     }
-    for (const c of CAMERA_MOVES) {
-      if (lower.includes(c)) { aiCamera = c; break; }
+    for (const value of CAMERA_MOVES) {
+      if (lower.includes(value)) { aiCamera = value; break; }
     }
-    for (const l of LIGHTING) {
-      if (lower.includes(l)) { aiLighting = l; break; }
+    for (const value of LIGHTING) {
+      if (lower.includes(value)) { aiLighting = value; break; }
     }
 
     return NextResponse.json({
@@ -94,11 +114,12 @@ export async function POST(req: NextRequest) {
       mood: aiMood,
       cameraMove: aiCamera,
       lighting: aiLighting,
+      tokensCharged: deduction.alreadyApplied ? 0 : 1,
+      remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    const session = await getServerSession(authOptions).catch(() => null);
     return zaiErrorResponse(error, {
-      session,
+      session: authResult.session,
       logLabel: "enhance-scene",
     });
   }

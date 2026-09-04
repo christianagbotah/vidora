@@ -1,24 +1,3 @@
-/**
- * ───────────────────────────────────────────────────────────────────────────
- *  Vidora — Token & Cost Management Service
- * ───────────────────────────────────────────────────────────────────────────
- *
- *  Handles the financial transactions of the app:
- *   • Check if a user has enough tokens for an operation
- *   • Atomically deduct tokens + record the real Z.ai cost
- *   • Credit tokens on purchase (with bonus)
- *   • Refund tokens on failed operations
- *
- *  Every spend creates a TokenTransaction with:
- *   - amount: negative (tokens deducted from user)
- *   - costUsd: the real Z.ai API cost (for profit analytics)
- *   - operationType: what kind of AI operation
- *
- *  This is the ONLY place that modifies user.tokens. All routes must
- *  go through here to ensure atomic, audited transactions.
- * ───────────────────────────────────────────────────────────────────────────
- */
-
 import { db } from "@/lib/db";
 import { PRICING, type OperationType } from "@/lib/pricing";
 
@@ -27,89 +6,96 @@ export interface DeductResult {
   error?: string;
   remainingTokens?: number;
   transactionId?: string;
+  alreadyApplied?: boolean;
 }
 
-/**
- * Check if a user has enough tokens for an operation.
- * Does NOT deduct — use `deductTokens` for that.
- */
 export async function checkTokens(userId: string, requiredTokens: number): Promise<{ hasEnough: boolean; balance: number }> {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: { tokens: true },
-  });
+  const user = await db.user.findUnique({ where: { id: userId }, select: { tokens: true } });
   if (!user) return { hasEnough: false, balance: 0 };
   return { hasEnough: user.tokens >= requiredTokens, balance: user.tokens };
 }
 
 /**
- * Atomically deduct tokens for an AI operation and record the real cost.
+ * Serialize all balance mutations for one user on the real database row.
  *
- * This uses a Prisma transaction to ensure:
- *  1. The balance check and deduction happen atomically (no race condition)
- *  2. The TokenTransaction is created in the same transaction
- *
- * @param userId The user spending tokens
- * @param operation What kind of AI operation (determines cost)
- * @param description Human-readable description for the transaction log
- * @param referenceId Project ID or other reference
- * @param customTokens Override the token cost (for operations with variable cost)
- * @param customCostUsd Override the real cost (if you know the exact Z.ai charge)
+ * Using SELECT ... FOR UPDATE avoids the Prisma deserialization problem that
+ * pg_advisory_xact_lock() caused (it returns PostgreSQL void), and it keeps
+ * the lock scoped to this transaction. The unique idempotencyKey constraint
+ * remains a second, independent exactly-once guard.
  */
+async function lockUser(tx: any, userId: string): Promise<void> {
+  const rows = await tx.$queryRaw`
+    SELECT "id"
+    FROM "User"
+    WHERE "id" = ${userId}
+    FOR UPDATE
+  ` as Array<{ id: string }>;
+  if (rows.length !== 1) {
+    throw new Error("User not found");
+  }
+}
+
 export async function deductTokensForOperation(opts: {
   userId: string;
   operation: OperationType;
   description: string;
   referenceId?: string;
+  idempotencyKey?: string;
   customTokens?: number;
   customCostUsd?: number;
 }): Promise<DeductResult> {
   const pricing = PRICING[opts.operation];
   const tokensToDeduct = opts.customTokens ?? pricing.tokens;
   const costUsd = opts.customCostUsd ?? pricing.costUsd;
-
-  // Free operations (like prompt_enhance) don't deduct but still record cost
-  if (tokensToDeduct === 0) {
-    // Record the cost for analytics even on free operations
-    await db.tokenTransaction.create({
-      data: {
-        userId: opts.userId,
-        type: "spend",
-        amount: 0,
-        description: opts.description,
-        referenceId: opts.referenceId,
-        costUsd,
-        operationType: opts.operation,
-      },
-    });
-    const user = await db.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
-    return { success: true, remainingTokens: user?.tokens ?? 0 };
+  if (!Number.isSafeInteger(tokensToDeduct) || tokensToDeduct < 0) {
+    return { success: false, error: "Invalid token charge" };
   }
 
   try {
     const result = await db.$transaction(async (tx) => {
-      // Lock the user row and check balance
-      const user = await tx.user.findUnique({
-        where: { id: opts.userId },
-        select: { tokens: true },
-      });
+      await lockUser(tx, opts.userId);
 
-      if (!user) {
-        throw new Error("User not found");
+      if (opts.idempotencyKey) {
+        const existing = await tx.tokenTransaction.findUnique({
+          where: { idempotencyKey: opts.idempotencyKey },
+          select: { id: true, userId: true, amount: true },
+        });
+        if (existing) {
+          if (existing.userId !== opts.userId || existing.amount !== -tokensToDeduct) {
+            throw new Error("Idempotency key was already used for a different token operation");
+          }
+          const user = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
+          return { remainingTokens: user?.tokens ?? 0, transactionId: existing.id, alreadyApplied: true };
+        }
       }
 
-      if (user.tokens < tokensToDeduct) {
-        throw new Error(`Insufficient tokens. Need ${tokensToDeduct}, have ${user.tokens}`);
+      if (tokensToDeduct === 0) {
+        const transaction = await tx.tokenTransaction.create({
+          data: {
+            userId: opts.userId,
+            type: "spend",
+            amount: 0,
+            description: opts.description,
+            referenceId: opts.referenceId,
+            idempotencyKey: opts.idempotencyKey,
+            costUsd,
+            operationType: opts.operation,
+          },
+        });
+        const user = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
+        return { remainingTokens: user?.tokens ?? 0, transactionId: transaction.id, alreadyApplied: false };
       }
 
-      // Deduct tokens
-      const updated = await tx.user.update({
-        where: { id: opts.userId },
+      const changed = await tx.user.updateMany({
+        where: { id: opts.userId, tokens: { gte: tokensToDeduct } },
         data: { tokens: { decrement: tokensToDeduct } },
-        select: { tokens: true },
       });
+      if (changed.count !== 1) {
+        const user = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
+        throw new Error(`Insufficient tokens. Need ${tokensToDeduct}, have ${user?.tokens ?? 0}`);
+      }
 
-      // Record the transaction with real cost
+      const updated = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
       const transaction = await tx.tokenTransaction.create({
         data: {
           userId: opts.userId,
@@ -117,44 +103,56 @@ export async function deductTokensForOperation(opts: {
           amount: -tokensToDeduct,
           description: opts.description,
           referenceId: opts.referenceId,
+          idempotencyKey: opts.idempotencyKey,
           costUsd,
           operationType: opts.operation,
         },
       });
-
-      return { remainingTokens: updated.tokens, transactionId: transaction.id };
+      return { remainingTokens: updated?.tokens ?? 0, transactionId: transaction.id, alreadyApplied: false };
     });
 
-    return {
-      success: true,
-      remainingTokens: result.remainingTokens,
-      transactionId: result.transactionId,
-    };
+    return { success: true, ...result };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Token deduction failed";
-    return { success: false, error: message };
+    return { success: false, error: err instanceof Error ? err.message : "Token deduction failed" };
   }
 }
 
-/**
- * Refund tokens for a failed operation (e.g., video generation failed).
- * This credits the tokens back AND records the refund transaction.
- */
 export async function refundTokens(opts: {
   userId: string;
   amount: number;
   description: string;
   referenceId?: string;
   operation: OperationType;
+  idempotencyKey?: string;
+  relatedTransactionId?: string;
 }): Promise<DeductResult> {
+  if (!Number.isSafeInteger(opts.amount) || opts.amount <= 0) {
+    return { success: false, error: "Invalid refund amount" };
+  }
+
   try {
     const result = await db.$transaction(async (tx) => {
+      await lockUser(tx, opts.userId);
+
+      if (opts.idempotencyKey) {
+        const existing = await tx.tokenTransaction.findUnique({
+          where: { idempotencyKey: opts.idempotencyKey },
+          select: { id: true, userId: true, amount: true },
+        });
+        if (existing) {
+          if (existing.userId !== opts.userId || existing.amount !== opts.amount) {
+            throw new Error("Idempotency key was already used for a different refund");
+          }
+          const user = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
+          return { remainingTokens: user?.tokens ?? 0, transactionId: existing.id, alreadyApplied: true };
+        }
+      }
+
       const updated = await tx.user.update({
         where: { id: opts.userId },
         data: { tokens: { increment: opts.amount } },
         select: { tokens: true },
       });
-
       const transaction = await tx.tokenTransaction.create({
         data: {
           userId: opts.userId,
@@ -162,27 +160,24 @@ export async function refundTokens(opts: {
           amount: opts.amount,
           description: opts.description,
           referenceId: opts.referenceId,
+          idempotencyKey: opts.idempotencyKey,
+          relatedTransactionId: opts.relatedTransactionId,
           operationType: opts.operation,
         },
       });
-
-      return { remainingTokens: updated.tokens, transactionId: transaction.id };
+      return { remainingTokens: updated.tokens, transactionId: transaction.id, alreadyApplied: false };
     });
 
-    return {
-      success: true,
-      remainingTokens: result.remainingTokens,
-      transactionId: result.transactionId,
-    };
+    return { success: true, ...result };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Token refund failed";
-    return { success: false, error: message };
+    return { success: false, error: err instanceof Error ? err.message : "Token refund failed" };
   }
 }
 
 /**
- * Credit tokens to a user after a successful purchase.
- * Handles bonus tokens (e.g., 20% extra on larger packages).
+ * Legacy purchase helper retained for non-payment callers. Payment gateway
+ * settlement uses payment-settlement.ts so completion + ledger + balance are
+ * one exactly-once transaction.
  */
 export async function creditPurchase(opts: {
   userId: string;
@@ -192,15 +187,20 @@ export async function creditPurchase(opts: {
   description: string;
 }): Promise<{ totalCredited: number; newBalance: number }> {
   const totalTokens = opts.baseTokens + opts.bonusTokens;
-
   const result = await db.$transaction(async (tx) => {
+    await lockUser(tx, opts.userId);
+    const baseKey = `legacy-payment:${opts.paymentId}:purchase`;
+    const existing = await tx.tokenTransaction.findUnique({ where: { idempotencyKey: baseKey } });
+    if (existing) {
+      const user = await tx.user.findUnique({ where: { id: opts.userId }, select: { tokens: true } });
+      return user?.tokens ?? 0;
+    }
+
     const updated = await tx.user.update({
       where: { id: opts.userId },
       data: { tokens: { increment: totalTokens } },
       select: { tokens: true },
     });
-
-    // Record base purchase
     if (opts.baseTokens > 0) {
       await tx.tokenTransaction.create({
         data: {
@@ -209,27 +209,25 @@ export async function creditPurchase(opts: {
           amount: opts.baseTokens,
           description: opts.description,
           referenceId: opts.paymentId,
-          operationType: "purchase" as OperationType,
+          idempotencyKey: baseKey,
+          operationType: "purchase",
         },
       });
     }
-
-    // Record bonus separately (for analytics)
     if (opts.bonusTokens > 0) {
       await tx.tokenTransaction.create({
         data: {
           userId: opts.userId,
           type: "bonus",
           amount: opts.bonusTokens,
-          description: `Bonus tokens (${Math.round((opts.bonusTokens / opts.baseTokens) * 100)}% extra)`,
+          description: `Bonus tokens: ${opts.bonusTokens}`,
           referenceId: opts.paymentId,
-          operationType: "purchase" as OperationType,
+          idempotencyKey: `legacy-payment:${opts.paymentId}:bonus`,
+          operationType: "purchase",
         },
       });
     }
-
     return updated.tokens;
   });
-
   return { totalCredited: totalTokens, newBalance: result };
 }

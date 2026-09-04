@@ -1851,8 +1851,8 @@ function VidoraApp() {
   );
 
   /* ── Admin State ── */
-  const [adminUsers, setAdminUsers] = useState<unknown[]>([]);
-  const [adminPayments, setAdminPayments] = useState<unknown[]>([]);
+  const [adminUsers, setAdminUsers] = useState<Record<string, unknown>[]>([]);
+  const [adminPayments, setAdminPayments] = useState<Record<string, unknown>[]>([]);
   const [adminAnalytics, setAdminAnalytics] = useState<Record<string, unknown> | null>(null);
   const [adminConfigs, setAdminConfigs] = useState<Record<string, { value: string; description: string }>>({});
   // configForm is the editable working copy — separate from adminConfigs (loaded snapshot)
@@ -1909,7 +1909,7 @@ function VidoraApp() {
   const [resettingStorefrontPlans, setResettingStorefrontPlans] = useState(false);
 
   /* ── Payment State ── */
-  const [tokenPackages, setTokenPackages] = useState<unknown[]>([]);
+  const [tokenPackages, setTokenPackages] = useState<AdminTokenPackage[]>([]);
   const [buyTokensModalOpen, setBuyTokensModalOpen] = useState(false);
 
   /* ── Dashboard / Profile State ── */
@@ -3378,11 +3378,12 @@ function VidoraApp() {
       const project = projData.project;
 
       // Step 2: Create scenes
-      const scenesToCreate = parsedScenes.length > 0 ? parsedScenes : [{
+      const scenesToCreate: ParsedSceneResult[] = parsedScenes.length > 0 ? parsedScenes : [{
         prompt: enhancedText || text,
         title: projectTitle || null,
         dialogue: null,
         characterNames: undefined,
+        visualNote: null,
       }];
 
       for (let i = 0; i < scenesToCreate.length; i++) {
@@ -7456,7 +7457,7 @@ function VidoraApp() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-                {tokenPackages.map((pkg: Record<string, unknown>) => (
+                {tokenPackages.map((pkg: AdminTokenPackage) => (
                   <Card
                     key={pkg.id as string}
                     className={`relative border-2 transition-all hover:shadow-lg ${
@@ -8449,15 +8450,15 @@ function VidoraApp() {
                             <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
                               <span className="flex items-center gap-1">
                                 <BarChart2 className="h-3 w-3 text-violet-500" />
-                                Total operations: <strong className="text-slate-700">{(apiCosts.historical as Record<string, unknown>).totalOperations}</strong>
+                                Total operations: <strong className="text-slate-700">{String((apiCosts.historical as Record<string, unknown>).totalOperations ?? 0)}</strong>
                               </span>
                               <span className="flex items-center gap-1">
                                 <DollarSign className="h-3 w-3 text-rose-500" />
-                                Total Z.ai cost: <strong className="text-rose-600">${(apiCosts.historical as Record<string, unknown>).totalCostUsd}</strong>
+                                Total Z.ai cost: <strong className="text-rose-600">${String((apiCosts.historical as Record<string, unknown>).totalCostUsd ?? 0)}</strong>
                               </span>
                               <span className="flex items-center gap-1">
                                 <Coins className="h-3 w-3 text-amber-500" />
-                                Total tokens spent: <strong className="text-slate-700">{(apiCosts.historical as Record<string, unknown>).totalTokensSpent}</strong>
+                                Total tokens spent: <strong className="text-slate-700">{String((apiCosts.historical as Record<string, unknown>).totalTokensSpent ?? 0)}</strong>
                               </span>
                             </div>
                           )}
@@ -9475,7 +9476,7 @@ function VidoraApp() {
                                   {new Date(p.createdAt as string).toLocaleDateString()}
                                 </td>
                                 <td className="py-2 pr-3 truncate max-w-[150px]">
-                                  {(p.user as Record<string, unknown>)?.name || (p.user as Record<string, unknown>)?.email || "-"}
+                                  {String((p.user as Record<string, unknown>)?.name || (p.user as Record<string, unknown>)?.email || "-")}
                                 </td>
                                 <td className="py-2 pr-3 capitalize text-xs">{p.gateway as string}</td>
                                 <td className="py-2 pr-3 font-semibold">GH₵{p.amount as number}</td>
@@ -10891,7 +10892,7 @@ function VidoraApp() {
                       {(previewStoryboard.scenes as Array<Record<string, unknown>>).map((scene, i) => (
                         <div key={i} className="rounded-lg bg-white border border-slate-100 p-3">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-bold text-violet-600">Scene {scene.sceneNumber ?? i + 1}</span>
+                            <span className="text-xs font-bold text-violet-600">Scene {String(scene.sceneNumber ?? i + 1)}</span>
                             <div className="flex gap-2 text-[10px] text-muted-foreground">
                               {typeof scene.shotType === "string" && <Badge variant="outline" className="text-[10px] py-0"><Camera className="h-2.5 w-2.5 mr-0.5" />{scene.shotType}</Badge>}
                               {typeof scene.durationSec === "number" && <Badge variant="outline" className="text-[10px] py-0"><Timer className="h-2.5 w-2.5 mr-0.5" />{scene.durationSec}s</Badge>}
@@ -11031,7 +11032,7 @@ function VidoraApp() {
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             {tokenPackages.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {tokenPackages.map((pkg: Record<string, unknown>) => (
+                {tokenPackages.map((pkg: AdminTokenPackage) => (
                   <Card
                     key={pkg.id as string}
                     className={`relative overflow-hidden transition-all ${
@@ -11421,9 +11422,6 @@ function VidoraApp() {
               Everything you need to create AI-powered videos with Vidora.
             </DialogDescription>
           </DialogHeader>
-          {/* Plain overflow div: Radix ScrollArea viewport (height:100%)
-              cannot resolve against a flex-resolved parent height in this
-              environment — this div scrolls itself, no percentage chain. */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-4 -mr-4">
             <div className="space-y-5 text-sm">
               <section>
@@ -11511,7 +11509,6 @@ function VidoraApp() {
               REST endpoints for projects, scenes, and AI generation. All routes are relative to your deployment origin.
             </DialogDescription>
           </DialogHeader>
-          {/* See docs dialog note — self-scrolling div instead of ScrollArea */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-4 -mr-4">
             <div className="space-y-4 text-sm font-mono">
               {[

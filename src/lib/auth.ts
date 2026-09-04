@@ -3,9 +3,30 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 
+function productionSecret(): string {
+  const secret = process.env.NEXTAUTH_SECRET?.trim();
+  if (!secret) {
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[auth] NEXTAUTH_SECRET not set — using dev-only fallback");
+      return "vidora-dev-secret-do-not-use-in-production";
+    }
+    throw new Error("FATAL: NEXTAUTH_SECRET is required in production");
+  }
+  if (process.env.NODE_ENV === "production") {
+    const forbidden = new Set([
+      "vidora-secret-change-in-production-2024",
+      "vidora-dev-secret-do-not-use-in-production",
+      "change-me",
+      "changeme",
+    ]);
+    if (secret.length < 32 || forbidden.has(secret)) {
+      throw new Error("FATAL: NEXTAUTH_SECRET is weak or is a known example/default value");
+    }
+  }
+  return secret;
+}
+
 export const authOptions: NextAuthOptions = {
-  // Required for proxied/reverse-proxy deployments (Caddy, Nginx)
-  trustHost: true,
   providers: [
     CredentialsProvider({
       name: "credentials",
@@ -15,21 +36,10 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
-
-        const user = await db.user.findUnique({
-          where: { email: credentials.email as string },
-        });
-
-        if (!user || !user.password) return null;
-        if (!user.isActive) return null;
-
-        const isValid = await bcrypt.compare(
-          credentials.password as string,
-          user.password
-        );
-
-        if (!isValid) return null;
-
+        const email = String(credentials.email).trim().toLowerCase();
+        const user = await db.user.findUnique({ where: { email } });
+        if (!user?.password || !user.isActive) return null;
+        if (!(await bcrypt.compare(String(credentials.password), user.password))) return null;
         return {
           id: user.id,
           email: user.email,
@@ -37,7 +47,8 @@ export const authOptions: NextAuthOptions = {
           role: user.role,
           tokens: user.tokens,
           image: user.image,
-        } as NextAuthUser & { role: string; tokens: number };
+          sessionVersion: user.sessionVersion,
+        } as NextAuthUser & { role: string; tokens: number; sessionVersion: number };
       },
     }),
   ],
@@ -47,67 +58,36 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.role = (user as NextAuthUser & { role: string }).role;
         token.tokens = (user as NextAuthUser & { tokens: number }).tokens;
+        token.sessionVersion = (user as NextAuthUser & { sessionVersion: number }).sessionVersion;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as Record<string, unknown>).id = token.id;
-        (session.user as Record<string, unknown>).role = token.role;
-        (session.user as Record<string, unknown>).tokens = token.tokens;
+        const target = session.user as Record<string, unknown>;
+        target.id = token.id;
+        target.role = token.role;
+        target.tokens = token.tokens;
+        target.sessionVersion = token.sessionVersion;
       }
       return session;
     },
   },
-  pages: {
-    signIn: "/?auth=login",
-  },
-  session: {
-    strategy: "jwt",
-  },
-  // Force cookie settings that work in proxied environments
+  pages: { signIn: "/?auth=login" },
+  session: { strategy: "jwt" },
   cookies: {
     sessionToken: {
       name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.session-token`,
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        secure: process.env.NEXTAUTH_URL?.startsWith("https") ?? false,
-      },
+      options: { httpOnly: true, sameSite: "lax", path: "/", secure: process.env.NEXTAUTH_URL?.startsWith("https") ?? false },
     },
     callbackUrl: {
       name: "next-auth.callback-url",
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-      },
+      options: { httpOnly: true, sameSite: "lax", path: "/" },
     },
     csrfToken: {
       name: `${process.env.NEXTAUTH_URL?.startsWith("https") ? "__Secure-" : ""}next-auth.csrf-token`,
-      options: {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-      },
+      options: { httpOnly: true, sameSite: "lax", path: "/" },
     },
   },
-  secret: (() => {
-    const s = process.env.NEXTAUTH_SECRET;
-    if (!s) {
-      if (process.env.NODE_ENV === "development") {
-        console.warn(
-          "[auth] NEXTAUTH_SECRET not set — using dev-only fallback. " +
-          "NEVER use this fallback in production."
-        );
-        return "vidora-dev-secret-do-not-use-in-production";
-      }
-      throw new Error(
-        "FATAL: NEXTAUTH_SECRET environment variable is required in production. " +
-        "Generate one with: openssl rand -base64 32"
-      );
-    }
-    return s;
-  })(),
+  secret: productionSecret(),
 };

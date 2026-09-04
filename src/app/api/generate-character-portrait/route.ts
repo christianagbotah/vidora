@@ -1,15 +1,14 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { generateImage } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
+import { deductTokensForOperation } from "@/lib/tokens";
 import { portraitImageSizeForAspect } from "@/lib/image-prompt";
 import { taskStore } from "./task-store";
 
 export const runtime = "nodejs";
 
-/**
- * Build a vivid portrait prompt from character info.
- */
 function buildPortraitPrompt(name: string, description: string, role?: string, style?: string): string {
   return [
     description || `A character named ${name}`,
@@ -27,27 +26,17 @@ function buildPortraitPrompt(name: string, description: string, role?: string, s
   ].join(", ");
 }
 
-/**
- * POST /api/generate-character-portrait
- *
- * Starts portrait generation in the background and returns a taskId
- * immediately. This avoids gateway timeouts on slow AI calls (30-120s).
- * Client should poll GET /api/generate-character-portrait/status?taskId=xxx
- * for the result.
- *
- * Body: { name, description, role, style, aspectRatio }
- *   aspectRatio — the wizard's selected project aspect ("16:9", "9:16", …).
- *   The portrait is generated at the MATCHING orientation so it can be used
- *   as an image-to-video reference without flipping the video's orientation.
- * Returns: { success: true, taskId: string }
- */
 export async function POST(req: NextRequest) {
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
 
   try {
     const body = await req.json();
-    const { name, description, role, style, aspectRatio } = body;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const role = typeof body.role === "string" ? body.role : undefined;
+    const style = typeof body.style === "string" ? body.style : undefined;
+    const aspectRatio = typeof body.aspectRatio === "string" ? body.aspectRatio : undefined;
 
     if (!name) {
       return NextResponse.json(
@@ -55,15 +44,36 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    if (name.length > 120 || description.length > 4_000) {
+      return NextResponse.json(
+        { success: false, error: "Character input is too long" },
+        { status: 413 }
+      );
+    }
 
-    // Create a task and start generation in background
     const taskId = crypto.randomUUID();
     const prompt = buildPortraitPrompt(name, description, role, style);
+    const deduction = await deductTokensForOperation({
+      userId: authResult.session.userId,
+      operation: "image_gen",
+      description: `Generate character portrait: ${name}`,
+      referenceId: taskId,
+      idempotencyKey: `portrait:${taskId}:image`,
+    });
+    if (!deduction.success) {
+      return NextResponse.json(
+        { success: false, error: deduction.error || "Insufficient tokens" },
+        { status: 402 }
+      );
+    }
 
-    taskStore.set(taskId, { status: "generating", createdAt: Date.now() });
+    taskStore.set(taskId, {
+      userId: authResult.session.userId,
+      status: "generating",
+      createdAt: Date.now(),
+    });
 
-    // Fire-and-forget: generation runs in the background, avoids gateway timeout
-    (async () => {
+    void (async () => {
       try {
         const base64 = await generateImage({
           prompt,
@@ -83,17 +93,29 @@ export async function POST(req: NextRequest) {
         const task = taskStore.get(taskId);
         if (task) {
           task.status = "failed";
-          task.error = error instanceof Error ? error.message : "Unknown generation error";
+          task.error = "Portrait generation failed";
         }
-        console.error(`[character-portrait] Task ${taskId} failed for ${name}:`, error);
+        // No automatic refund: provider failures/timeouts can be ambiguous.
+        console.error(
+          `[character-portrait] Task ${taskId} failed:`,
+          error instanceof Error ? error.message : "unknown error"
+        );
       }
     })();
 
-    return NextResponse.json({ success: true, taskId });
+    return NextResponse.json({
+      success: true,
+      taskId,
+      tokensCharged: deduction.alreadyApplied ? 0 : 1,
+      remainingTokens: deduction.remainingTokens,
+    });
   } catch (error) {
-    console.error("[character-portrait] Failed to start generation:", error);
+    console.error(
+      "[character-portrait] Failed to start generation:",
+      error instanceof Error ? error.message : "unknown error"
+    );
     return zaiErrorResponse(error, {
-      session: authResult.ok ? authResult.session : null,
+      session: authResult.session,
       logLabel: "character-portrait-standalone",
     });
   }

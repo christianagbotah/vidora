@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 node_modules
 /.pnp
@@ -16,8 +14,6 @@ node_modules
 # next.js
 /.next/
 /out/
-
-# production
 /build
 
 # misc
@@ -42,7 +38,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 local-*
-# keep the local-db-push helper script tracked (it's a dev tool, not a secret)
 !scripts/local-db-push.sh
 
 # AI/Sandbox configs
@@ -61,16 +56,15 @@ server.log
 # Vidora-specific ignores
 /db/
 /tool-results/
-/tests/
 /examples/
-/screenshots/
+screenshots/
 /download/
 /write_page.py
 
-# Local PostgreSQL data directory (environment-specific, not source code)
+# Local PostgreSQL data directory
 /pgdata/
 
-# Test screenshots and generated assets (too large for git)
+# Test screenshots and generated assets
 screenshot*.png
 homepage.png
 create-page.png
@@ -79,10 +73,11 @@ enhance-toast.png
 *-result.png
 *-toast.png
 
-# AI generated images/videos (regenerated at runtime)
+# Runtime/generated media
 /public/generated/
+/generated-store/
 
-# Mini services (if any)
+# Mini services
 /mini-services/
 
 # Auto-commit script log
@@ -90,8 +85,5 @@ enhance-toast.png
 ~/.github_token
 prisma/schema.prisma.postgres-backup
 
-# Persistent generated-media store (runtime artifacts, survives rebuilds)
-/generated-store/
-
-# agent scratch (local testing only)
+# agent scratch
 .scratch/

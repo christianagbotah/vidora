@@ -1,52 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
-// Next.js 16 "proxy" file convention (replaces the deprecated middleware.ts).
+// Next.js 16 "proxy" file convention (replaces middleware.ts).
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // ── Public page routes (no auth needed) ──
   if (pathname === "/") return NextResponse.next();
 
-  // ── Public API routes ──
   const publicApiPrefixes = [
-    "/api/auth/register",      // registration
-    "/api/auth/forgot-password", // password reset request
-    "/api/auth/reset-password",  // password reset execution
-    "/api/auth/",               // nextauth core (csrf, session, callback, etc.)
-    "/api/payments/webhook",    // payment gateway callbacks
-    "/api/payments/packages",   // list packages (needed before login)
-    "/api/payments/verify",     // paystack client-side verify
-    "/api/storefront/pricing",  // public storefront pricing (currency + plans + engine prices)
-    "/api/demo/",               // demo templates + create
-    "/api/templates",           // template listing
-    "/api/share/",              // public shared project view
-    "/api/music/tracks",        // music library listing
-    "/api/contact",             // contact form
-    "/api/ai/health",           // health check
-    "/api/audio/",              // audio file serving
-    "/api/preview/image/",      // preview images
+    "/api/auth/register",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/auth/",
+    "/api/payments/webhook",
+    "/api/payments/packages",
+    "/api/payments/verify",
+    "/api/storefront/pricing",
+    "/api/demo/",
+    "/api/templates",
+    "/api/share/",
+    "/api/music/tracks",
+    "/api/contact",
+    "/api/ai/health",
+    "/api/audio/",
   ];
 
-  if (publicApiPrefixes.some((p) => pathname.startsWith(p))) {
+  if (publicApiPrefixes.some((prefix) => pathname.startsWith(prefix))) {
     return NextResponse.next();
   }
 
-  // ── Protected routes: check session cookie ──
-  // We verify the cookie EXISTS at the edge (fast).  The actual JWT
-  // validation + role checks happen in each API route via requireAuth().
-  // This prevents unauthenticated requests from even reaching the app.
-  const token =
-    req.cookies.get("next-auth.session-token")?.value ||
-    req.cookies.get("__Secure-next-auth.session-token")?.value;
+  const secret = process.env.NEXTAUTH_SECRET?.trim();
+  if (!secret) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { success: false, error: "Authentication service is not configured" },
+        { status: 503 }
+      );
+    }
+    return NextResponse.next();
+  }
 
-  if (!token) {
+  // A cookie's mere presence is not authentication. Decode and verify the JWT
+  // signature at the proxy boundary, then let route-level helpers revalidate
+  // ownership, account state, role, and sessionVersion against PostgreSQL.
+  let token: Awaited<ReturnType<typeof getToken>> = null;
+  try {
+    token = await getToken({
+      req,
+      secret,
+      secureCookie: req.nextUrl.protocol === "https:",
+    });
+  } catch {
+    token = null;
+  }
+
+  if (!token || typeof token.id !== "string" || !token.id) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
         { success: false, error: "Authentication required" },
         { status: 401 }
       );
     }
-    // Page routes: let the client handle it (shows Sign In dialog)
     return NextResponse.next();
   }
 
