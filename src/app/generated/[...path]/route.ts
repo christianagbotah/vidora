@@ -24,12 +24,10 @@ const MIME: Record<string, string> = {
 type MediaAccess = { allowed: boolean; publicCache: boolean };
 
 async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
-  // Watermarked previews are deliberately public acquisition assets.
   if (rel.startsWith("previews/")) {
     return { allowed: true, publicCache: true };
   }
 
-  // Standalone generated assets are stored under users/<ownerId>/... .
   if (rel.startsWith("users/")) {
     const ownerId = rel.split("/")[1] || "";
     const auth = await requireAuth();
@@ -71,8 +69,6 @@ async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
     return { allowed: access.ok, publicCache: false };
   }
 
-  // Brand assets can also live in the generated store. They are private to
-  // their owner unless intentionally copied into an explicitly public project.
   const brand = await db.brandKit.findFirst({
     where: { logoUrl: mediaUrl },
     select: { userId: true },
@@ -86,8 +82,6 @@ async function authorizeGeneratedMedia(rel: string): Promise<MediaAccess> {
     };
   }
 
-  // Fail closed for orphaned/legacy generated files. Knowing a filename is not
-  // proof of authorization.
   return { allowed: false, publicCache: false };
 }
 
@@ -106,7 +100,6 @@ export async function GET(
 
   const access = await authorizeGeneratedMedia(rel);
   if (!access.allowed) {
-    // A 404 avoids confirming whether a private generated object exists.
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -147,7 +140,8 @@ export async function GET(
       end = Math.min(total - 1, end);
 
       const chunk = buffer.subarray(start, end + 1);
-      return new NextResponse(chunk, {
+      const responseChunk = Uint8Array.from(chunk);
+      return new NextResponse(responseChunk, {
         status: 206,
         headers: {
           ...baseHeaders,
@@ -158,7 +152,8 @@ export async function GET(
     }
   }
 
-  return new NextResponse(buffer, {
+  const responseBody = Uint8Array.from(buffer);
+  return new NextResponse(responseBody, {
     status: 200,
     headers: {
       ...baseHeaders,
