@@ -2903,3 +2903,22 @@ Stage Summary:
 - COGS records (costUsd in TokenTransaction) now track REAL Z.ai costs from the verified catalog
 - Token packages sized to buy whole videos (Basic = one full 45–60s birthday video)
 - split-scenes celebration pipeline verified end-to-end
+
+---
+Task ID: 10
+Agent: main
+Task: Commit all work and generate a comprehensive app report (README.md) for senior architect review on GitHub
+
+Work Log:
+- Verified repo state: working tree clean, all prior tasks (incl. Task 9 pricing audit + split-scenes wiring) already committed and pushed at 68a01ad
+- Surveyed codebase for report accuracy: 83 API route files, 21 Prisma models, ~38,300 LOC in src/, page.tsx = 11,645 lines, 8 AppViews + /share/[slug] + /generated/[...path]
+- Verified key facts before writing: deploy.sh + ecosystem.config.js (PM2 :3004, HOSTNAME 0.0.0.0), Caddyfile sandbox gateway, nginx-proxy.conf (Webuzo 300s timeouts), verified Z.ai price sheet in pricing.ts, 5-engine catalog, token ledger design (costUsd COGS tracking), payment webhook signature verification (Paystack HMAC + Stripe), social publishing = mocked (grep confirmed mock URLs)
+- Wrote 572-line README.md: executive summary, product walkthrough, tech stack, prod/sandbox architecture diagrams, data model tables, full API surface grouped by domain, AI pipeline deep-dive (script intelligence → portraits → scene gen → audio → export), Z.ai integration layer, token economics with worked margin example (~38% on a 6-scene video), security model, storage strategy, deployment topology, reliability patterns, honest risk assessment (top 10), pre-deployment checklist, phased roadmap, key-file map + verified price sheet appendices
+- Ran lint: 0 errors (1 pre-existing warning in .scratch)
+- Browser-verified via agent-browser: homepage loads (title "Vidora — Professional AI Video Creator"), wizard/template cards/tabs render, zero console/page errors; dev.log clean
+- Committed 9a7f7a0 "docs: comprehensive architecture & product report (README.md) for senior review" and pushed to origin/main
+
+Stage Summary:
+- README.md now serves as the repo landing page on GitHub — auto-rendered for the senior architect
+- Report includes honest limitations (monolithic page.tsx, in-memory locks, no test suite, mocked social publish, TTS price estimated) and a concrete pre-deploy checklist
+- Repo state: main @ 9a7f7a0, clean tree, pushed

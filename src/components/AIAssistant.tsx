@@ -15,7 +15,7 @@ interface ChatMessage {
 const GREETING: ChatMessage = {
   role: "assistant",
   content:
-    "👋 Hi! I'm the Vidora AI Assistant. Ask me anything about creating videos, features, pricing, or how to get started.",
+    "👋 Hi! I'm the Vidora Studio Assistant. Ask me anything about creating videos, features, pricing, or how to get started.",
 };
 
 const SUGGESTIONS = [
