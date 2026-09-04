@@ -27,6 +27,8 @@ required_env=(
   NEXTAUTH_SECRET
   NEXT_PUBLIC_BASE_URL
   CONFIG_ENCRYPTION_KEY
+  ZAI_BASE_URL
+  ZAI_API_KEY
   GENERATED_DIR
   BACKUP_DIR
 )
@@ -43,6 +45,14 @@ if [[ ${#NEXTAUTH_SECRET} -lt 32 ]] || [[ "$NEXTAUTH_SECRET" == *"CHANGE_ME"* ]]
 fi
 if [[ ! "$CONFIG_ENCRYPTION_KEY" =~ ^[A-Fa-f0-9]{64}$ ]] && [[ ${#CONFIG_ENCRYPTION_KEY} -lt 43 ]]; then
   echo "FATAL: CONFIG_ENCRYPTION_KEY must represent 32 random bytes"
+  exit 1
+fi
+if [[ ${#ZAI_API_KEY} -lt 16 ]] || [[ "$ZAI_API_KEY" == *"CHANGE_ME"* ]]; then
+  echo "FATAL: ZAI_API_KEY is missing, weak, or a placeholder"
+  exit 1
+fi
+if [[ "$ZAI_BASE_URL" != https://* ]]; then
+  echo "FATAL: ZAI_BASE_URL must use https:// in production"
   exit 1
 fi
 if [[ "$GENERATED_DIR" != /* ]]; then
@@ -125,8 +135,6 @@ mkdir -p logs
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
 
-# Fail closed on web reachability. AI dependency may report degraded, but the
-# endpoint itself must remain reachable so operations can distinguish outage types.
 HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   HTTP_CODE="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3004/ || true)"
@@ -142,6 +150,11 @@ fi
 HEALTH="$(curl -sS -m 20 http://127.0.0.1:3004/api/ai/health || true)"
 if [[ -z "$HEALTH" ]]; then
   echo "FATAL: AI health endpoint did not respond"
+  exit 1
+fi
+if [[ "$HEALTH" != *'"status":"ok"'* ]]; then
+  echo "FATAL: AI service is not configured as production-ready"
+  echo "AI health: $HEALTH"
   exit 1
 fi
 
