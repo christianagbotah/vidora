@@ -29,13 +29,10 @@ export async function POST(req: NextRequest) {
     const gateway = await getActiveGateway();
     const gatewayName = gateway.getName();
     if (body.gateway && String(body.gateway) !== gatewayName) {
-      return NextResponse.json(
-        { success: false, error: `The requested payment gateway is not currently enabled` },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "The requested payment gateway is not currently enabled" }, { status: 400 });
     }
 
-    let currency = String(body.currency || (gatewayName === "stripe" ? "USD" : "GHS")).toUpperCase();
+    const currency = String(body.currency || (gatewayName === "stripe" ? "USD" : "GHS")).toUpperCase();
     if (!new Set(["GHS", "USD"]).has(currency)) {
       return NextResponse.json({ success: false, error: "Unsupported currency" }, { status: 400 });
     }
@@ -43,8 +40,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Hubtel checkout is available in GHS only" }, { status: 400 });
     }
 
-    // Financial entitlement is derived exclusively from the server-side
-    // package. Client-provided amount/tokens/bonus fields are intentionally ignored.
+    // Financial entitlement is derived exclusively from the server-side package.
     const amount = currency === "USD" ? pkg.priceUSD : pkg.priceGHS;
     if (!Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json({ success: false, error: "Package price is not configured" }, { status: 422 });
@@ -70,10 +66,14 @@ export async function POST(req: NextRequest) {
       data: {
         userId,
         gateway: gatewayName,
+        gatewayRef: reference,
+        packageSlug: pkg.slug,
         amount,
+        expectedAmountMinor: amountMinor,
         currency,
         tokensPurchased: baseTokens,
-        gatewayRef: reference,
+        bonusTokens,
+        settlementKey: `payment:${gatewayName}:${reference}`,
         status: "pending",
         metadata: JSON.stringify({ purchaseSnapshot }),
       },
@@ -104,6 +104,13 @@ export async function POST(req: NextRequest) {
         },
       }).catch(() => undefined);
       return NextResponse.json({ success: false, error: result.error || "Payment initialization failed" }, { status: 422 });
+    }
+
+    if (result.providerTransactionId) {
+      await db.payment.update({
+        where: { id: payment.id },
+        data: { providerTransactionId: result.providerTransactionId },
+      }).catch(() => undefined);
     }
 
     return NextResponse.json({
