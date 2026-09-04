@@ -5,7 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
 import { zaiErrorResponse, friendlySceneError } from "@/lib/zai-errors";
-import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
+import { checkTokens, deductTokensForOperation } from "@/lib/tokens";
 import { PRICING, calculateProjectCost } from "@/lib/pricing";
 import { getEngineChargeInfo } from "@/lib/storefront";
 import { saveGeneratedFile, publicOrigin, toAbsoluteUrl } from "@/lib/generated-store";
@@ -288,21 +288,11 @@ export async function POST(req: NextRequest) {
         }).length;
         const stillRunning = allScenes.some((s) => !s.videoUrl && s.status === "generating" && Boolean(s.taskId));
 
-        if (failed > 0) {
-          const refundAmount = failed * tokensPerScene;
-          const refund = await refundTokens({
-            userId,
-            amount: refundAmount,
-            description: `Refund: ${failed} failed scene${failed > 1 ? "s" : ""} in "${project.title}"`,
-            referenceId: projectId,
-            operation: "video_gen",
-            idempotencyKey: `generation:${run.id}:refund`,
-            relatedTransactionId: deduction.transactionId,
-          });
-          if (refund.transactionId) {
-            await db.generationRun.update({ where: { id: run.id }, data: { refundTransactionId: refund.transactionId } }).catch(() => undefined);
-          }
-        }
+        // Do not automatically refund failed scenes here. A provider task
+        // may have been accepted even when submission/polling later failed, and
+        // thumbnail generation may already have incurred cost. Uncertain runs
+        // stay locked for explicit reconciliation so Vidora never refunds a
+        // charge while provider work may still complete.
 
         if (allDone) {
           await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
@@ -311,9 +301,17 @@ export async function POST(req: NextRequest) {
           // Keep the active key: the provider already has task IDs, so accepting
           // another batch would create duplicate provider work and charges.
           await db.generationRun.update({ where: { id: run.id }, data: { status: "waiting_provider" } });
+        } else if (failed > 0) {
+          await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
+          await db.generationRun.update({
+            where: { id: run.id },
+            data: {
+              status: "needs_reconciliation",
+              error: `${failed} scene${failed > 1 ? "s" : ""} failed or had uncertain provider completion`,
+            },
+          });
         } else {
-          await db.videoProject.update({ where: { id: projectId }, data: { status: failed > 0 ? "failed" : "generating" } });
-          await db.generationRun.update({ where: { id: run.id }, data: { status: failed > 0 ? "partial_failed" : "completed", activeKey: null } });
+          await db.generationRun.update({ where: { id: run.id }, data: { status: "completed", activeKey: null } });
         }
       } catch (fatalError) {
         console.error(`Project ${projectId}: generation run ${run.id} crashed`, fatalError instanceof Error ? fatalError.message : "unknown error");
@@ -323,30 +321,16 @@ export async function POST(req: NextRequest) {
           data: { status: "failed", errorMessage: "Generation was interrupted before provider submission." },
         }).catch(() => undefined);
 
-        // Refund only if there are no submitted provider tasks. If task IDs
-        // exist, retain the active run for reconciliation instead of risking a
-        // refund followed by a successful provider charge.
-        const submitted = await db.videoScene.count({ where: { projectId, taskId: { not: null }, videoUrl: null } }).catch(() => 1);
-        if (submitted === 0) {
-          const refund = await refundTokens({
-            userId,
-            amount: totalTokensNeeded,
-            description: `Full refund: generation failed before provider submission for "${project.title}"`,
-            referenceId: projectId,
-            operation: "video_gen",
-            idempotencyKey: `generation:${run.id}:fatal-refund`,
-            relatedTransactionId: deduction.transactionId,
-          });
-          await db.generationRun.update({
-            where: { id: run.id },
-            data: { status: "failed", activeKey: null, refundTransactionId: refund.transactionId || null, error: "Generation interrupted before provider submission" },
-          }).catch(() => undefined);
-        } else {
-          await db.generationRun.update({
-            where: { id: run.id },
-            data: { status: "needs_reconciliation", error: "Worker interrupted after provider submission" },
-          }).catch(() => undefined);
-        }
+        // A missing taskId is not proof that the provider never accepted the
+        // request: the process can fail after provider acknowledgement but before
+        // the taskId is persisted. Never auto-refund this ambiguous window.
+        await db.generationRun.update({
+          where: { id: run.id },
+          data: {
+            status: "needs_reconciliation",
+            error: "Generation worker was interrupted; provider completion must be reconciled before refund or retry",
+          },
+        }).catch(() => undefined);
       }
     })();
 
