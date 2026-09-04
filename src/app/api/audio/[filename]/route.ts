@@ -1,39 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
+import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
 import { readAudioFile, audioFileExists } from "@/lib/audio-storage";
 
-/**
- * GET /api/audio/[filename]
- * Streams a generated audio file (TTS narration, dubbing) from /tmp/vidora-audio/.
- *
- * Files are written there by the audio-storage helper (which uses bash to
- * bypass Turbopack's fs interception in dev mode). This route reads them
- * back and streams them to the browser with the correct Content-Type.
- *
- * Supports .wav and .mp3 files.
- */
+export const runtime = "nodejs";
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ filename: string }> }
 ) {
   try {
     const { filename } = await params;
-
-    // Sanitize: only allow alphanumeric, underscore, hyphen, dot in the filename
-    // to prevent path traversal attacks.
     if (!/^[\w.\-]+$/.test(filename)) {
       return NextResponse.json({ error: "Invalid filename" }, { status: 400 });
     }
-
-    // Only allow audio file extensions
     if (!/\.(wav|mp3|ogg|m4a)$/i.test(filename)) {
       return NextResponse.json({ error: "Only audio files are supported" }, { status: 400 });
+    }
+
+    const audioUrl = `/api/audio/${filename}`;
+    const directScene = await db.videoScene.findFirst({
+      where: { narrationUrl: audioUrl },
+      select: {
+        projectId: true,
+        project: { select: { isPublic: true, sharePassword: true } },
+      },
+    });
+    const translation = directScene
+      ? null
+      : await db.sceneTranslation.findFirst({
+          where: { narrationUrl: audioUrl },
+          select: {
+            scene: {
+              select: {
+                projectId: true,
+                project: { select: { isPublic: true, sharePassword: true } },
+              },
+            },
+          },
+        });
+
+    const projectId = directScene?.projectId ?? translation?.scene.projectId;
+    const project = directScene?.project ?? translation?.scene.project;
+    if (!projectId || !project) {
+      // Do not expose orphaned files simply because a filename is guessed.
+      return NextResponse.json({ error: "Audio file not found" }, { status: 404 });
+    }
+
+    const publiclyShareable = project.isPublic && !project.sharePassword;
+    if (!publiclyShareable) {
+      const access = await requireProjectAccess(projectId, false);
+      if (!access.ok) return access.response;
     }
 
     if (!audioFileExists(filename)) {
       return NextResponse.json({ error: "Audio file not found" }, { status: 404 });
     }
-
     const buffer = await readAudioFile(filename);
 
     const ext = path.extname(filename).toLowerCase();
@@ -48,12 +71,18 @@ export async function GET(
       headers: {
         "Content-Type": contentType,
         "Content-Length": buffer.length.toString(),
-        "Cache-Control": "public, max-age=86400, immutable",
+        "Cache-Control": publiclyShareable
+          ? "public, max-age=300"
+          : "private, no-store, max-age=0",
         "Accept-Ranges": "bytes",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {
-    console.error("[audio serve]", error);
+    console.error(
+      "[audio serve]",
+      error instanceof Error ? error.message : "unknown error"
+    );
     return NextResponse.json({ error: "Failed to serve audio" }, { status: 500 });
   }
 }
