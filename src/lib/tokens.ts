@@ -24,12 +24,12 @@ export async function checkTokens(userId: string, requiredTokens: number): Promi
  * remains a second, independent exactly-once guard.
  */
 async function lockUser(tx: any, userId: string): Promise<void> {
-  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+  const rows = await tx.$queryRaw`
     SELECT "id"
     FROM "User"
     WHERE "id" = ${userId}
     FOR UPDATE
-  `;
+  ` as Array<{ id: string }>;
   if (rows.length !== 1) {
     throw new Error("User not found");
   }
