@@ -7,6 +7,7 @@
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/ && cp -r node_modules/.prisma .next/standalone/node_modules/.prisma && cp -r node_modules/@prisma/client .next/standalone/node_modules/@prisma/client",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "worker:generation": "bun scripts/generation-worker.ts",
+    "worker:export": "bun scripts/export-worker.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
