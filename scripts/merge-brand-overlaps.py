@@ -58,3 +58,4 @@ page = replace_exact(
 page_path.write_text(page, encoding="utf-8")
 
 print("Reconciled Vidora Studio branding and footer modal scrolling onto hardened files.")
+# Trigger marker: workflow existed before this revision.
