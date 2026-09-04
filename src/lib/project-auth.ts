@@ -18,24 +18,20 @@ export async function requireAuth(): Promise<AuthResult | AuthError> {
   }
   const user = session.user as Record<string, unknown>;
   const userId = typeof user.id === "string" ? user.id : "";
+  const sessionVersion = Number(user.sessionVersion ?? -1);
   if (!userId) {
     return { ok: false, response: NextResponse.json({ success: false, error: "Invalid session" }, { status: 401 }) };
   }
 
-  // Revalidate account state for every protected operation. Long-lived JWTs
-  // must not keep working after an account is deactivated.
   const current = await db.user.findUnique({
     where: { id: userId },
-    select: { email: true, role: true, isActive: true },
+    select: { email: true, role: true, isActive: true, sessionVersion: true },
   });
-  if (!current?.isActive) {
-    return { ok: false, response: NextResponse.json({ success: false, error: "Please sign in to continue" }, { status: 401 }) };
+  if (!current?.isActive || current.sessionVersion !== sessionVersion) {
+    return { ok: false, response: NextResponse.json({ success: false, error: "Session expired" }, { status: 401 }) };
   }
 
-  return {
-    ok: true,
-    session: { userId, role: current.role || "user", email: current.email || "" },
-  };
+  return { ok: true, session: { userId, role: current.role || "user", email: current.email || "" } };
 }
 
 export interface ProjectAuthResult {
@@ -49,21 +45,13 @@ export async function requireProjectAccess(projectId: string, writeCheck = false
     where: { id: projectId },
     select: { id: true, userId: true, title: true },
   });
-  if (!project) {
-    return { ok: false, response: NextResponse.json({ success: false, error: "Project not found" }, { status: 404 }) };
-  }
+  if (!project) return { ok: false, response: NextResponse.json({ success: false, error: "Project not found" }, { status: 404 }) };
 
-  // Anonymous demos contain only pre-generated assets. They are intentionally
-  // readable without login, but never writable: a writable userId=null record
-  // is not ownership and previously let guests reach billable AI actions.
   if (project.userId === null) {
     if (writeCheck) {
       return {
         ok: false,
-        response: NextResponse.json(
-          { success: false, error: "Sign in to modify a demo or use AI-powered studio actions" },
-          { status: 401 }
-        ),
+        response: NextResponse.json({ success: false, error: "Sign in to modify a demo or use AI-powered studio actions" }, { status: 401 }),
       };
     }
     return { ok: true, session: { userId: "guest", role: "guest", email: "" }, project };
@@ -74,7 +62,6 @@ export async function requireProjectAccess(projectId: string, writeCheck = false
   const isOwner = project.userId === authResult.session.userId;
   const isAdmin = authResult.session.role === "admin";
   if (isOwner || (isAdmin && !writeCheck)) return { ok: true, session: authResult.session, project };
-
   return { ok: false, response: NextResponse.json({ success: false, error: "You don't have access to this project" }, { status: 403 }) };
 }
 
@@ -88,9 +75,7 @@ export type SceneAuthError = AuthError;
 
 export async function requireSceneAccess(sceneId: string, writeCheck = false): Promise<SceneAuthResult | SceneAuthError> {
   const scene = await db.videoScene.findUnique({ where: { id: sceneId }, select: { id: true, projectId: true } });
-  if (!scene) {
-    return { ok: false, response: NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 }) };
-  }
+  if (!scene) return { ok: false, response: NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 }) };
   const access = await requireProjectAccess(scene.projectId, writeCheck);
   if (!access.ok) return access;
   return { ok: true, session: access.session, scene, project: access.project };
