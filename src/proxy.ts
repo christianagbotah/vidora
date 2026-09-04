@@ -23,7 +23,6 @@ export async function proxy(req: NextRequest) {
     "/api/contact",
     "/api/ai/health",
     "/api/audio/",
-    "/api/preview/image/",
   ];
 
   if (publicApiPrefixes.some((prefix) => pathname.startsWith(prefix))) {
@@ -44,7 +43,7 @@ export async function proxy(req: NextRequest) {
   // A cookie's mere presence is not authentication. Decode and verify the JWT
   // signature at the proxy boundary, then let route-level helpers revalidate
   // ownership, account state, role, and sessionVersion against PostgreSQL.
-  let token = null;
+  let token: Awaited<ReturnType<typeof getToken>> = null;
   try {
     token = await getToken({
       req,
@@ -55,7 +54,7 @@ export async function proxy(req: NextRequest) {
     token = null;
   }
 
-  if (!token?.id) {
+  if (!token || typeof token.id !== "string" || !token.id) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
         { success: false, error: "Authentication required" },
