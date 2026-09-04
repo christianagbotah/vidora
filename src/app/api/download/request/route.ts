@@ -1,116 +1,103 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireProjectAccess } from "@/lib/project-auth";
+import { deductTokensForOperation } from "@/lib/tokens";
 
-// ─── Download Request ─────────────────────────────────────────────
-// Checks token balance, deducts tokens, returns download URL
-// ──────────────────────────────────────────────────────────────────
-
-const QUALITY_TOKEN_COST: Record<string, number> = {
-  draft: 1,
-  standard: 2,
-  high: 4,
-  ultra: 8,
-};
-
+/**
+ * Return an existing final export to its owner. Downloading does not trigger
+ * provider/ffmpeg work, so centralized pricing defines it as a zero-token
+ * operation. The idempotent ledger still records the logical download grant.
+ */
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.email) {
-      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
-    }
-
-    const body = await req.json();
-    const { projectId, quality = "standard" } = body;
-
+    const body = await req.json().catch(() => ({}));
+    const projectId = typeof body.projectId === "string" ? body.projectId : "";
     if (!projectId) {
-      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Project ID is required" },
+        { status: 400 }
+      );
     }
 
-    // Get user with current token balance
-    const user = await db.user.findUnique({ where: { email: session.user.email } });
-    if (!user) {
-      return NextResponse.json({ success: false, error: "User not found" }, { status: 404 });
+    const access = await requireProjectAccess(projectId, false);
+    if (!access.ok) return access.response;
+    const userId = access.session.userId;
+    if (!userId || userId === "guest") {
+      return NextResponse.json(
+        { success: false, error: "Please sign in to download exported videos" },
+        { status: 401 }
+      );
     }
 
-    // Get project
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: {
-        scenes: { where: { videoUrl: { not: null } }, orderBy: { sceneNumber: "asc" } },
+      select: {
+        id: true,
+        userId: true,
+        title: true,
+        finalVideoUrl: true,
       },
     });
-
     if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 }
+      );
     }
-
+    if (project.userId !== userId && access.session.role !== "admin") {
+      return NextResponse.json(
+        { success: false, error: "Not authorized" },
+        { status: 403 }
+      );
+    }
     if (!project.finalVideoUrl) {
       return NextResponse.json(
         {
           success: false,
-          error: "This video hasn't been exported yet. Open it in the Studio and click \"Export Video\" first — the export renders the final video (with voices and music) before download.",
+          error:
+            'This video has not been exported yet. Open it in Studio and choose "Export Video" first.',
         },
         { status: 400 }
       );
     }
 
-    // Calculate token cost
-    const qualityBase = QUALITY_TOKEN_COST[quality] || 2;
-    const estimatedDuration = project.scenes.reduce((sum, s) => sum + s.duration, 0) || 10;
-    let durationBonus = 0;
-    if (estimatedDuration > 30) durationBonus = 1;
-    if (estimatedDuration > 60) durationBonus = 2;
-    if (estimatedDuration > 120) durationBonus = 3;
-    if (estimatedDuration > 300) durationBonus = 5;
-    const totalTokens = qualityBase + durationBonus;
-
-    // Check if user has enough tokens
-    if (user.tokens < totalTokens) {
-      return NextResponse.json({
-        success: false,
-        error: "Insufficient tokens",
-        required: totalTokens,
-        balance: user.tokens,
-        shortfall: totalTokens - user.tokens,
-        message: `You need ${totalTokens} tokens but only have ${user.tokens}. Purchase more tokens to download.`,
-      });
-    }
-
-    // Deduct tokens atomically
-    const updatedUser = await db.$transaction(async (tx) => {
-      // Deduct tokens
-      const u = await tx.user.update({
-        where: { id: user.id },
-        data: { tokens: { decrement: totalTokens } },
-      });
-
-      // Record transaction
-      await tx.tokenTransaction.create({
-        data: {
-          userId: user.id,
-          type: "spend",
-          amount: -totalTokens,
-          description: `Download: ${project.title} (${quality})`,
-          referenceId: projectId,
-        },
-      });
-
-      return u;
+    const exportFingerprint = crypto
+      .createHash("sha256")
+      .update(project.finalVideoUrl, "utf8")
+      .digest("hex")
+      .slice(0, 24);
+    const ledger = await deductTokensForOperation({
+      userId,
+      operation: "download",
+      description: `Download existing export: ${project.title}`,
+      referenceId: projectId,
+      idempotencyKey: `download:${userId}:${projectId}:${exportFingerprint}`,
     });
+    if (!ledger.success) {
+      return NextResponse.json(
+        { success: false, error: ledger.error || "Failed to prepare download" },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
       downloadUrl: project.finalVideoUrl,
       projectTitle: project.title,
-      quality,
-      tokensSpent: totalTokens,
-      remainingTokens: updatedUser.tokens,
-      message: `Download ready! ${totalTokens} tokens deducted. ${updatedUser.tokens} tokens remaining.`,
+      tokensSpent: 0,
+      remainingTokens: ledger.remainingTokens,
+      replayed: ledger.alreadyApplied === true,
+      message: "Download ready. Existing exports are free to download.",
     });
   } catch (error) {
-    console.error("Download request error:", error);
-    return NextResponse.json({ success: false, error: "Failed to process download" }, { status: 500 });
+    console.error(
+      "[download request]",
+      error instanceof Error ? error.message : "unknown error"
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to process download" },
+      { status: 500 }
+    );
   }
 }
