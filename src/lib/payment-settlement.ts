@@ -120,8 +120,16 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
 
   try {
     const result = await db.$transaction(async (tx) => {
-      const lockKey = `vidora-payment:${paymentId}`;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      // Serialize settlement attempts on the actual payment row. This avoids
+      // pg_advisory_xact_lock()'s PostgreSQL void return type, which Prisma
+      // cannot deserialize, while keeping the lock transaction-scoped.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "Payment"
+        WHERE "id" = ${paymentId}
+        FOR UPDATE
+      `;
+      if (locked.length !== 1) throw new Error("Payment not found");
 
       const current = await tx.payment.findUnique({ where: { id: paymentId } });
       if (!current) throw new Error("Payment not found");
