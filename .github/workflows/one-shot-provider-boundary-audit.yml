@@ -22,3 +22,4 @@ jobs:
           echo '=== DIRECT Z.AI PROVIDER CALLS ==='
           git grep -n -E 'zai\.(chat|vision|generateImage|generateVideo|tts|asr|pollVideoTask)' -- 'src/**/*.ts' 'scripts/**/*.ts' || true
           echo '=== END PROVIDER CALLS ==='
+# Re-run marker: after durable single-scene generation worker cutover.
