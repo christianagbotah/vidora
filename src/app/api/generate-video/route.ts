@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { Prisma } from "@prisma/client";
-import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { requireAuth } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { checkTokens, deductTokensForOperation } from "@/lib/tokens";
 import { PRICING } from "@/lib/pricing";
@@ -35,10 +34,11 @@ function hasProviderReference(
 }
 
 export async function POST(req: NextRequest) {
+  let authResult: Awaited<ReturnType<typeof requireAuth>> | null = null;
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) return NextResponse.json({ success: false, error: "Please sign in to generate videos" }, { status: 401 });
-    const userId = (session.user as Record<string, unknown>).id as string;
+    authResult = await requireAuth();
+    if (!authResult.ok) return authResult.response;
+    const userId = authResult.session.userId;
 
     const { projectId } = await req.json();
     if (!projectId) return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
@@ -181,7 +181,9 @@ export async function POST(req: NextRequest) {
       remainingTokens: deduction.remainingTokens,
     });
   } catch (error) {
-    const sess = await getServerSession(authOptions).catch(() => null);
-    return zaiErrorResponse(error, { session: sess, logLabel: "generate-video" });
+    return zaiErrorResponse(error, {
+      session: authResult?.ok ? authResult.session : null,
+      logLabel: "generate-video",
+    });
   }
 }
