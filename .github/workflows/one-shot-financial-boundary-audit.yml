@@ -1,0 +1,28 @@
+name: One-shot financial boundary audit
+
+on:
+  push:
+    branches:
+      - production-hardening/p0-security-billing
+    paths:
+      - .github/workflows/one-shot-financial-boundary-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: production-hardening/p0-security-billing
+      - name: Enumerate direct token and payment mutations
+        run: |
+          echo '=== TOKEN TRANSACTION WRITES ==='
+          git grep -n -E 'tokenTransaction\.(create|createMany|update|updateMany|delete|deleteMany)' -- '*.ts' || true
+          echo '=== TOKEN BALANCE MUTATION TOKENS ==='
+          git grep -n -E '(decrement|increment):' -- '*.ts' || true
+          echo '=== PAYMENT STATUS WRITES ==='
+          git grep -n -E 'payment\.(create|update|updateMany|upsert)' -- '*.ts' || true
+          echo '=== END FINANCIAL BOUNDARIES ==='
