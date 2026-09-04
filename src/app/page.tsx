@@ -9714,7 +9714,7 @@ function VidoraApp() {
           <Separator className="my-6" />
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground text-center sm:text-left">
-              &copy; {new Date().getFullYear()} Vidora AI · A product of LightWorld Technologies.
+              &copy; {new Date().getFullYear()} Vidora Studio · A product of LightWorld Technologies.
             </p>
             <p className="text-xs text-muted-foreground flex items-center gap-1.5">
               <Globe className="h-3 w-3" />
@@ -11421,7 +11421,10 @@ function VidoraApp() {
               Everything you need to create AI-powered videos with Vidora.
             </DialogDescription>
           </DialogHeader>
-          <ScrollArea className="flex-1 pr-4 -mr-4">
+          {/* Plain overflow div: Radix ScrollArea viewport (height:100%)
+              cannot resolve against a flex-resolved parent height in this
+              environment — this div scrolls itself, no percentage chain. */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-4 -mr-4">
             <div className="space-y-5 text-sm">
               <section>
                 <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Sparkles className="h-4 w-4 text-violet-500" />Quick Start</h3>
@@ -11484,7 +11487,7 @@ function VidoraApp() {
                 </p>
               </section>
             </div>
-          </ScrollArea>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDocsDialogOpen(false)}>Close</Button>
             <Button className="btn-gradient" onClick={() => { setDocsDialogOpen(false); setCurrentView("create"); }}>
@@ -11508,7 +11511,8 @@ function VidoraApp() {
               REST endpoints for projects, scenes, and AI generation. All routes are relative to your deployment origin.
             </DialogDescription>
           </DialogHeader>
-          <ScrollArea className="flex-1 pr-4 -mr-4">
+          {/* See docs dialog note — self-scrolling div instead of ScrollArea */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-4 -mr-4">
             <div className="space-y-4 text-sm font-mono">
               {[
                 { method: "GET", path: "/api/projects", desc: "List all video projects for the signed-in user." },
@@ -11546,7 +11550,7 @@ function VidoraApp() {
                 </p>
               </div>
             </div>
-          </ScrollArea>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setApiRefDialogOpen(false)}>Close</Button>
           </DialogFooter>

@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vidora — Professional AI Video Creator",
+  title: "Vidora Studio — Professional AI Video Creator",
   description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
   keywords: [
     "AI video",
@@ -40,23 +40,23 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_US",
     url: "https://vidora.lightworldtech.com",
-    title: "Vidora — Professional AI Video Creator",
+    title: "Vidora Studio — Professional AI Video Creator",
     description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos. Professional cinematic scenes at your fingertips.",
-    siteName: "Vidora",
+    siteName: "Vidora Studio",
     images: [
       {
-        url: "/images/hero-bg.png",
+        url: "/images/og-image.png",
         width: 1200,
         height: 630,
-        alt: "Vidora — AI Video Creator",
+        alt: "Vidora Studio — Professional AI Video Creator",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Vidora — Professional AI Video Creator",
+    title: "Vidora Studio — Professional AI Video Creator",
     description: "Create stunning AI-generated videos from text prompts, voice, or uploaded videos.",
-    images: ["/images/hero-bg.png"],
+    images: ["/images/og-image.png"],
     creator: "@vidora",
   },
   robots: {
@@ -71,8 +71,12 @@ export const metadata: Metadata = {
     title: "Vidora",
   },
   icons: {
-    icon: "/images/hero-bg.png",
-    apple: "/logo.svg",
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/logo.svg", type: "image/svg+xml", sizes: "any" },
+    ],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
   },
 };
 

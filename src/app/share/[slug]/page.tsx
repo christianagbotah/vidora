@@ -18,7 +18,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   }
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  const coverImage = project.scenes[0]?.imageUrl || "/images/hero-bg.png";
+  const coverImage = project.scenes[0]?.imageUrl || "/images/og-image.png";
 
   return {
     title: `${project.title} — Vidora`,
@@ -60,7 +60,7 @@ export default async function SharePage({ params }: { params: Promise<{ slug: st
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
   const shareUrl = `${baseUrl}/share/${slug}`;
-  const coverImage = project.scenes[0]?.imageUrl || "/images/hero-bg.png";
+  const coverImage = project.scenes[0]?.imageUrl || "/images/og-image.png";
 
   return (
     <ShareClient
