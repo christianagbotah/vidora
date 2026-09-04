@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { PRICING, type OperationType, calculateProjectCost } from "@/lib/pricing";
+import { PRICING, TOKEN_VALUE_GHS, TOKEN_VALUE_USD, type OperationType, calculateProjectCost } from "@/lib/pricing";
 
 /**
  * ── Admin z.ai API Cost Breakdown ──
@@ -37,7 +37,7 @@ export async function GET() {
       tokensCharged: pricing.tokens,
       estimatedCostUsd: pricing.costUsd,
       marginTokens: pricing.tokens > 0
-        ? pricing.costUsd / (pricing.tokens * 0.05) * 100
+        ? pricing.costUsd / (pricing.tokens * TOKEN_VALUE_USD) * 100
         : pricing.costUsd > 0 ? -100 : 0, // % of revenue consumed by API cost
     }));
 
@@ -102,8 +102,8 @@ export async function GET() {
       success: true,
       data: {
         tokenValue: {
-          perTokenGHS: 0.50,
-          perTokenUSD: 0.05,
+          perTokenGHS: TOKEN_VALUE_GHS,
+          perTokenUSD: TOKEN_VALUE_USD,
         },
         pricingTable,
         historical: {

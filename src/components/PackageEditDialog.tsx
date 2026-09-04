@@ -143,8 +143,9 @@ export function PackageEditDialog({ open, onOpenChange, pkg, onSave, saving }: P
   const perTokenGHS = effectiveTokens > 0 ? Number(form.priceGHS) / effectiveTokens : 0;
   const perTokenUSD = effectiveTokens > 0 ? Number(form.priceUSD) / effectiveTokens : 0;
 
-  // A 1-min video (6 scenes + narration) costs 12 tokens — show how many videos this pkg makes
-  const videosPerPackage = Math.floor(effectiveTokens / 12);
+  // A 6-scene 45–60s video costs ≈ 44 tokens (6 clips × 6 + 6 thumbs + narration)
+  // on the default CogVideoX-3 engine — show how many videos this pkg makes
+  const videosPerPackage = Math.floor(effectiveTokens / 44);
   const revenuePerVideoGHS = videosPerPackage > 0 ? Number(form.priceGHS) / videosPerPackage : 0;
 
   const handleSave = () => {

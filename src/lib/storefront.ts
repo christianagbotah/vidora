@@ -91,13 +91,18 @@ export interface StorefrontData {
 
 const CURRENCY_CONFIG_KEY = "store.currency";
 
-/** Engine seed prices: tokensPerClip × GHS 0.50 / USD 0.05 per token. */
+/**
+ * Engine seed prices, aligned with the OFFICIAL Z.ai price sheet (Sep 2026):
+ *   CogVideoX-3 / vidu2-image: $0.20 real cost  → 6 tokens ($0.30)  ≈ 33% margin
+ *   viduq1-* / vidu2-reference: $0.40 real cost → 12 tokens ($0.60) ≈ 33% margin
+ * Display price = tokensPerClip × GHS 0.50 / USD 0.05 per token.
+ */
 const ENGINE_SEEDS: Record<string, { priceGHS: number; priceUSD: number; tokensPerClip: number }> = {
-  "CogVideoX-3":     { priceGHS: 1.5, priceUSD: 0.15, tokensPerClip: 3 }, // matches PRICING.video_gen (3 tokens)
-  "viduq1-text":     { priceGHS: 4.0, priceUSD: 0.4,  tokensPerClip: 8 },
-  "viduq1-image":    { priceGHS: 4.0, priceUSD: 0.4,  tokensPerClip: 8 },
-  "vidu2-image":     { priceGHS: 2.0, priceUSD: 0.2,  tokensPerClip: 4 },
-  "vidu2-reference": { priceGHS: 4.0, priceUSD: 0.4,  tokensPerClip: 8 },
+  "CogVideoX-3":     { priceGHS: 3.0, priceUSD: 0.3,  tokensPerClip: 6 },  // real Z.ai cost $0.20/clip
+  "viduq1-text":     { priceGHS: 6.0, priceUSD: 0.6,  tokensPerClip: 12 }, // real Z.ai cost $0.40/clip
+  "viduq1-image":    { priceGHS: 6.0, priceUSD: 0.6,  tokensPerClip: 12 }, // real Z.ai cost $0.40/clip
+  "vidu2-image":     { priceGHS: 3.0, priceUSD: 0.3,  tokensPerClip: 6 },  // real Z.ai cost $0.20/clip
+  "vidu2-reference": { priceGHS: 6.0, priceUSD: 0.6,  tokensPerClip: 12 }, // real Z.ai cost $0.40/clip
 };
 
 /** Homepage plan seeds — exactly the cards that shipped on the homepage. */
@@ -109,7 +114,7 @@ const PLAN_SEEDS: Omit<StorefrontPlan, "id" | "updatedAt">[] = [
     priceGHS: 0,
     priceUSD: 0,
     period: "forever",
-    features: ["100 Free Tokens", "5 projects", "720p export", "Basic styles", "Community support"],
+    features: ["Free daily AI storyboard previews", "3 watermarked style previews / day", "Pay only when you generate", "Community support"],
     ctaLabel: "Get Started",
     ctaAction: "create",
     highlight: false,
@@ -120,10 +125,10 @@ const PLAN_SEEDS: Omit<StorefrontPlan, "id" | "updatedAt">[] = [
     slug: "pro",
     name: "Pro",
     badge: "POPULAR",
-    priceGHS: 150,
-    priceUSD: 9.99,
+    priceGHS: 42,
+    priceUSD: 8.5,
     period: "month",
-    features: ["2,000 Tokens", "Unlimited projects", "1080p export", "All styles + AI Director", "Priority rendering", "Email support"],
+    features: ["110 tokens monthly (+20% bonus)", "Unlimited projects", "1080p export", "All engines + AI Director", "Priority rendering", "Email support"],
     ctaLabel: "Buy Tokens",
     ctaAction: "buy-tokens",
     highlight: true,
@@ -134,10 +139,10 @@ const PLAN_SEEDS: Omit<StorefrontPlan, "id" | "updatedAt">[] = [
     slug: "enterprise",
     name: "Enterprise",
     badge: "BEST VALUE",
-    priceGHS: 750,
-    priceUSD: 49.99,
+    priceGHS: 175,
+    priceUSD: 35,
     period: "month",
-    features: ["10,000 Tokens", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"],
+    features: ["550 tokens monthly (+30% bonus)", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"],
     ctaLabel: "Contact Us",
     ctaAction: "contact",
     highlight: false,
@@ -289,17 +294,17 @@ export async function getEnginePricingForAdmin(): Promise<EnginePricingEntry[]> 
 export async function getEngineChargeInfo(
   modelId: string | null | undefined
 ): Promise<{ tokensPerClip: number; costUsdPerClip: number }> {
+  // Real Z.ai COGS always comes from the verified catalog (video-models.ts)
+  // — NOT from the admin display price, which includes our margin.
+  const resolved = modelId ?? DEFAULT_VIDEO_MODEL_ID;
+  const catalogCost = getVideoModelInfo(resolved)?.costUsd ?? PRICING.video_gen.costUsd;
   const fallback = {
     tokensPerClip: PRICING.video_gen.tokens,
-    costUsdPerClip: PRICING.video_gen.costUsd,
+    costUsdPerClip: catalogCost,
   };
   try {
-    const resolved = modelId ?? DEFAULT_VIDEO_MODEL_ID;
     const row = await db.enginePricing.findUnique({ where: { modelId: resolved } });
-    if (row) return { tokensPerClip: row.tokensPerClip, costUsdPerClip: row.priceUSD > 0 ? row.priceUSD : fallback.costUsdPerClip };
-    // No row yet — use the static catalog cost so margins stay accurate.
-    const info = getVideoModelInfo(resolved);
-    if (info) return { tokensPerClip: fallback.tokensPerClip, costUsdPerClip: info.costUsd };
+    if (row) return { tokensPerClip: row.tokensPerClip, costUsdPerClip: catalogCost };
   } catch (err) {
     console.error("[storefront] engine charge lookup failed, using default:", err);
   }

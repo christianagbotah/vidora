@@ -284,21 +284,21 @@ const DEFAULT_STOREFRONT_PLANS: StorefrontPlanClient[] = [
   {
     id: "starter", slug: "starter", name: "Starter", badge: "FREE",
     priceGHS: 0, priceUSD: 0, period: "forever",
-    features: ["100 Free Tokens", "5 projects", "720p export", "Basic styles", "Community support"],
+    features: ["Free daily AI storyboard previews", "3 watermarked style previews / day", "Pay only when you generate", "Community support"],
     ctaLabel: "Get Started", ctaAction: "create",
     highlight: false, isActive: true, sortOrder: 0,
   },
   {
     id: "pro", slug: "pro", name: "Pro", badge: "POPULAR",
-    priceGHS: 150, priceUSD: 9.99, period: "month",
-    features: ["2,000 Tokens", "Unlimited projects", "1080p export", "All styles + AI Director", "Priority rendering", "Email support"],
+    priceGHS: 42, priceUSD: 8.5, period: "month",
+    features: ["110 tokens monthly (+20% bonus)", "Unlimited projects", "1080p export", "All engines + AI Director", "Priority rendering", "Email support"],
     ctaLabel: "Buy Tokens", ctaAction: "buy-tokens",
     highlight: true, isActive: true, sortOrder: 1,
   },
   {
     id: "enterprise", slug: "enterprise", name: "Enterprise", badge: "BEST VALUE",
-    priceGHS: 750, priceUSD: 49.99, period: "month",
-    features: ["10,000 Tokens", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"],
+    priceGHS: 175, priceUSD: 35, period: "month",
+    features: ["550 tokens monthly (+30% bonus)", "Unlimited everything", "4K export", "Custom AI models", "API access", "Dedicated support", "Team collaboration"],
     ctaLabel: "Contact Us", ctaAction: "contact",
     highlight: false, isActive: true, sortOrder: 2,
   },
@@ -11471,7 +11471,7 @@ function VidoraApp() {
               <section>
                 <h3 className="font-bold text-base flex items-center gap-1.5 mb-2"><Coins className="h-4 w-4 text-amber-500" />Tokens & Billing</h3>
                 <ul className="space-y-1.5 text-muted-foreground list-disc list-inside pl-1">
-                  <li>Each image generation costs <strong className="text-foreground">1 token</strong>, each video clip <strong className="text-foreground">3 tokens</strong>.</li>
+                  <li>Each image generation costs <strong className="text-foreground">1 token</strong>; each video clip <strong className="text-foreground">6 tokens</strong> on CogVideoX-3 / Vidu 2 (<strong className="text-foreground">12 tokens</strong> on ViduQ1 1080p &amp; Reference engines).</li>
                   <li>Buy tokens via Paystack (Ghana), Hubtel, or Stripe (international).</li>
                   <li>Free guests get a no-signup demo. Sign in to save projects and earn bonus tokens.</li>
                 </ul>

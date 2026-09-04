@@ -6,12 +6,12 @@
  * constraints (validated against the official docs.z.ai Video API), and the
  * UI metadata shown in the model picker.
  *
- * VERIFIED MODEL LINEUP (docs.z.ai → Video → guides):
+ * VERIFIED MODEL LINEUP (official docs.z.ai pricing, Sep 2026):
  *   vidu2-image      Image-to-Video        4s   720P   $0.20/clip
  *   vidu2-reference  Reference-to-Video     4s   720P   $0.40/clip (1–7 refs)
  *   viduq1-text      Text-to-Video          5s   1080P  $0.40/clip (style: anime/general)
  *   viduq1-image     Image-to-Video         5s   1080P  $0.40/clip
- *   CogVideoX-3      Text/Image-to-Video   5/10s up to 4K  ~$0.08/clip
+ *   CogVideoX-3      Text/Image-to-Video   5/10s up to 4K  $0.20/clip
  *
  * NOTE — vidu2-start-end / viduq1-start-end are intentionally NOT offered:
  * they require exactly two input frames (first + last) which our scene
@@ -48,7 +48,7 @@ export interface VideoModelInfo {
   tagline: string;
   /** 2–3 strength bullets for the picker. */
   strengths: string[];
-  /** Rough Z.ai cost per generated clip (USD) — informational only. */
+  /** REAL Z.ai cost per generated clip (USD) — from the official price sheet. */
   costUsd: number;
   /** Default clip duration in seconds (per official docs). */
   durationSec: number;
@@ -79,7 +79,7 @@ export const VIDEO_MODELS: VideoModelInfo[] = [
     tierLabel: "Best Value",
     tagline: "Up to 4K output with excellent text-instruction following — the most affordable way to draft and iterate.",
     strengths: ["Up to 4K resolution", "5s or 10s clips", "Great prompt accuracy"],
-    costUsd: 0.08,
+    costUsd: 0.2,
     durationSec: 10,
     resolution: "Up to 4K",
     imageMode: "any",

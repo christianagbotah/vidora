@@ -1,6 +1,6 @@
 /**
  * ───────────────────────────────────────────────────────────────────────────
- *  Vidora — Centralized Pricing Engine
+ *  Vidora — Centralized Pricing Engine (VERIFIED against official Z.ai pricing)
  * ───────────────────────────────────────────────────────────────────────────
  *
  *  This is the financial heart of the application. It defines:
@@ -8,6 +8,43 @@
  *  1. TOKEN COSTS — how many tokens each AI operation costs the user
  *  2. REAL COSTS  — how much each operation costs YOU in Z.ai API fees (USD)
  *  3. MARGIN      — the profit you make per operation
+ *
+ *  ── Official Z.ai price sheet (verified from docs.z.ai, Sep 2026) ──
+ *
+ *  VIDEO GENERATION (price per video):
+ *    • CogVideoX-3 ........... $0.20 / video   (any duration 5s/10s, up to 4K)
+ *    • vidu2-image ........... $0.20 / video   (4s, 720p)
+ *    • vidu2-reference ....... $0.40 / video   (4s, 720p, 1–7 refs)
+ *    • viduq1-text ........... $0.40 / video   (5s, 1080p)
+ *    • viduq1-image .......... $0.40 / video   (5s, 1080p)
+ *
+ *  IMAGE GENERATION (price per image):
+ *    • GLM-Image ............. $0.015 / image
+ *    • CogView-4 ............. $0.01  / image
+ *
+ *  TEXT MODELS (per 1M tokens, input/output):
+ *    • GLM-4.6 / GLM-4.5 ..... $0.60 / $2.20
+ *    • GLM-4.5-Air ........... $0.20 / $1.10
+ *    • GLM-4.5-Flash / 4.7-Flash ......... FREE
+ *    • GLM-4.6V (vision) ..... $0.30 / $0.90  (GLM-4.6V-Flash: FREE)
+ *
+ *  AUDIO:
+ *    • GLM-ASR-2512 .......... $0.03 / MTok  (≈ $0.0024 / minute)
+ *    • TTS ................... not published by Z.ai; estimated ~$0.003 / call
+ *
+ *  Source: https://docs.z.ai/guides/overview/pricing
+ *          https://docs.z.ai/guides/video/cogvideox-3
+ *          https://docs.z.ai/guides/video/vidu2
+ *          https://docs.z.ai/guides/video/vidu-q1
+ *
+ *  ── Why the numbers changed ──
+ *  A real trial observed by the owner consumed ≈ $3 on the Z.ai portal:
+ *  13 generated clips (6 GiannisBD + 4 + 3 retried E2E scenes) × $0.20
+ *  = $2.60, plus ~$0.10 portraits (GLM-Image), ~$0.05 LLM, ~$0.10 TTS/ASR
+ *  ≈ $2.85 — matching the official price sheet above.
+ *  The previous table assumed $0.12/video (wrong: real price is $0.20),
+ *  which meant every generated scene was sold at a LOSS. The numbers below
+ *  restore a healthy ~33% gross margin on video generation.
  *
  *  ── The Business Model ──
  *
@@ -17,21 +54,13 @@
  *
  *  ── Token Valuation ──
  *
- *  1 token ≈ GHS 0.50 ≈ USD 0.05  (based on Starter package: 10 tokens = GHS 5)
+ *  1 token ≈ GHS 0.50 ≈ USD 0.05  (baseline; volume discounts via package bonus)
  *
- *  ── Profit Calculation ──
+ *  ── Profit Calculation (1-minute, 6-scene video, CogVideoX-3) ──
  *
- *  For a 1-minute video (6 scenes):
- *    User pays:  12 tokens × $0.05 = $0.60  (GHS 6.00)
- *    Z.ai costs: 6 clips ($0.60) + 6 images ($0.18) + LLM ($0.02) = $0.80
- *
- *  Wait — that's a LOSS. So either:
- *    (a) Raise token price, OR
- *    (b) Charge more tokens per scene, OR
- *    (c) Use cheaper Z.ai models (quality: "speed" instead of "quality")
- *
- *  This file makes the economics explicit and tunable. Adjust TOKEN_COST
- *  and ESTIMATED_COST_USD values to hit your target margin.
+ *    User pays:  6 clips × 6 tokens + 6 images × 1 token ≈ 42 tokens ≈ $2.10
+ *    Z.ai costs: 6 clips ($1.20) + 6 thumbs ($0.09) + LLM ($0.01) ≈ $1.30
+ *    Gross margin: ≈ 38%
  * ───────────────────────────────────────────────────────────────────────────
  */
 
@@ -52,7 +81,7 @@ export type OperationType =
 export interface OperationPricing {
   /** Tokens charged to the user */
   tokens: number;
-  /** Estimated real cost in USD that Z.ai charges you */
+  /** REAL cost in USD that Z.ai charges you (official price sheet) */
   costUsd: number;
   /** Human-readable label for receipts/analytics */
   label: string;
@@ -61,69 +90,71 @@ export interface OperationPricing {
 /**
  * Pricing table for each AI operation.
  *
- * Costs are estimates based on Z.ai's typical pricing for GLM models.
- * Update these as Z.ai publishes official pricing.
- *
- * VIDEO GEN is the most expensive operation — it's the core value driver.
+ * All costUsd values are the OFFICIAL Z.ai list prices (see header).
+ * Video gen charges the DEFAULT engine rate (CogVideoX-3, $0.20/clip).
+ * Other engines have their own per-clip charges — see src/lib/storefront.ts
+ * (ENGINE_SEEDS) and src/lib/video-models.ts (costUsd per model).
  */
 export const PRICING: Record<OperationType, OperationPricing> = {
   // ── Video Generation (the main product) ──
-  // Z.ai charges ~$0.08-0.15 per 5-10s video clip (CogVideoX)
-  // We charge 3 tokens ($0.15) → ~50% margin on the video itself
+  // Z.ai CogVideoX-3: $0.20/video (official). We charge 6 tokens ($0.30)
+  // → ~33% gross margin on the clip itself.
   video_gen: {
-    tokens: 3,
-    costUsd: 0.12,
+    tokens: 6,
+    costUsd: 0.2,
     label: "Video clip generation (per scene)",
   },
 
   // ── Image Generation (thumbnails, character art) ──
-  // Z.ai charges ~$0.02-0.04 per image
-  // We charge 1 token ($0.05) → healthy margin, bundled with video_gen
+  // Z.ai GLM-Image: $0.015/image (official). We charge 1 token ($0.05)
+  // → 70% gross margin.
   image_gen: {
     tokens: 1,
-    costUsd: 0.03,
+    costUsd: 0.015,
     label: "AI image generation",
   },
 
   // ── LLM operations (cheap, keep free or 1 token to encourage usage) ──
-  // Z.ai charges ~$0.001-0.005 per LLM call (GLM-4.5)
+  // GLM-4.5-Air: $0.20/M in + $1.10/M out → ~2K in / 1K out ≈ $0.0015.
+  // GLM-4.6 would be ~$0.003/call. Budget $0.001–0.004.
   prompt_enhance: {
     tokens: 0, // FREE — encourages users to start projects
-    costUsd: 0.002,
+    costUsd: 0.001,
     label: "Prompt enhancement (free)",
   },
   scene_split: {
     tokens: 1, // 1 token for script analysis
-    costUsd: 0.003,
+    costUsd: 0.004,
     label: "Script scene splitting",
   },
   continuity_check: {
     tokens: 1,
-    costUsd: 0.003,
+    costUsd: 0.005,
     label: "Continuity check",
   },
   llm: {
     tokens: 1,
-    costUsd: 0.003,
+    costUsd: 0.004,
     label: "General AI text generation",
   },
 
   // ── Audio operations ──
-  // TTS: ~$0.002 per 1000 chars. A 1-min narration (~150 words) ≈ $0.001
+  // TTS: not on Z.ai's published price sheet; estimated ~$0.003 per call
+  // (a 30–60s narration block). Charged per narration generation.
   tts: {
-    tokens: 1, // 1 token per ~30 seconds of narration
-    costUsd: 0.002,
+    tokens: 1, // 1 token per narration/voice block
+    costUsd: 0.003,
     label: "AI narration (TTS)",
   },
-  // ASR: ~$0.002 per minute
+  // ASR: GLM-ASR-2512, $0.03/MTok ≈ $0.0024 per minute (official).
   asr: {
     tokens: 1,
-    costUsd: 0.004,
+    costUsd: 0.003,
     label: "Voice transcription (ASR)",
   },
 
   // ── Download / Export ──
-  // Generation already paid for; download is just processing cost
+  // Generation already paid for; download is local ffmpeg processing.
   download: {
     tokens: 0, // FREE download (generation is where we charge)
     costUsd: 0,
@@ -133,18 +164,16 @@ export const PRICING: Record<OperationType, OperationPricing> = {
   // ── FREE Previews (customer-acquisition cost, NOT charged to user) ──
   // These give prospects a taste of what they'll get BEFORE they buy tokens.
   // Cost is absorbed by the owner as marketing/CAC. Rate-limited per user/day.
-  //   • Storyboard: LLM-only scene breakdown. ~$0.002 per call.
-  //   • Image preview: ONE watermarked low-res still. ~$0.03 per call.
-  // The watermark makes the image commercially unusable, so users must buy
-  // tokens to get the clean, full-HD, multi-scene video.
+  //   • Storyboard: LLM-only scene breakdown. ~$0.001 per call.
+  //   • Image preview: ONE watermarked low-res still. ~$0.015 per call.
   preview_storyboard: {
     tokens: 0, // FREE
-    costUsd: 0.002,
+    costUsd: 0.001,
     label: "AI storyboard preview (free)",
   },
   preview_image: {
     tokens: 0, // FREE
-    costUsd: 0.03,
+    costUsd: 0.015,
     label: "Watermarked style preview (free)",
   },
 
@@ -160,9 +189,8 @@ export const PRICING: Record<OperationType, OperationPricing> = {
  * Daily free-preview limits per user.
  * Resets at local midnight (tracked by previewDate = YYYY-MM-DD).
  *
- * Economics: at 10 storyboards + 3 images/day = $0.02 + $0.09 = $0.11 worst case
- * per user per day. Even at 2% conversion to a GHS 12 (Basic) package, each
- * converting user generates ~$2.50 revenue vs ~$0.11 CAC → healthy margin.
+ * Economics: at 10 storyboards + 3 images/day = $0.01 + $0.045 ≈ $0.06
+ * worst case per user per day (official Z.ai prices).
  */
 export const PREVIEW_LIMITS = {
   storyboardPerDay: 10,
@@ -213,8 +241,6 @@ export function calculateProjectCost(
   const totalTokens = scenesTokens + narrationTokens + continuityTokens + scriptTokens;
   const totalCostUsd = scenesCostUsd + narrationCostUsd + continuityCostUsd + scriptCostUsd;
 
-  // 1 token = $0.05 (derived from Starter package: 10 tokens = $1)
-  const TOKEN_VALUE_USD = 0.05;
   const estimatedRevenueUsd = totalTokens * TOKEN_VALUE_USD;
   const estimatedProfitUsd = estimatedRevenueUsd - totalCostUsd;
   const estimatedMarginPct = estimatedRevenueUsd > 0 ? (estimatedProfitUsd / estimatedRevenueUsd) * 100 : 0;
@@ -234,7 +260,8 @@ export function calculateProjectCost(
 
 /**
  * Estimate scene count from target duration.
- * Each Z.ai video clip is ~5-10 seconds; we assume 10s per scene.
+ * Each Z.ai video clip is ~5-10 seconds; we assume 10s per scene
+ * (CogVideoX-3 default duration).
  */
 export function estimateSceneCount(targetDurationSeconds: number): number {
   const SCENE_DURATION_SEC = 10;
@@ -263,67 +290,107 @@ export interface TokenPackage {
 /**
  * Token packages for purchase.
  *
- * Economics: Bigger packages give volume discounts (lower per-token price),
- * but the margin remains healthy because Z.ai costs are fixed per operation.
+ * Priced against REAL Z.ai costs (see header). With the default engine
+ * (CogVideoX-3) one scene costs 7 tokens (6 clip + 1 thumbnail), so:
+ *   • 30-sec video (3 scenes)  ≈ 23 tokens
+ *   • 45–60s video (6 scenes)  ≈ 44 tokens  ← the classic birthday video
+ *   • 2-min video (12 scenes)  ≈ 87 tokens
  *
- * The "bonusPct" gives extra tokens on larger packages — a common SaaS
- * pattern that incentivizes larger upfront purchases (better cash flow for you).
+ * Each package is sized to buy whole videos. Bigger packages give volume
+ * discounts (lower per-token price) while keeping a healthy margin:
+ * at official Z.ai prices, ~28 scenes can be generated per $1 of COGS
+ * covered by $1.63 of token revenue (≈ 38% gross margin in USD terms).
  */
 export const TOKEN_PACKAGES: TokenPackage[] = [
   {
     id: "starter",
     name: "Starter",
-    tokens: 10,
-    priceGHS: 5,
-    priceUSD: 1,
+    tokens: 25,
+    priceGHS: 12,
+    priceUSD: 2.5,
     bonusPct: 0,
     popular: false,
-    features: ["10 AI credits", "Standard video quality", "Email support"],
-    effectiveTokenPriceGHS: 0.50,
+    features: [
+      "25 AI credits",
+      "One 30-second video (3 scenes)",
+      "All video engines incl. CogVideoX-3",
+      "Background music + AI narration",
+      "Email support",
+    ],
+    effectiveTokenPriceGHS: 0.48,
   },
   {
     id: "basic",
     name: "Basic",
-    tokens: 30,
-    priceGHS: 12,
-    priceUSD: 2.5,
-    bonusPct: 20, // 30 + 6 bonus = 36 tokens
+    tokens: 50,
+    priceGHS: 22,
+    priceUSD: 4.5,
+    bonusPct: 10, // 50 + 5 bonus = 55 tokens
     popular: true,
-    features: ["30 AI credits (+6 bonus)", "HD video quality", "Priority support", "AI Director Mode"],
-    effectiveTokenPriceGHS: 0.33,
+    features: [
+      "50 AI credits (+5 bonus)",
+      "One full 45–60s video (6 scenes)",
+      "HD 1080p export",
+      "Background music + AI narration + character voices",
+      "AI Director Mode",
+      "Priority support",
+    ],
+    effectiveTokenPriceGHS: 0.4,
   },
   {
     id: "pro",
     name: "Pro",
-    tokens: 75,
-    priceGHS: 25,
-    priceUSD: 5,
-    bonusPct: 25, // 75 + ~19 bonus = 94 tokens
+    tokens: 110,
+    priceGHS: 42,
+    priceUSD: 8.5,
+    bonusPct: 20, // 110 + 22 bonus = 132 tokens
     popular: false,
-    features: ["75 AI credits (+19 bonus)", "HD video quality", "Priority support", "AI Director Mode", "Continuity Checker"],
-    effectiveTokenPriceGHS: 0.27,
+    features: [
+      "110 AI credits (+22 bonus)",
+      "Three 45–60s videos",
+      "HD 1080p export",
+      "All engines incl. ViduQ1 1080p cinematic",
+      "AI Director Mode + Continuity Checker",
+      "Priority support",
+    ],
+    effectiveTokenPriceGHS: 0.32,
   },
   {
     id: "business",
     name: "Business",
-    tokens: 200,
-    priceGHS: 55,
-    priceUSD: 11,
-    bonusPct: 30, // 200 + 60 bonus = 260 tokens
+    tokens: 240,
+    priceGHS: 84,
+    priceUSD: 17,
+    bonusPct: 25, // 240 + 60 bonus = 300 tokens
     popular: false,
-    features: ["200 AI credits (+60 bonus)", "4K video quality", "Dedicated support", "All AI features", "Custom branding"],
-    effectiveTokenPriceGHS: 0.21,
+    features: [
+      "240 AI credits (+60 bonus)",
+      "Six 45–60s videos",
+      "4K export",
+      "All AI features",
+      "Dedicated support",
+      "Custom branding",
+    ],
+    effectiveTokenPriceGHS: 0.28,
   },
   {
     id: "enterprise",
     name: "Enterprise",
-    tokens: 500,
-    priceGHS: 120,
-    priceUSD: 24,
-    bonusPct: 35, // 500 + 175 bonus = 675 tokens
+    tokens: 550,
+    priceGHS: 175,
+    priceUSD: 35,
+    bonusPct: 30, // 550 + 165 bonus = 715 tokens
     popular: false,
-    features: ["500 AI credits (+175 bonus)", "4K video quality", "Dedicated account manager", "All AI features", "Custom branding", "API access"],
-    effectiveTokenPriceGHS: 0.18,
+    features: [
+      "550 AI credits (+165 bonus)",
+      "Sixteen 45–60s videos",
+      "4K export",
+      "Dedicated account manager",
+      "All AI features",
+      "Custom branding",
+      "API access",
+    ],
+    effectiveTokenPriceGHS: 0.245,
   },
 ];
 

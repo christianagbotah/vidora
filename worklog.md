@@ -2871,3 +2871,35 @@ Stage Summary:
 - Scripts now produce what they describe: the celebration text is explicitly instructed onto cakes/banners/gift tags AND gets a real 3D-letters closing title card; dialogue is extracted from every speaker form, persisted on scenes, and turned into per-character TTS voices automatically; celebration scripts get a matching background-music track by default
 - The "no sound at all" class of bug is closed at the source: dialogue no longer dies at scene creation, characters no longer lack voices, and TTS text no longer includes speaker labels
 - Scene count honors the user's script (no more silent slicing), and group speakers (Chorus/Everyone) narrate without becoming bogus characters
+
+---
+Task ID: 9
+Agent: main
+Task: Verify real Z.ai API charges and update all token pricing to official costs
+
+Work Log:
+- Queried TokenTransaction table: only 2 video_gen spends recorded ($0.54/3 scenes, $0.72/4 scenes — old estimates)
+- Read official Z.ai price sheet via web-reader: docs.z.ai/guides/overview/pricing
+  • CogVideoX-3: $0.20/video (was assumed $0.12 → LOSS per clip)
+  • vidu2-image: $0.20/video; vidu2-reference/viduq1-text/viduq1-image: $0.40/video (confirmed via docs.z.ai video guides)
+  • GLM-Image: $0.015/image; CogView-4: $0.01/image
+  • GLM-4.6/4.5: $0.6/M in, $2.2/M out; GLM-4.5-Air: $0.2/$1.1; Flash models FREE
+  • GLM-ASR-2512: $0.03/MTok (~$0.0024/min); TTS unpublished (~$0.003/call est.)
+- Reconciled owner's observed ~$3 consumption: 13 clips (6 GiannisBD + 4+3 E2E retries) × $0.20 = $2.60 + portraits $0.09 + LLM ~$0.05 + TTS/ASR ≈ $2.85 ✓ matches
+- Rewrote src/lib/pricing.ts: video_gen 6 tokens/$0.20, image_gen 1/$0.015, updated LLM/TTS/ASR costs, new TOKEN_PACKAGES (25/50/110/240/550 tokens sized to whole videos: 6-scene video = 44 tokens)
+- src/lib/video-models.ts: CogVideoX-3 costUsd 0.08 → 0.20
+- src/lib/storefront.ts: ENGINE_SEEDS (6 tokens for $0.20 engines, 12 for $0.40 engines; GHS 3/6 display), fixed getEngineChargeInfo to use catalog real cost (not admin display price), PLAN_SEEDS marketing cards aligned (Pro GHS 42, Enterprise GHS 175)
+- src/app/api/admin/api-costs/route.ts: uses TOKEN_VALUE constants
+- src/app/page.tsx: updated fallback plans + help-center token costs (6/12 tokens per clip)
+- src/components/PackageEditDialog.tsx: videos-per-package divisor 12 → 44 tokens
+- Ran one-off DB migration: EnginePricing, TokenPackage, PricingPlan rows updated to new values
+- Verified via API: /api/storefront/pricing shows 6/12 tokens per clip, 33% margins
+- Verified in browser (agent-browser): homepage pricing cards (Pro GH₵42, Enterprise GH₵175) and Buy Tokens packages (Starter 25/GH₵12 … Enterprise 550/GH₵175) all render live from DB, no console errors
+- Confirmed split-scenes pipeline fully wired (from prior session work): Giannis script test → 7 scenes (6 + Final Screen), 8 characters, full dialogue incl. 'Chase & Marshall:'/'Everyone (sings):'/'Chorus:', inscription injected in every prompt, defaultMusic joyful
+- Lint: 0 errors
+
+Stage Summary:
+- All token charges now reflect official Z.ai pricing with ~33% gross margin on video
+- COGS records (costUsd in TokenTransaction) now track REAL Z.ai costs from the verified catalog
+- Token packages sized to buy whole videos (Basic = one full 45–60s birthday video)
+- split-scenes celebration pipeline verified end-to-end
