@@ -2,6 +2,21 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { VideoProject, AppView } from "@/types/video";
 
+export type AIHealthStatus = "checking" | "ok" | "degraded" | "down";
+
+interface AIHealthState {
+  status: AIHealthStatus;
+  message: string;
+  checkedAt: number | null;
+  lastTransitionAt: number | null;
+}
+
+interface AIHealthUpdate {
+  status: AIHealthStatus;
+  message: string;
+  checkedAt?: number | null;
+}
+
 interface AppState {
   currentView: AppView;
   projects: VideoProject[];
@@ -10,6 +25,7 @@ interface AppState {
   isEnhancing: boolean;
   isRecording: boolean;
   sidebarOpen: boolean;
+  aiHealth: AIHealthState;
   /** Persisted project ID — survives reload so studio view can re-fetch the project */
   persistedProjectId: string | null;
 
@@ -20,6 +36,7 @@ interface AppState {
   setIsEnhancing: (v: boolean) => void;
   setIsRecording: (v: boolean) => void;
   setSidebarOpen: (v: boolean) => void;
+  setAIHealth: (health: AIHealthUpdate) => void;
   /** Clears persisted navigation state (e.g. on logout) */
   clearPersistedNav: () => void;
 }
@@ -34,6 +51,12 @@ export const useAppStore = create<AppState>()(
       isEnhancing: false,
       isRecording: false,
       sidebarOpen: false,
+      aiHealth: {
+        status: "checking",
+        message: "Checking AI service status…",
+        checkedAt: null,
+        lastTransitionAt: null,
+      },
       persistedProjectId: null,
 
       setCurrentView: (view) => set({ currentView: view }),
@@ -44,12 +67,27 @@ export const useAppStore = create<AppState>()(
       setIsEnhancing: (v) => set({ isEnhancing: v }),
       setIsRecording: (v) => set({ isRecording: v }),
       setSidebarOpen: (v) => set({ sidebarOpen: v }),
+      setAIHealth: (health) =>
+        set((state) => {
+          const now = health.checkedAt ?? Date.now();
+          return {
+            aiHealth: {
+              status: health.status,
+              message: health.message,
+              checkedAt: now,
+              lastTransitionAt:
+                state.aiHealth.status !== health.status
+                  ? now
+                  : state.aiHealth.lastTransitionAt,
+            },
+          };
+        }),
       clearPersistedNav: () =>
         set({ currentView: "home", persistedProjectId: null, currentProject: null }),
     }),
     {
       name: "vidora-nav",
-      /** Only persist view state and project ID — NOT transient flags */
+      /** Only persist view state and project ID — NOT transient flags or health. */
       partialize: (state) => ({
         currentView: state.currentView,
         persistedProjectId: state.persistedProjectId,
