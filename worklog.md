@@ -3013,3 +3013,28 @@ Stage Summary:
 - Health endpoint now: public zero-cost (config readiness incl. sandbox .z-ai-config detection), admin deep probe on FREE model
 - Transient mid-rebase compile errors fully cleared; app verified clean post-rebase
 - NOTE: deploy.sh on the VPS should be run to bring production up to the hardening + zero-cost-health stack
+
+---
+Task ID: 14
+Agent: main
+Task: Adopt authoritative baseline 878f807 — sandbox sync, PostgreSQL parity, full local CI verification, architecture inspection
+
+Work Log:
+- Verified remote main == 878f8074a687acfa31ffc0888cbf6d3012e25a18; local was efa0221 (ancestor — clean ff). Two new commits on top: e34a17a (ZAI config-file fallback development-only) + 878f807 (deploy.sh requires production ZAI env credentials + ready health)
+- Ran the mandated procedure: checkout main → pull --ff-only → rev-parse HEAD → exact SHA match 878f807
+- NEW DEV WORKFLOW ADOPTED: all feature/fix work on dedicated branches → PR against main → no direct main pushes, no self-merges
+- Baseline requires PostgreSQL everywhere (schema.prisma = postgresql provider; schema.prisma.local deleted; local-db-push.sh refuses SQLite; CI uses postgres:16-alpine)
+- Provisioned embedded PostgreSQL 18.4 at /home/z/pg-service (OUTSIDE the repo — repo stays pristine): port 5433, user vidora, db vidora, persistent data dir, script named "postgres" (avoids pkill collisions with next dev)
+- Bootstrapped schema via CI's exact recipe: bunx prisma db push --skip-generate (db push is fresh-DB bootstrap only; production uses migrate deploy; migrations are deltas vs existing prod schema and fail-closed on fresh DBs — by design)
+- Seeded sandbox admin via prisma/seed-admin.ts (admin@vidora.local / Admin@123, 1000 tokens)
+- Rewrote sandbox .env: postgres DATABASE_URL + generated NEXTAUTH_SECRET + CONFIG_ENCRYPTION_KEY + localhost NEXTAUTH_URL
+- CRITICAL LESSON: shell exports stale DATABASE_URL (sqlite) which OVERRIDES .env — dev server must start via `env -u DATABASE_URL bun run dev`; also `pkill -f "bun run dev"` kills pg-service if its script is named "dev" (renamed to "postgres")
+- Restarted dev server detached; browser-verified: title "Vidora Studio", 0 console errors, 0 page errors, admin login works (dialog closed → Dashboard/Admin/1000 tokens), dashboard renders from postgres (projects/tokens/history APIs 200)
+- Full local CI parity: lint 0 errors; tsc clean (skills/ sandbox artifacts excluded — gitignored, not in repo); unit 9/9 pass; integration 8/8 pass against embedded postgres (payment settlement fail-closed + legacy recovery, token concurrency exactly-once + never-negative)
+- Inspected all 11 mandated files in depth (tokens.ts, payment-settlement.ts, zai.ts, project-auth.ts, share-access.ts, generation-worker.ts, export-worker.ts, deploy.sh, ecosystem.config.js, ci.yml) — invariants internalized (see Stage Summary)
+
+Stage Summary:
+- Sandbox now runs the exact authoritative baseline with production-parity PostgreSQL (embedded :5433); DB schema via canonical push bootstrap; CI-green equivalent checks all pass locally
+- Architecture invariants understood and binding for all future work: FOR UPDATE row locks + idempotency keys in financial ledger; payment settlement single exactly-once transaction with amount/currency verification + legacy completed-row recovery; sessionVersion stale-session guard; HMAC-signed 1h share tokens; durable GenerationRun/ExportJob queues with FOR UPDATE SKIP LOCKED claiming, stale-lease recovery, 15s provider submission spacing, fail-closed "submitting-without-taskId → needs_reconciliation" (never auto-resubmit); workers as PM2 processes (bun interpreter); deploy.sh = env validation → frozen lockfile → preflight checks → mandatory pg_dump + media backups → migrate deploy → pm2 reload → HTTP + AI health gates; public health endpoint zero-cost (config readiness only), admin deep probe on free glm-4.5-flash; ZAI config-file fallback strictly development-only
+- Dev environment notes: pg-service at /home/z/pg-service (restart: setsid --fork bash -c 'cd /home/z/pg-service && exec bun run postgres'); dev server must use env -u DATABASE_URL; sandbox skills/ dir causes tsc noise (gitignored artifact)
+- Repo change in this task: worklog entry only (this branch). No production code touched.
