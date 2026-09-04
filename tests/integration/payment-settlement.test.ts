@@ -45,6 +45,18 @@ async function createPendingPayment() {
   return { user, payment, reference };
 }
 
+function verified(reference: string) {
+  return {
+    success: true,
+    verified: true,
+    amountMinor: 1000,
+    amount: 10,
+    currency: "GHS",
+    reference,
+    providerTransactionId: `provider-${reference}`,
+  } as const;
+}
+
 afterAll(async () => {
   for (const id of createdUsers) {
     await db.user.delete({ where: { id } }).catch(() => undefined);
@@ -54,15 +66,7 @@ afterAll(async () => {
 describe("payment settlement", () => {
   test("concurrent verified callbacks credit exactly once", async () => {
     const { user, payment, reference } = await createPendingPayment();
-    const verification = {
-      success: true,
-      verified: true,
-      amountMinor: 1000,
-      amount: 10,
-      currency: "GHS",
-      reference,
-      providerTransactionId: `provider-${reference}`,
-    } as const;
+    const verification = verified(reference);
 
     const results = await Promise.all(
       Array.from({ length: 10 }, () => settleVerifiedPayment(payment.id, verification))
@@ -84,6 +88,65 @@ describe("payment settlement", () => {
     expect(ledger.reduce((sum, row) => sum + row.amount, 0)).toBe(25);
     expect(await db.tokenTransaction.count({ where: { idempotencyKey: `payment:${payment.id}:purchase` } })).toBe(1);
     expect(await db.tokenTransaction.count({ where: { idempotencyKey: `payment:${payment.id}:bonus` } })).toBe(1);
+  });
+
+  test("recovers a legacy completed row that was marked complete before credit", async () => {
+    const { user, payment, reference } = await createPendingPayment();
+    await db.payment.update({
+      where: { id: payment.id },
+      data: { status: "completed", settledAt: null },
+    });
+
+    const result = await settleVerifiedPayment(payment.id, verified(reference));
+    expect(result.success).toBe(true);
+    expect(result.success && result.alreadySettled).toBe(false);
+    expect(result.success && result.totalCredited).toBe(25);
+
+    const currentUser = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(currentUser.tokens).toBe(28);
+    const currentPayment = await db.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(currentPayment.settledAt).not.toBeNull();
+    expect(await db.tokenTransaction.count({ where: { referenceId: payment.id } })).toBe(2);
+  });
+
+  test("normalizes a legacy completed row with an existing purchase ledger without double credit", async () => {
+    const { user, payment, reference } = await createPendingPayment();
+    await db.$transaction([
+      db.user.update({ where: { id: user.id }, data: { tokens: 28 } }),
+      db.payment.update({ where: { id: payment.id }, data: { status: "completed", settledAt: null } }),
+      db.tokenTransaction.create({
+        data: {
+          userId: user.id,
+          type: "purchase",
+          amount: 20,
+          description: "Legacy purchase",
+          referenceId: payment.id,
+          idempotencyKey: `legacy-payment:${payment.id}:purchase`,
+          operationType: "purchase",
+        },
+      }),
+      db.tokenTransaction.create({
+        data: {
+          userId: user.id,
+          type: "bonus",
+          amount: 5,
+          description: "Legacy bonus",
+          referenceId: payment.id,
+          idempotencyKey: `legacy-payment:${payment.id}:bonus`,
+          operationType: "purchase",
+        },
+      }),
+    ]);
+
+    const result = await settleVerifiedPayment(payment.id, verified(reference));
+    expect(result.success).toBe(true);
+    expect(result.success && result.alreadySettled).toBe(true);
+    expect(result.success && result.totalCredited).toBe(0);
+
+    const currentUser = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(currentUser.tokens).toBe(28);
+    const currentPayment = await db.payment.findUniqueOrThrow({ where: { id: payment.id } });
+    expect(currentPayment.settledAt).not.toBeNull();
   });
 
   test("amount mismatch fails closed without credit", async () => {
