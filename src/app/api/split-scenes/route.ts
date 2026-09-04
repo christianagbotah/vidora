@@ -29,10 +29,8 @@ export async function POST(req: NextRequest) {
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
 
-  let forwarded: NextRequest;
   let body: Record<string, unknown>;
   try {
-    forwarded = req.clone();
     const parsed = await req.json();
     body = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   } catch {
@@ -101,6 +99,18 @@ export async function POST(req: NextRequest) {
       );
     }
   }
+
+  // Rebuild a fresh NextRequest because the original body stream has been
+  // consumed for validation. Remove content-length so it is recalculated for
+  // the normalized JSON payload before the preserved legacy parser reads it.
+  const headers = new Headers(req.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  const forwarded = new NextRequest(req.url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
 
   return runSplitScenes(forwarded);
 }
