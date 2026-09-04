@@ -26,10 +26,24 @@ function parseMetadata(metadata: string | null): Record<string, unknown> {
 function snapshotFromPayment(payment: {
   gateway: string;
   amount: number;
+  expectedAmountMinor: number;
   currency: string;
   tokensPurchased: number;
+  bonusTokens: number;
+  packageSlug: string | null;
   metadata: string | null;
 }): PurchaseSnapshot {
+  if (payment.expectedAmountMinor > 0) {
+    return {
+      packageSlug: payment.packageSlug,
+      baseTokens: payment.tokensPurchased,
+      bonusTokens: payment.bonusTokens,
+      amountMinor: payment.expectedAmountMinor,
+      currency: payment.currency.toUpperCase(),
+      gateway: payment.gateway,
+    };
+  }
+
   const meta = parseMetadata(payment.metadata);
   const rawSnapshot = meta.purchaseSnapshot;
   if (rawSnapshot && typeof rawSnapshot === "object" && !Array.isArray(rawSnapshot)) {
@@ -56,12 +70,10 @@ function snapshotFromPayment(payment: {
     }
   }
 
-  // Backward-compatible legacy payment snapshot. Existing pending payments can
-  // still settle safely, but all new payments write purchaseSnapshot.
-  const bonusTokens = Number(meta.bonusTokens ?? 0);
+  const legacyBonus = Number(meta.bonusTokens ?? 0);
   return {
     baseTokens: payment.tokensPurchased,
-    bonusTokens: Number.isSafeInteger(bonusTokens) && bonusTokens > 0 ? bonusTokens : 0,
+    bonusTokens: Number.isSafeInteger(legacyBonus) && legacyBonus > 0 ? legacyBonus : 0,
     amountMinor: Math.round(payment.amount * 100),
     currency: payment.currency.toUpperCase(),
     gateway: payment.gateway,
@@ -75,11 +87,7 @@ export async function verifyAndSettleByReference(reference: string) {
   const gateway = getGatewayByName(payment.gateway);
   const verification = await gateway.verifyPayment(reference);
   if (!verification.success || !verification.verified) {
-    return {
-      success: false as const,
-      status: 422,
-      error: verification.error || "Payment could not be verified",
-    };
+    return { success: false as const, status: 422, error: verification.error || "Payment could not be verified" };
   }
   return settleVerifiedPayment(payment.id, verification);
 }
@@ -112,8 +120,6 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
 
   try {
     const result = await db.$transaction(async (tx) => {
-      // Serialize settlement attempts for one payment even when webhook and
-      // browser callback arrive simultaneously. The lock is released on commit.
       const lockKey = `vidora-payment:${paymentId}`;
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
 
@@ -121,30 +127,22 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
       if (!current) throw new Error("Payment not found");
       if (current.status === "refunded") throw new Error("Refunded payment cannot be settled");
 
-      if (current.status === "completed") {
+      if (current.settledAt || current.status === "completed") {
         const user = await tx.user.findUnique({ where: { id: current.userId }, select: { tokens: true } });
-        return {
-          alreadySettled: true,
-          totalCredited: 0,
-          newBalance: user?.tokens ?? 0,
-        };
+        return { alreadySettled: true, totalCredited: 0, newBalance: user?.tokens ?? 0 };
       }
 
+      const settledAt = new Date();
       const currentMeta = parseMetadata(current.metadata);
       const settledMeta = {
         ...currentMeta,
         settlement: {
-          settledAt: new Date().toISOString(),
+          settledAt: settledAt.toISOString(),
           verifiedAmountMinor: amountMinor,
           verifiedCurrency,
           providerTransactionId: verification.providerTransactionId || null,
         },
       };
-
-      await tx.payment.update({
-        where: { id: paymentId },
-        data: { status: "completed", metadata: JSON.stringify(settledMeta) },
-      });
 
       const totalTokens = expected.baseTokens + expected.bonusTokens;
       const updated = await tx.user.update({
@@ -160,6 +158,7 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
           amount: expected.baseTokens,
           description: `Purchased ${expected.baseTokens} tokens via ${current.gateway}`,
           referenceId: current.id,
+          idempotencyKey: `payment:${current.id}:purchase`,
           operationType: "purchase",
         },
       });
@@ -172,16 +171,23 @@ export async function settleVerifiedPayment(paymentId: string, verification: Ver
             amount: expected.bonusTokens,
             description: `Purchase bonus: ${expected.bonusTokens} tokens`,
             referenceId: current.id,
+            idempotencyKey: `payment:${current.id}:bonus`,
             operationType: "purchase",
           },
         });
       }
 
-      return {
-        alreadySettled: false,
-        totalCredited: totalTokens,
-        newBalance: updated.tokens,
-      };
+      await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: "completed",
+          settledAt,
+          providerTransactionId: verification.providerTransactionId || current.providerTransactionId,
+          metadata: JSON.stringify(settledMeta),
+        },
+      });
+
+      return { alreadySettled: false, totalCredited: totalTokens, newBalance: updated.tokens };
     });
 
     return { success: true as const, status: 200, ...result };
