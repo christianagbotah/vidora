@@ -2970,3 +2970,27 @@ Stage Summary:
 - Dev server now runs detached via setsid --fork (survives tool sessions) on port 3000
 - All Task 11 deliverables (modal scrolling, Vidora Studio rename, favicon/OG/PWA assets) re-verified end-to-end on the fresh instance
 - Repo state: clean tree, pushing worklog updates
+
+---
+Task ID: 13
+Agent: main
+Task: Investigate owner's report of Z.ai balance dropping without video generation since yesterday
+
+Work Log:
+- Audited every Z.ai SDK call site (18 files): ALL require explicit user action (scene gen, portraits, dubbing, subtitles, assistant, split-scenes, transcribe) — none run passively
+- Queried sandbox DB: ZERO pending/processing scenes, ZERO pending export jobs, ZERO active projects, ZERO token transactions in 48h → no orphaned pollers, no phantom consumers
+- Verified pollVideoTask only GETs status (free) — never resubmits, caps at 80 attempts × 15s
+- No cron/scheduled jobs anywhere; no mini-services running
+- The ONLY passive consumer: /api/ai/health (AIStatusBadge polls on page load + every 5 min; server caches 5 min) — was using paid glm-4-plus default, ~$0.0001/call
+- Tested free Flash models through gateway: glm-4.5-flash, glm-4.7-flash, glm-4-flash all work
+- CHANGED: health check now explicitly uses FREE glm-4.5-flash (verified price sheet: Flash = $0) — health pings cost nothing forever; verified endpoint still returns ok
+- Researched Z.ai billing mechanics (docs.z.ai FAQ): two balances (credits/promotional consumed FIRST, then cash); every deduction listed in Billing → Transaction History; video fees deduct at submit time even on failure
+- Conclusion for owner: the drop is almost certainly the prior E2E test session's charges (~$2.85 = 13 clips × $0.20 + portraits/LLM/TTS) posting to billing with delay, plus possibly promotional credits burning first
+- Added scripts/check-consumers.ts as a reusable audit script (checks pending scenes, export jobs, recent token transactions)
+- Lint: 0 errors; browser verified clean
+
+Stage Summary:
+- No passive/hidden consumers exist in the app — confirmed by code audit + DB audit + process audit
+- Health check switched to FREE glm-4.5-flash model (the only passive call) — zero-cost pings on sandbox and (after next deploy) production
+- Owner's balance drop explained: delayed posting of the E2E test session charges (~$2.85) + Z.ai credits-first deduction order; definitive answer is in z.ai Billing → Transaction History
+- Needs `./deploy.sh` on VPS to apply the free-model health check to production

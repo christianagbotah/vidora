@@ -52,7 +52,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Minimal chat call — 1 token of output, thinking disabled for speed/cost.
+    // Uses the FREE GLM-4.5-Flash model (verified price sheet: Flash models
+    // cost $0) so even the admin deep probe never consumes paid balance.
     await zai.chat({
+      model: "glm-4.5-flash",
       systemPrompt: "You are a health-check endpoint. Reply with exactly: OK",
       userPrompt: "ping",
       thinking: "disabled",
