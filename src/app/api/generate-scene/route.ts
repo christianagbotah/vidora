@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       retry: { label: "Generate scene image", timeoutMs: 120_000, maxRetries: 4 },
     });
     const imageUrl = await saveGeneratedFile(
-      `scene_${Date.now()}_${operationId.slice(0, 8)}.png`,
+      `users/${authResult.session.userId}/scene_${Date.now()}_${operationId.slice(0, 8)}.png`,
       Buffer.from(imageBase64, "base64")
     );
 
