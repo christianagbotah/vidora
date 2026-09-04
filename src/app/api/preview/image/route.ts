@@ -1,51 +1,26 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuth } from "@/lib/project-auth";
 import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { applyWatermark } from "@/lib/watermark";
-import { consumePreviewQuota, refundPreviewQuota } from "@/lib/preview-limit";
-import { db } from "@/lib/db";
+import { consumePreviewQuota } from "@/lib/preview-limit";
+import { deductTokensForOperation } from "@/lib/tokens";
 import { PRICING } from "@/lib/pricing";
 import { saveGeneratedFile } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
 
-/**
- * POST /api/preview/image
- *
- * Generates ONE watermarked, low-resolution still image from a scene prompt —
- * FREE (no tokens). This is the second step of the "try before you buy" funnel:
- *
- *   User sees storyboard → requests a visual style preview
- *   → AI generates ONE image → watermark is applied → returned to UI
- *
- * The watermark (diagonal "VIDORA • PREVIEW" + badges) makes the image
- * commercially unusable, so users must buy tokens for the clean, full-HD,
- * multi-scene video.
- *
- * Cost to owner: ~$0.03 (one image generation). Rate-limited: 3/day.
- */
-
-// Preview images are always generated at a fixed small size to keep them
-// clearly "preview quality" (not usable as a final product).
 const PREVIEW_SIZE = "1024x1024" as const;
 
 export async function POST(req: NextRequest) {
-  // ── Auth ──
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json(
-      { success: false, error: "Please sign in to generate a free preview." },
-      { status: 401 }
-    );
-  }
-  const userId = (session.user as Record<string, unknown>).id as string;
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
+  const userId = authResult.session.userId;
 
-  // ── Parse input ──
   const body = await req.json().catch(() => ({}));
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const style = typeof body.style === "string" ? body.style : "cinematic";
+  const style = typeof body.style === "string" ? body.style.slice(0, 100) : "cinematic";
 
   if (prompt.length < 10) {
     return NextResponse.json(
@@ -60,23 +35,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Rate limit (daily free quota — stricter for images since they cost more) ──
   const quota = await consumePreviewQuota(userId, "image");
   if (!quota.ok) {
     return NextResponse.json(
-      {
-        success: false,
-        error: quota.reason,
-        previewQuota: quota,
-      },
+      { success: false, error: quota.reason, previewQuota: quota },
       { status: 429 }
     );
   }
 
-  // ── Augment the prompt with the chosen style for a cohesive look ──
+  const attemptId = crypto.randomUUID();
+  await deductTokensForOperation({
+    userId,
+    operation: "preview_image",
+    description: "Free watermarked image preview provider attempt",
+    referenceId: attemptId,
+    idempotencyKey: `preview-image:${attemptId}`,
+    customTokens: 0,
+    customCostUsd: PRICING.preview_image.costUsd,
+  });
+
   const styledPrompt = `${prompt}. Visual style: ${style}, cinematic lighting, high quality, detailed.`;
 
-  // ── Generate the image via Z.ai ──
   let imageBase64: string;
   try {
     imageBase64 = await zai.generateImage({
@@ -85,53 +64,34 @@ export async function POST(req: NextRequest) {
       retry: { label: "Preview image generation", timeoutMs: 120_000, maxRetries: 3 },
     });
   } catch (err) {
-    // Server-side failure (Z.ai down / insufficient balance) — refund quota
-    // so the user isn't penalized for a failure that wasn't their fault.
-    await refundPreviewQuota(userId, "image");
-    // Use the differentiated responder — admins see raw detail, users see friendly copy.
     const resp = zaiErrorResponse(err, {
-      session: { role: (session.user as Record<string, unknown>).role as string },
+      session: authResult.session,
       fallbackStatus: 502,
       logLabel: "preview-image",
     });
-    // Attach previewQuota onto the body so the client can still show remaining count.
-    const body = await resp.json();
-    body.previewQuota = quota;
-    return NextResponse.json(body, { status: resp.status });
+    const responseBody = await resp.json();
+    responseBody.previewQuota = quota;
+    return NextResponse.json(responseBody, { status: resp.status });
   }
 
-  // ── Apply the watermark ──
   let watermarkedBuffer: Buffer;
   try {
-    const rawBuffer = Buffer.from(imageBase64, "base64");
-    watermarkedBuffer = await applyWatermark(rawBuffer);
-  } catch (err) {
-    // Watermarking failed — refund quota (server-side processing error)
-    await refundPreviewQuota(userId, "image");
-    const message = "Watermarking failed.";
+    watermarkedBuffer = await applyWatermark(Buffer.from(imageBase64, "base64"));
+  } catch {
+    // Provider spend already occurred; keep the quota consumed so the free-use
+    // budget remains bounded even if local post-processing fails.
     return NextResponse.json(
-      { success: false, error: `Failed to process preview image: ${message}`, previewQuota: quota },
+      {
+        success: false,
+        error: "Failed to process preview image.",
+        previewQuota: quota,
+      },
       { status: 500 }
     );
   }
 
-  // ── Persist the watermarked image to the generated store ──
-  // We store it so the frontend can reference it by URL. These are deliberately
-  // low-res + watermarked, so even if shared they have no commercial value.
-  const filename = `preview_${userId}_${Date.now()}.jpg`;
+  const filename = `preview_${userId}_${Date.now()}_${attemptId.slice(0, 8)}.jpg`;
   const publicUrl = await saveGeneratedFile(`previews/${filename}`, watermarkedBuffer);
-
-  // ── Record the (free) cost for analytics so the owner sees CAC ──
-  await db.tokenTransaction.create({
-    data: {
-      userId,
-      type: "spend",
-      amount: 0, // free
-      description: `Free watermarked image preview`,
-      costUsd: PRICING.preview_image.costUsd,
-      operationType: "preview_image",
-    },
-  }).catch(() => { /* non-fatal */ });
 
   return NextResponse.json({
     success: true,
