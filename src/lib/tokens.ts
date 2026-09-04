@@ -15,9 +15,24 @@ export async function checkTokens(userId: string, requiredTokens: number): Promi
   return { hasEnough: user.tokens >= requiredTokens, balance: user.tokens };
 }
 
+/**
+ * Serialize all balance mutations for one user on the real database row.
+ *
+ * Using SELECT ... FOR UPDATE avoids the Prisma deserialization problem that
+ * pg_advisory_xact_lock() caused (it returns PostgreSQL void), and it keeps
+ * the lock scoped to this transaction. The unique idempotencyKey constraint
+ * remains a second, independent exactly-once guard.
+ */
 async function lockUser(tx: any, userId: string): Promise<void> {
-  const key = `vidora-token-user:${userId}`;
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "User"
+    WHERE "id" = ${userId}
+    FOR UPDATE
+  `;
+  if (rows.length !== 1) {
+    throw new Error("User not found");
+  }
 }
 
 export async function deductTokensForOperation(opts: {
