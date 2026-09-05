@@ -52,7 +52,10 @@ export async function POST(
       ? body.lang.trim().slice(0, MAX_LANG_LENGTH)
       : "en";
 
-    const scene = await db.videoScene.findUnique({ where: { id } });
+    const scene = await db.videoScene.findUnique({
+      where: { id },
+      include: { translations: { where: { lang }, take: 1 } },
+    });
     if (!scene) {
       return NextResponse.json(
         { success: false, error: "Scene not found" },
@@ -60,10 +63,14 @@ export async function POST(
       );
     }
 
-    const sourceText = (scene.dialogue || scene.prompt || "").trim();
+    const sourceText = (
+      lang === "en"
+        ? (scene.dialogue || scene.prompt || "")
+        : (scene.translations[0]?.translatedText || "")
+    ).trim();
     if (!sourceText) {
       return NextResponse.json(
-        { success: false, error: "No narration text available for this scene" },
+        { success: false, error: lang === "en" ? "No narration text available for this scene" : `No ${lang} translation is available for subtitles` },
         { status: 400 }
       );
     }
