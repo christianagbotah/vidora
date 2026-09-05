@@ -19,6 +19,11 @@ import {
   synthesizeProviderSpeech,
 } from "@/lib/ai-provider-router";
 import {
+  buildNarrationPerformanceDirection,
+  normalizeNarrationProfile,
+  type NarrationProfile,
+} from "@/lib/narration-profile";
+import {
   writeAudioFile,
   deleteAudioFile,
   getAudioPath,
@@ -179,6 +184,7 @@ export interface NarrationResult {
   remainingTokens?: number;
   transactionId?: string;
   replayed?: boolean;
+  profile: NarrationProfile;
 }
 
 interface PlannedSpeechChunk {
@@ -203,6 +209,7 @@ function narrationFingerprint(opts: {
   sceneId: string;
   chunks: PlannedSpeechChunk[];
   speed: number;
+  profile: NarrationProfile;
   provider: string;
   providerModel: string;
   providerVoiceConfig: unknown;
@@ -223,6 +230,7 @@ async function buildSpeechPlan(opts: {
   text: string;
   defaultVoice: string;
   characterIds: string | null;
+  profile: NarrationProfile;
 }): Promise<PlannedSpeechChunk[]> {
   const segments = parseDialogueSegments(opts.text);
   if (segments.length === 0) return [];
@@ -258,7 +266,7 @@ async function buildSpeechPlan(opts: {
     for (const chunk of splitTextIntoChunks(segment.text, 700)) {
       output.push({
         speaker: segment.speaker,
-        direction: segment.direction,
+        direction: buildNarrationPerformanceDirection(opts.profile, segment.direction),
         text: chunk,
         voice,
       });
@@ -279,12 +287,16 @@ export async function generateSceneNarration(opts: {
   text: string;
   voice?: string;
   speed?: number;
+  language?: string;
+  accent?: string;
+  style?: string;
 }): Promise<NarrationResult> {
   const scene = await db.videoScene.findUnique({
     where: { id: opts.sceneId },
     select: {
       id: true,
       narrationUrl: true,
+      narrationLang: true,
       characterIds: true,
       project: { select: { userId: true } },
     },
@@ -297,6 +309,11 @@ export async function generateSceneNarration(opts: {
 
   const defaultVoice = (opts.voice || DEFAULT_TTS_VOICE).trim().toLowerCase();
   const speed = Math.max(0.5, Math.min(2, Number(opts.speed) || 1));
+  const profile = normalizeNarrationProfile({
+    language: opts.language || scene.narrationLang || undefined,
+    accent: opts.accent,
+    style: opts.style,
+  });
   if (!opts.text.trim()) throw new Error("No speakable text");
   if (opts.text.length > 12_000) throw new Error("Narration text is too long");
 
@@ -304,6 +321,7 @@ export async function generateSceneNarration(opts: {
     text: opts.text,
     defaultVoice,
     characterIds: scene.characterIds,
+    profile,
   });
   if (chunks.length === 0) throw new Error("No speakable dialogue was found");
 
@@ -315,6 +333,7 @@ export async function generateSceneNarration(opts: {
     sceneId: scene.id,
     chunks,
     speed,
+    profile,
     provider: providerSettings.ttsProvider,
     providerModel,
     providerVoiceConfig: providerSettings.ttsProvider === "elevenlabs"
@@ -350,6 +369,7 @@ export async function generateSceneNarration(opts: {
         remainingTokens: balance?.tokens,
         transactionId: existingCharge.id,
         replayed: true,
+        profile,
       };
     }
   }
@@ -357,7 +377,7 @@ export async function generateSceneNarration(opts: {
   const deduction = await deductTokensForOperation({
     userId,
     operation: "tts",
-    description: `Generate ${chunks.length}-part scene dialogue performance for scene ${scene.id}`,
+    description: `Generate ${chunks.length}-part ${profile.language} scene dialogue performance for scene ${scene.id}`,
     referenceId: scene.id,
     idempotencyKey: operationKey,
     customTokens: tokensToCharge,
@@ -368,13 +388,9 @@ export async function generateSceneNarration(opts: {
   }
 
   if (audioFileExists(finalFilename)) {
-    // narrationVoice is an explicit/user source setting. A voice resolved from a
-    // linked character must remain derived so later character-voice edits can
-    // flow through pickSceneNarrationVoice instead of being shadowed by stale
-    // scene state.
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: finalUrl },
+      data: { narrationUrl: finalUrl, narrationLang: profile.language },
     });
     return {
       url: finalUrl,
@@ -385,6 +401,7 @@ export async function generateSceneNarration(opts: {
       remainingTokens: deduction.remainingTokens,
       transactionId: deduction.transactionId,
       replayed: true,
+      profile,
     };
   }
 
@@ -417,7 +434,7 @@ export async function generateSceneNarration(opts: {
 
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: url },
+      data: { narrationUrl: url, narrationLang: profile.language },
     });
 
     return {
@@ -429,6 +446,7 @@ export async function generateSceneNarration(opts: {
       remainingTokens: deduction.remainingTokens,
       transactionId: deduction.transactionId,
       replayed: false,
+      profile,
     };
   } catch (err) {
     for (const p of tempChunkPaths) {
@@ -445,6 +463,7 @@ export interface NarratableScene {
   dialogue?: string | null;
   narrationUrl?: string | null;
   narrationVoice?: string | null;
+  narrationLang?: string | null;
   characterIds?: string | null;
 }
 
@@ -484,6 +503,7 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
         dialogue: true,
         narrationUrl: true,
         narrationVoice: true,
+        narrationLang: true,
         characterIds: true,
       },
     });
@@ -498,6 +518,7 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
       sceneId: scene.id,
       text: scene.dialogue,
       voice,
+      language: scene.narrationLang || undefined,
     });
     return { ok: true, url: result.url };
   } catch (err) {
