@@ -1,0 +1,31 @@
+name: Fix full preview audio filter
+
+on:
+  push:
+    branches:
+      - fix/preview-language-cleanup-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[audio-filter-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply correction
+        run: python3 scripts/fix-full-preview-audio-filter.py
+      - name: Commit corrected renderer
+        run: |
+          if git diff --quiet; then
+            echo "No changes produced"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib/full-preview-render.ts
+          git commit -m "fix: correct full preview FFmpeg audio filter graph [audio-filter-fixed]"
+          git push
