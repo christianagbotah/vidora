@@ -9,7 +9,9 @@ const contentSecurityPolicy = [
   "base-uri 'self'",
   "object-src 'none'",
   "form-action 'self'",
-  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
+  // Cloudflare Web Analytics injects its beacon from this exact host at the
+  // edge. Keep the allowance host-specific instead of broadening script-src.
+  `script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com${isProduction ? "" : " 'unsafe-eval'"}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "media-src 'self' data: blob: https:",
