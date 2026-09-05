@@ -370,10 +370,12 @@ async function processRun(runId: string): Promise<void> {
   const origin = publicOrigin();
 
   const queued = scenes.filter((scene) => scene.status === "queued" && !scene.taskId);
+  const newlySubmittedSceneIds = new Set<string>();
   for (let index = 0; index < queued.length; index += 1) {
     const scene = queued[index];
     try {
       await submitSceneTask({ runId: run.id, scene, videoSize, origin, ctx });
+      newlySubmittedSceneIds.add(scene.id);
     } catch (error) {
       const info = getErrorInfo(error);
       await db.videoScene.update({
@@ -397,10 +399,13 @@ async function processRun(runId: string): Promise<void> {
     where: { projectId: project.id, id: { in: scopedSceneIds } },
     orderBy: { sceneNumber: "asc" },
   });
-  let thumbnailFailure = false;
-  for (const scene of afterSubmission.filter((item) => !item.videoUrl && item.taskId)) {
-    const ok = await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx });
-    if (!ok) thumbnailFailure = true;
+  // Thumbnail generation is auxiliary. Attempt it once for scenes submitted
+  // in THIS claim, but never stop provider-video polling if it fails. Repeating
+  // thumbnail attempts on every polling claim can also burn provider balance.
+  for (const scene of afterSubmission.filter(
+    (item) => newlySubmittedSceneIds.has(item.id) && !item.videoUrl && item.taskId && !item.imageUrl
+  )) {
+    await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx });
   }
 
   let providerFailure = false;
@@ -415,7 +420,7 @@ async function processRun(runId: string): Promise<void> {
     where: { projectId: project.id, id: { in: scopedSceneIds } },
   });
   const allVideosDone = finalScenes.every((scene) => Boolean(scene.videoUrl));
-  if (allVideosDone && !thumbnailFailure) {
+  if (allVideosDone) {
     const incompleteProjectScenes = await db.videoScene.count({
       where: { projectId: project.id, videoUrl: null },
     });
@@ -432,15 +437,11 @@ async function processRun(runId: string): Promise<void> {
     return;
   }
 
-  if (providerFailure || thumbnailFailure) {
+  if (providerFailure) {
     await markReconciliation(
       run.id,
       project.id,
-      providerFailure && thumbnailFailure
-        ? "Provider video and thumbnail work require reconciliation"
-        : providerFailure
-          ? "A submitted provider video task failed and requires reconciliation"
-          : "Thumbnail provider work failed and requires reconciliation"
+      "A submitted provider video task failed and requires reconciliation"
     );
     return;
   }

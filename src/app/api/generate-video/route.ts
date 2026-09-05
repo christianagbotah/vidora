@@ -7,7 +7,10 @@ import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/token
 import { PRICING } from "@/lib/pricing";
 import { getEngineChargeInfo } from "@/lib/storefront";
 import { resolveModelForRequest } from "@/lib/video-models";
-import { canAutoReconcileReferenceDownloadFailure } from "@/lib/generation-reconciliation";
+import {
+  canAutoReconcileReferenceDownloadFailure,
+  canRecoverHeldProviderRun,
+} from "@/lib/generation-reconciliation";
 
 export const runtime = "nodejs";
 
@@ -132,6 +135,98 @@ async function reconcileSafeReferenceDownloadFailure(opts: {
   return { reconciled: true };
 }
 
+async function recoverHeldProviderRun(opts: {
+  run: {
+    id: string;
+    projectId: string;
+    userId: string;
+    sceneIds: string;
+    targetSceneId: string | null;
+    activeKey: string | null;
+    status: string;
+    totalTokens: number;
+    chargeTransactionId: string | null;
+    refundTransactionId: string | null;
+    error: string | null;
+  };
+  project: {
+    id: string;
+    userId: string | null;
+    scenes: Array<{
+      id: string;
+      status: string;
+      taskId: string | null;
+      videoUrl: string | null;
+      errorMessage: string | null;
+    }>;
+  };
+  userId: string;
+}): Promise<{
+  recovered: boolean;
+  queueSceneIds?: string[];
+  preserveTaskSceneIds?: string[];
+  reason?: string;
+}> {
+  const { run, project, userId } = opts;
+  if (run.projectId !== project.id || run.userId !== userId || project.userId !== userId) {
+    return { recovered: false, reason: "Generation ownership is inconsistent." };
+  }
+
+  const safety = canRecoverHeldProviderRun(run, project.scenes);
+  if (!safety.safe) {
+    return { recovered: false, reason: safety.reason || "Generation cannot be safely resumed automatically." };
+  }
+
+  const recovered = await db.$transaction(async (tx) => {
+    const held = await tx.generationRun.findUnique({
+      where: { id: run.id },
+      select: { activeKey: true, status: true, refundTransactionId: true },
+    });
+    if (
+      !held ||
+      held.activeKey !== run.activeKey ||
+      held.status !== "needs_reconciliation" ||
+      held.refundTransactionId
+    ) {
+      return false;
+    }
+
+    if (safety.queueSceneIds.length > 0) {
+      await tx.videoScene.updateMany({
+        where: {
+          projectId: project.id,
+          id: { in: safety.queueSceneIds },
+          videoUrl: null,
+        },
+        data: { status: "queued", taskId: null, errorMessage: null },
+      });
+    }
+
+    await tx.generationRun.update({
+      where: { id: run.id },
+      data: {
+        status: safety.preserveTaskSceneIds.length > 0 ? "waiting_provider" : "running",
+        error: run.error
+          ? run.error + " [user retry: safely resumed with original Vidora token charge]"
+          : "User retry: safely resumed with original Vidora token charge",
+      },
+    });
+    await tx.videoProject.update({
+      where: { id: project.id },
+      data: { status: "generating" },
+    });
+    return true;
+  });
+
+  return recovered
+    ? {
+        recovered: true,
+        queueSceneIds: safety.queueSceneIds,
+        preserveTaskSceneIds: safety.preserveTaskSceneIds,
+      }
+    : { recovered: false, reason: "The generation hold changed while retrying. Refresh and try again." };
+}
+
 export async function POST(req: NextRequest) {
   let authResult: Awaited<ReturnType<typeof requireAuth>> | null = null;
   try {
@@ -139,7 +234,7 @@ export async function POST(req: NextRequest) {
     if (!authResult.ok) return authResult.response;
     const userId = authResult.session.userId;
 
-    const { projectId } = await req.json();
+    const { projectId, retry = false } = await req.json();
     if (!projectId) return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
 
     let project = await db.videoProject.findUnique({
@@ -153,28 +248,72 @@ export async function POST(req: NextRequest) {
     if (!project.scenes.length) return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
 
     const activeKey = `project:${projectId}`;
+    let previousChargeRefunded = false;
     const existingRun = await db.generationRun.findUnique({ where: { activeKey } });
     if (existingRun) {
       if (existingRun.status === "needs_reconciliation") {
-        const result = await reconcileSafeReferenceDownloadFailure({ run: existingRun, project, userId });
-        if (!result.reconciled) {
+        // First handle the narrow pre-submission reference-image failure. No
+        // provider task exists in this case, so the old Vidora charge is
+        // refunded exactly once before a fresh run is created and charged.
+        const referenceResult = await reconcileSafeReferenceDownloadFailure({
+          run: existingRun,
+          project,
+          userId,
+        });
+        if (referenceResult.reconciled) {
+          previousChargeRefunded = true;
+          project = await db.videoProject.findUnique({
+            where: { id: projectId },
+            include: {
+              scenes: { orderBy: { sceneNumber: "asc" } },
+              characters: { orderBy: { createdAt: "asc" } },
+            },
+          });
+          if (!project) {
+            return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+          }
+        } else if (retry) {
+          // For persisted provider task IDs, retry/resume the SAME GenerationRun
+          // and reuse its original Vidora token charge. In-flight task IDs are
+          // only polled; definitively failed task IDs are the only ones reset.
+          const recovery = await recoverHeldProviderRun({
+            run: existingRun,
+            project,
+            userId,
+          });
+          if (recovery.recovered) {
+            const sceneCount = (recovery.queueSceneIds?.length || 0) +
+              (recovery.preserveTaskSceneIds?.length || 0);
+            return NextResponse.json({
+              success: true,
+              message: `Resuming ${sceneCount} unfinished scene${sceneCount === 1 ? "" : "s"}.`,
+              retrying: true,
+              reusedOriginalCharge: true,
+              tokensCharged: 0,
+              generationRunId: existingRun.id,
+              sceneCount,
+            });
+          }
           return NextResponse.json({
             success: false,
             error: "The previous generation attempt requires review before it can be retried safely.",
             reconciliationRequired: true,
-            reason: result.reason,
+            reason: recovery.reason || referenceResult.reason,
+            generationRunId: existingRun.id,
+          }, { status: 409 });
+        } else {
+          const recovery = canRecoverHeldProviderRun(existingRun, project.scenes);
+          return NextResponse.json({
+            success: false,
+            error: recovery.safe
+              ? "This generation was interrupted. Use Retry/Resume to continue the unfinished scenes safely."
+              : "The previous generation attempt requires review before it can be retried safely.",
+            retryAvailable: recovery.safe,
+            reconciliationRequired: !recovery.safe,
+            reason: recovery.reason || referenceResult.reason,
             generationRunId: existingRun.id,
           }, { status: 409 });
         }
-
-        // Refresh after resetting the exact held run scope to pending. This
-        // lets the same request create a new, independently charged run after
-        // the old charge was refunded exactly once.
-        project = await db.videoProject.findUnique({
-          where: { id: projectId },
-          include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: { orderBy: { createdAt: "asc" } } },
-        });
-        if (!project) return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
       } else {
         return NextResponse.json({
           success: true,
@@ -300,6 +439,7 @@ export async function POST(req: NextRequest) {
       totalScenes: project.scenes.length,
       tokensCharged: totalTokensNeeded,
       remainingTokens: deduction.remainingTokens,
+      refundedAndRecharged: previousChargeRefunded || undefined,
     });
   } catch (error) {
     return zaiErrorResponse(error, {
