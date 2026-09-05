@@ -186,15 +186,20 @@ export async function POST(
         // while an LLM scene parse may omit the subject name on atmospheric or
         // closing scenes. In that narrow case, keep identity continuity by
         // binding the one pictured subject instead of silently switching faces.
-        if (linkedIds.length === 0 && picturedSubjects.length === 1) {
+        const titleOnlyScene = /final screen|title card|end card|closing screen|end screen/i.test(
+          `${scene.title || ""} ${scene.prompt || ""}`,
+        );
+        if (linkedIds.length === 0 && picturedSubjects.length === 1 && !titleOnlyScene) {
           linkedIds = [picturedSubjects[0].id];
         }
         const linkedWithImages = linkedIds
           .map((characterId) => charById.get(characterId))
           .filter((character) => Boolean(character?.imageUrl));
-        const directReference = linkedWithImages.length === 1
-          ? linkedWithImages[0]?.imageUrl || null
-          : null;
+        const primaryReference = linkedWithImages.find(
+          (character) => /protagonist|primary|main|subject/i.test(character?.role || ""),
+        );
+        const directReference = primaryReference?.imageUrl
+          || (linkedWithImages.length === 1 ? linkedWithImages[0]?.imageUrl || null : null);
 
         await tx.videoScene.create({
           data: {

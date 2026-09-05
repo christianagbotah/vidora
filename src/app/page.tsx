@@ -2746,6 +2746,7 @@ function VidoraApp() {
       if (!currentProject) return;
       try {
         await fetch(`/api/projects/${currentProject.id}/scenes/${id}`, { method: "DELETE" });
+        setFullPreviewUrl(null);
         refreshProject();
         toast({ title: "Scene removed" });
       } catch {
@@ -2851,6 +2852,7 @@ function VidoraApp() {
       const data = await res.json();
       if (data.success) {
         setNewScenePrompt("");
+        setFullPreviewUrl(null);
         refreshProject();
         toast({ title: "Scene added" });
       }
@@ -3255,6 +3257,7 @@ function VidoraApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sceneIds }),
       });
+      setFullPreviewUrl(null);
       refreshProject();
     } catch {
       toast({ title: "Reorder failed", variant: "destructive" });
@@ -7192,12 +7195,21 @@ function VidoraApp() {
                   )}
                 </Button>
                 <Button
-                  onClick={() => setExportDialogOpen(true)}
-                  disabled={completedSceneCount === 0 || isExporting}
+                  onClick={() => fullPreviewUrl ? setExportDialogOpen(true) : handleBuildFullPreview()}
+                  disabled={
+                    isExporting || isBuildingFullPreview || projectGenerationInterrupted ||
+                    safeScenes.length === 0 || completedSceneCount !== safeScenes.length
+                  }
                   variant="outline"
                   className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
                 >
-                  <Download className="h-4 w-4 mr-1.5" />Export Video
+                  {isBuildingFullPreview ? (
+                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Building Preview...</>
+                  ) : fullPreviewUrl ? (
+                    <><Download className="h-4 w-4 mr-1.5" />Export Video</>
+                  ) : (
+                    <><Eye className="h-4 w-4 mr-1.5" />Review &amp; Export</>
+                  )}
                 </Button>
                 {currentProject.finalVideoUrl && (
                   <a href={currentProject.finalVideoUrl} download>
@@ -10755,6 +10767,12 @@ function VidoraApp() {
               placeholder="Describe the scene…"
               className="min-h-[140px]"
             />
+            {editPromptScene?.videoUrl && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <strong>Billing:</strong> Save Only changes the instructions/reference without generating or charging.
+                Regenerate Scene creates one replacement clip and uses the normal Vidora generation-token charge for that one scene.
+              </div>
+            )}
             {editPromptScene?.errorMessage && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200">
                 <AlertCircle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />

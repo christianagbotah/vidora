@@ -144,9 +144,21 @@ async function submitSceneTask(opts: {
     try {
       const ids: unknown = JSON.parse(scene.characterIds);
       if (Array.isArray(ids)) {
-        const firstId = ids.find((id): id is string => typeof id === "string");
-        if (firstId) {
-          const character = await db.character.findUnique({ where: { id: firstId } });
+        const linkedIds = ids.filter((id): id is string => typeof id === "string");
+        if (linkedIds.length > 0) {
+          const linkedCharacters = await db.character.findMany({
+            where: { id: { in: linkedIds } },
+            select: { id: true, role: true, imageUrl: true },
+          });
+          const byId = new Map(linkedCharacters.map((character) => [character.id, character]));
+          const ordered = linkedIds
+            .map((id) => byId.get(id))
+            .filter((character) => Boolean(character?.imageUrl))
+            .sort((a, b) => {
+              const priority = (role?: string | null) => /protagonist|primary|main|subject/i.test(role || "") ? 1 : 0;
+              return priority(b?.role) - priority(a?.role);
+            });
+          const character = ordered[0];
           if (character?.imageUrl && !character.imageUrl.startsWith("data:")) {
             referenceImage = character.imageUrl;
           }
