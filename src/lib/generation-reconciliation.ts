@@ -105,7 +105,10 @@ export function canRetryTerminalProviderFailure(
   if (run.status !== "needs_reconciliation" || !run.activeKey) {
     return { safe: false, sceneIds: [], retrySceneIds: [], reason: "run is not held for reconciliation" };
   }
-  if (run.totalTokens < 0 || (run.totalTokens > 0 && !run.chargeTransactionId && !run.refundTransactionId)) {
+  if (run.refundTransactionId) {
+    return { safe: false, sceneIds: [], retrySceneIds: [], reason: "the original Vidora token charge was already refunded" };
+  }
+  if (run.totalTokens > 0 && !run.chargeTransactionId) {
     return { safe: false, sceneIds: [], retrySceneIds: [], reason: "charge state is incomplete" };
   }
 
