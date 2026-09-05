@@ -70,11 +70,11 @@ jobs:
       - name: Generate Prisma client
         run: bunx prisma generate
 
-      # CI uses an empty disposable PostgreSQL database. db push is acceptable
-      # only here to bootstrap that ephemeral DB because the repository predates
-      # versioned migrations. Production deploys use prisma migrate deploy only.
-      - name: Bootstrap disposable test database
-        run: bunx prisma db push --skip-generate
+      # CI now exercises the same versioned migration chain production deploys.
+      # This is essential for database-level invariants such as billing locks,
+      # export review guards, and future triggers that prisma db push cannot create.
+      - name: Apply production migrations to disposable database
+        run: bunx prisma migrate deploy
 
       - name: Lint
         run: bun run lint
