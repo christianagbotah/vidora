@@ -71,6 +71,7 @@ import { ShareDialog } from "@/components/ShareDialog";
 import { BrandKitDialog } from "@/components/BrandKitDialog";
 import AIAssistant from "@/components/AIAssistant";
 import ScrollToTop from "@/components/ScrollToTop";
+import NarrationProfileControls from "@/components/NarrationProfileControls";
 import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES, DUBBING_LANGUAGE_COUNT } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -793,7 +794,11 @@ function SortableSceneCard({
       edit before retry — a blind retry fails again). */
   onEditPrompt: (scene: VideoScene) => void;
   onDelete: (id: string, label: string) => void;
-  onNarrate: (id: string, voice?: string) => void;
+  onNarrate: (
+    id: string,
+    voice?: string,
+    profile?: { language: string; accent: string; style: string },
+  ) => void;
   onTransitionChange: (id: string, transition: string) => void;
   onEnhanceScene: (scene: VideoScene) => void;
   onMoodChange: (id: string, mood: string) => void;
@@ -820,6 +825,9 @@ function SortableSceneCard({
 
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [narrationVoice, setNarrationVoice] = useState(scene.narrationVoice || "tongtong");
+  const [narrationLanguage, setNarrationLanguage] = useState(scene.narrationLang || "en");
+  const [narrationAccent, setNarrationAccent] = useState("auto");
+  const [narrationStyle, setNarrationStyle] = useState("natural");
 
   // ── Scene voice ↔ video sync ──
   // Generated scenes carry an AI voice (narrationUrl). The studio player
@@ -1113,29 +1121,43 @@ function SortableSceneCard({
                           </div>
                         )}
                         {scene.dialogue && !scene.narrationUrl && (
-                          <div className="flex items-center gap-1">
-                            <Select value={narrationVoice} onValueChange={setNarrationVoice}>
-                              <SelectTrigger className="h-7 w-24 text-xs px-1.5">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {TTS_VOICES.map((v) => (
-                                  <SelectItem key={v.id} value={v.id}>
-                                    <span className="text-xs">{v.label}</span>
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm" variant="outline" className="h-7 text-xs px-2.5"
-                              onClick={() => onNarrate(scene.id, narrationVoice)}
+                          <div className="w-full basis-full rounded-lg border border-violet-100 bg-violet-50/40 p-2.5 space-y-2">
+                            <NarrationProfileControls
+                              compact
+                              language={narrationLanguage}
+                              accent={narrationAccent}
+                              style={narrationStyle}
+                              voice={narrationVoice}
+                              voices={TTS_VOICES}
+                              onLanguageChange={setNarrationLanguage}
+                              onAccentChange={setNarrationAccent}
+                              onStyleChange={setNarrationStyle}
+                              onVoiceChange={setNarrationVoice}
                               disabled={isGeneratingNarration}
-                            >
-                              {isGeneratingNarration
-                                ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
-                                : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
-                              }
-                            </Button>
+                            />
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[10px] leading-snug text-muted-foreground">
+                                {narrationLanguage === "en"
+                                  ? "Language, accent and style shape this scene's AI performance."
+                                  : "Uses this scene's saved translation for the selected language. Generate dubbing/translation first if needed."}
+                              </p>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs px-2.5 shrink-0"
+                                onClick={() => onNarrate(scene.id, narrationVoice, {
+                                  language: narrationLanguage,
+                                  accent: narrationAccent,
+                                  style: narrationStyle,
+                                })}
+                                disabled={isGeneratingNarration}
+                              >
+                                {isGeneratingNarration
+                                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
+                                  : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
+                                }
+                              </Button>
+                            </div>
                           </div>
                         )}
                         <Button
@@ -3131,10 +3153,16 @@ function VidoraApp() {
     }
   };
 
-  const handleNarrateScene = async (sceneId: string, voice?: string) => {
+  const handleNarrateScene = async (
+    sceneId: string,
+    voice?: string,
+    profile?: { language: string; accent: string; style: string },
+  ) => {
     if (!currentProject) return;
     setIsGeneratingNarration(true);
     try {
+      const scene = currentProject.scenes?.find((item) => item.id === sceneId);
+      const language = profile?.language || scene?.narrationLang || "en";
       const res = await fetch("/api/generate-narration", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3142,11 +3170,18 @@ function VidoraApp() {
           projectId: currentProject.id,
           sceneId,
           voice: voice || "tongtong",
+          language,
+          accent: profile?.accent || "auto",
+          style: profile?.style || "natural",
+          ...(language === "en" && scene?.dialogue ? { text: scene.dialogue } : {}),
         }),
       });
       const data = await res.json();
       if (data.success) {
-        toast({ title: "Narration generated" });
+        toast({
+          title: "Narration generated",
+          description: `${data.languageName || data.language || "English"} · ${data.accent || "auto"} · ${data.style || "natural"}`,
+        });
         refreshProject();
       } else {
         toast({ title: "Narration failed", description: getApiError(data), variant: "destructive" });
