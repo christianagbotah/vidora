@@ -31,7 +31,6 @@ export async function GET(
     const authResult = await requireProjectAccess(id, false);
     if (!authResult.ok) return authResult.response;
 
-    // Verify the character belongs to this project
     const character = await db.character.findFirst({
       where: { id: characterId, projectId: id },
     });
@@ -55,11 +54,9 @@ export async function PUT(
 ) {
   try {
     const { id, characterId } = await params;
-    const authResult = await requireProjectAccess(id, true); // write access
+    const authResult = await requireProjectAccess(id, true);
     if (!authResult.ok) return authResult.response;
 
-    // Verify the character belongs to this project and retain the fields that
-    // influence speaker-to-voice resolution.
     const existing = await db.character.findFirst({
       where: { id: characterId, projectId: id },
       select: { id: true, name: true, voiceId: true },
@@ -91,10 +88,6 @@ export async function PUT(
       });
 
       if (voiceResolutionChanged) {
-        // Existing narration may have been synthesized with this character's
-        // old voice/name. Clear only scenes that reference this character; the
-        // deterministic narration fingerprint lets a later preview/export reuse
-        // an already-generated file if the user eventually restores the inputs.
         await tx.videoScene.updateMany({
           where: {
             projectId: id,
@@ -130,10 +123,9 @@ export async function DELETE(
 ) {
   try {
     const { id, characterId } = await params;
-    const authResult = await requireProjectAccess(id, true); // write access
+    const authResult = await requireProjectAccess(id, true);
     if (!authResult.ok) return authResult.response;
 
-    // Verify the character belongs to this project
     const existing = await db.character.findFirst({
       where: { id: characterId, projectId: id },
       select: { id: true },
@@ -142,7 +134,20 @@ export async function DELETE(
       return NextResponse.json({ success: false, error: "Character not found in this project" }, { status: 404 });
     }
 
-    await db.character.delete({ where: { id: characterId } });
+    await db.$transaction(async (tx) => {
+      // Removing a character changes speaker resolution for any scene that
+      // referenced them. Clear the derived performance before deleting the
+      // character so the studio never keeps playing the departed voice.
+      await tx.videoScene.updateMany({
+        where: {
+          projectId: id,
+          characterIds: { contains: characterId },
+        },
+        data: { narrationUrl: null },
+      });
+      await tx.character.delete({ where: { id: characterId } });
+    });
+
     return NextResponse.json({ success: true, message: "Character deleted" });
   } catch (error) {
     const guarded = activeExportResponse(error);
