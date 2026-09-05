@@ -6,6 +6,14 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
 
+function normalizeRequestedVoice(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  const logical = raw.toLowerCase();
+  return TTS_VOICES.some((voice) => voice.id === logical) ? logical : raw.slice(0, 160);
+}
+
 export async function POST(req: NextRequest) {
   let session: { userId: string; role: string; email: string } | null = null;
 
@@ -53,9 +61,7 @@ export async function POST(req: NextRequest) {
 
     // Omitting voice/speed now means "use the effective Voice Studio profile".
     // Explicit request values remain authoritative for one-off generation calls.
-    const voice = typeof body.voice === "string" && body.voice.trim()
-      ? body.voice.trim().toLowerCase()
-      : undefined;
+    const voice = normalizeRequestedVoice(body.voice);
     const hasSpeed = body.speed !== undefined && body.speed !== null && body.speed !== "";
     const speed = hasSpeed ? Number(body.speed) : undefined;
     if (speed !== undefined && (!Number.isFinite(speed) || speed < 0.5 || speed > 2)) {
