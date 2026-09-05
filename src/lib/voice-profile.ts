@@ -1,22 +1,14 @@
 import { db } from "@/lib/db";
+import { ALL_DUBBING_LANGUAGES } from "@/lib/dubbing-languages";
 
+/** Voice Studio and scene dubbing share one language catalog. */
 export const VOICE_LANGUAGES = [
   { id: "auto", label: "Auto detect" },
-  { id: "en", label: "English" },
-  { id: "fr", label: "French" },
-  { id: "es", label: "Spanish" },
-  { id: "pt", label: "Portuguese" },
-  { id: "ar", label: "Arabic" },
-  { id: "de", label: "German" },
-  { id: "it", label: "Italian" },
-  { id: "hi", label: "Hindi" },
-  { id: "sw", label: "Swahili" },
-  { id: "zh", label: "Chinese" },
-  { id: "ja", label: "Japanese" },
-  { id: "ko", label: "Korean" },
-  { id: "tr", label: "Turkish" },
-  { id: "nl", label: "Dutch" },
-] as const;
+  ...ALL_DUBBING_LANGUAGES.map((language) => ({
+    id: language.code,
+    label: `${language.flag} ${language.name}`,
+  })),
+];
 
 export const VOICE_ACCENTS = [
   { id: "auto", label: "Auto / provider default" },
