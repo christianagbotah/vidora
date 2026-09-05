@@ -20,11 +20,19 @@ const ZAI_LOGICAL_VOICES = new Set([
 const ELEVEN_V3_RE = /^eleven_v3(?:$|[-_:])/i;
 
 function normalizeLogicalVoice(requested: string | undefined, profile: VoiceProfile): string {
-  const profileVoice = profile.voice?.trim().toLowerCase();
-  if (profileVoice && profileVoice !== "auto") return profileVoice;
-  const requestVoice = requested?.trim().toLowerCase();
-  if (profile.accent === "gb" && (!requestVoice || requestVoice === "tongtong")) return "jam";
-  return requestVoice || "tongtong";
+  const profileVoiceRaw = profile.voice?.trim();
+  const profileVoiceKey = profileVoiceRaw?.toLowerCase();
+  if (profileVoiceKey && profileVoiceKey !== "auto") {
+    // Vidora logical voice names are normalized; provider-native IDs retain
+    // exact casing because some providers treat IDs as case-sensitive.
+    return ZAI_LOGICAL_VOICES.has(profileVoiceKey) ? profileVoiceKey : profileVoiceRaw;
+  }
+
+  const requestedRaw = requested?.trim();
+  const requestedKey = requestedRaw?.toLowerCase();
+  if (profile.accent === "gb" && (!requestedKey || requestedKey === "tongtong")) return "jam";
+  if (!requestedRaw) return "tongtong";
+  return requestedKey && ZAI_LOGICAL_VOICES.has(requestedKey) ? requestedKey : requestedRaw;
 }
 
 function effectiveProfile(requestedVoice?: string): VoiceProfile {
@@ -38,16 +46,17 @@ export function elevenLabsProfileVoiceCandidates(
   requested: string | undefined,
   profile: VoiceProfile,
 ): string[] {
-  const logical = normalizeLogicalVoice(requested, profile);
+  const voice = normalizeLogicalVoice(requested, profile);
+  const voiceKey = voice.toLowerCase();
   const language = profile.language || "auto";
   const accent = profile.accent || "auto";
   return [
-    `profile:${language}:${accent}:${logical}`,
+    `profile:${language}:${accent}:${voiceKey}`,
     `profile:${language}:${accent}`,
     `accent:${language}:${accent}`,
     `accent:${accent}`,
     `language:${language}`,
-    logical,
+    voiceKey,
   ].filter((value, index, all) => value && all.indexOf(value) === index);
 }
 
@@ -60,8 +69,9 @@ export function resolveElevenLabsProfileVoice(
     const mapped = settings.elevenLabsVoiceMap[candidate.toLowerCase()];
     if (mapped) return mapped;
   }
-  const logical = normalizeLogicalVoice(requested, profile);
-  if (logical && !ZAI_LOGICAL_VOICES.has(logical) && logical !== "auto") return logical;
+  const voice = normalizeLogicalVoice(requested, profile);
+  const voiceKey = voice.toLowerCase();
+  if (voiceKey && !ZAI_LOGICAL_VOICES.has(voiceKey) && voiceKey !== "auto") return voice;
   if (settings.elevenLabsDefaultVoiceId) return settings.elevenLabsDefaultVoiceId;
   throw new Error(
     "ElevenLabs is selected but no matching/default voice is configured. Add an accent/language mapping or set elevenlabs_default_voice_id.",
@@ -157,7 +167,7 @@ export async function synthesizeProviderSpeech(
   // voice plus delivery speed without pretending unsupported accent precision.
   return baseProvider.synthesizeProviderSpeech({
     ...request,
-    voice: normalizeLogicalVoice(request.voice, profile),
+    voice: normalizeLogicalVoice(request.voice, profile).toLowerCase(),
     direction: combinedDirection(request, profile),
     speed: effectiveSpeed(request, profile),
   });
