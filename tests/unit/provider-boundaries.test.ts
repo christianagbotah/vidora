@@ -19,9 +19,9 @@ const REVIEWED_BOUNDARIES: Record<string, string> = {
   "src/app/api/projects/[id]/characters/[characterId]/generate-image/route.ts": "project_authorized_metered",
   "src/app/api/scenes/[id]/dubbing/route.ts": "scene_authorized_metered_idempotent",
   "src/app/api/scenes/[id]/subtitles/route.ts": "scene_authorized_metered_idempotent",
-  "src/app/api/split-scenes/legacy.ts": "reachable_only_through_authenticated_metered_wrapper",
+  "src/app/api/split-scenes/legacy.ts": "legacy_local_parser_with_historical_provider_fallback",
   "src/app/api/transcribe/route.ts": "authenticated_metered",
-  "src/lib/narration.ts": "shared_owner_metered_idempotent_tts",
+  "src/lib/ai-provider-router.ts": "central_capability_router_for_text_and_tts",
   "src/lib/zai.ts": "provider_sdk_transport_internal",
 };
 
