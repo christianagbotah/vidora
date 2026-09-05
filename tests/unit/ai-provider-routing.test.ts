@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildProfessionalSceneDirectorPrompt } from "@/lib/ai-provider-router";
+import {
+  buildProfessionalSceneDirectorPrompt,
+  formatElevenLabsPerformanceText,
+  normalizePerformanceDirection,
+} from "@/lib/ai-provider-router";
 import { parseDialogueSegments, stripSpeakerAttributions } from "@/lib/narration";
 
 describe("professional AI provider routing primitives", () => {
@@ -15,23 +19,37 @@ describe("professional AI provider routing primitives", () => {
     expect(prompt.systemPrompt).toContain("Preserve every important proper name");
     expect(prompt.systemPrompt).toContain("Happy birthday, <name>!");
     expect(prompt.systemPrompt).toContain("Speaker: text");
+    expect(prompt.systemPrompt).toContain("Speaker (excited): text");
     expect(prompt.systemPrompt).toContain("exactly 3 scenes");
   });
 
-  test("speaker-aware parser keeps each birthday line attached to its character", () => {
+  test("speaker-aware parser keeps each birthday line and delivery cue attached to its character", () => {
     const segments = parseDialogueSegments([
-      "Narrator: Today is Giannis' birthday!",
+      "Narrator (warmly): Today is Giannis' birthday!",
       "Chase: Happy birthday, Giannis!",
       "Marshall (excited): Have an amazing birthday, Giannis!",
-      "Everyone: We hope your day is full of fun!",
+      "Everyone (cheerfully): We hope your day is full of fun!",
     ].join("\n"));
 
     expect(segments).toEqual([
-      { speaker: "Narrator", text: "Today is Giannis' birthday!" },
-      { speaker: "Chase", text: "Happy birthday, Giannis!" },
-      { speaker: "Marshall", text: "Have an amazing birthday, Giannis!" },
-      { speaker: "Everyone", text: "We hope your day is full of fun!" },
+      { speaker: "Narrator", direction: "warmly", text: "Today is Giannis' birthday!" },
+      { speaker: "Chase", direction: null, text: "Happy birthday, Giannis!" },
+      { speaker: "Marshall", direction: "excited", text: "Have an amazing birthday, Giannis!" },
+      { speaker: "Everyone", direction: "cheerfully", text: "We hope your day is full of fun!" },
     ]);
+  });
+
+  test("Eleven v3 receives supported performance tags but other models receive spoken words only", () => {
+    expect(normalizePerformanceDirection("very excitedly")).toBe("excited");
+    expect(normalizePerformanceDirection("whispering softly")).toBe("whispering");
+    expect(normalizePerformanceDirection("DROP TABLE voices")).toBeNull();
+
+    expect(
+      formatElevenLabsPerformanceText("Happy birthday, Giannis!", "excited", "eleven_v3")
+    ).toBe("[excited] Happy birthday, Giannis!");
+    expect(
+      formatElevenLabsPerformanceText("Happy birthday, Giannis!", "excited", "eleven_multilingual_v2")
+    ).toBe("Happy birthday, Giannis!");
   });
 
   test("legacy single-voice helper still removes attribution without dropping words", () => {
