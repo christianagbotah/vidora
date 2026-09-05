@@ -133,8 +133,10 @@ export function useCreateDraftAutosave({
       const remembered = typeof window !== "undefined" ? localStorage.getItem(DRAFT_ID_KEY) : null;
       let restored = false;
       if (remembered) restored = await loadDraft(remembered);
+      // A synchronous fallback can be newer than the server when a refresh
+      // happens inside the 700ms debounce window, so prefer it next.
+      if (!restored && !cancelled) restored = restoreFallback();
       if (!restored) restored = await loadDraft(null);
-      if (!restored && !cancelled) restoreFallback();
       if (!cancelled) setRestoreChecked(true);
     })();
     return () => { cancelled = true; };

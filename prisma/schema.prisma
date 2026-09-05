@@ -43,6 +43,8 @@ model VideoProject {
   targetDuration  Int        @default(60)
   projectType     String     @default("custom")
   videoModel      String?
+  draftData       String?    @db.Text
+  lastAutosavedAt DateTime?
   finalVideoUrl   String?    @db.Text
   shareSlug       String?    @unique
   isPublic        Boolean    @default(false)
@@ -62,6 +64,7 @@ model VideoProject {
   generationRuns  GenerationRun[]
 
   @@index([userId])
+  @@index([userId, lastAutosavedAt])
   @@index([shareSlug])
 }
 

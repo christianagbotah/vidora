@@ -81,6 +81,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import ScrollReveal from "@/components/ScrollReveal";
+import { useCreateDraftAutosave } from "@/hooks/use-create-draft-autosave";
+import { CREATE_DRAFT_VERSION, type CreateDraftSnapshot } from "@/lib/create-draft-types";
 
 /* ════════════════════════════════════════════════════════════════
    DATA CONSTANTS
@@ -1930,6 +1932,92 @@ function VidoraApp() {
   const [downloadProjectId, setDownloadProjectId] = useState("");
   const [isRequestingDownload, setIsRequestingDownload] = useState(false);
 
+  /* ── Durable Create-page autosave ──
+     Once a signed-in user enters a title, the project row is created in the
+     background and the entire wizard snapshot is debounced to PostgreSQL.
+     Character base64 images are moved into generated-store by the server. */
+  const createDraftSnapshot = useMemo<CreateDraftSnapshot>(() => ({
+    version: CREATE_DRAFT_VERSION,
+    inputMode,
+    scriptText,
+    textPrompt,
+    enhancedText,
+    selectedStyle,
+    selectedAspect,
+    selectedModel,
+    selectedDuration,
+    customDuration,
+    isCustomDuration,
+    projectType,
+    createStep,
+    parsedScenes,
+    parsedCharacters,
+    parsedCelebration,
+    parsedDefaultMusic,
+    preCharImages,
+    previewStoryboard,
+    previewImageUrl,
+    previewImageError,
+  }), [
+    inputMode, scriptText, textPrompt, enhancedText, selectedStyle, selectedAspect,
+    selectedModel, selectedDuration, customDuration, isCustomDuration, projectType,
+    createStep, parsedScenes, parsedCharacters, parsedCelebration, parsedDefaultMusic,
+    preCharImages, previewStoryboard, previewImageUrl, previewImageError,
+  ]);
+
+  const restoreCreateDraft = useCallback((title: string, draft: CreateDraftSnapshot) => {
+    setProjectTitle(title);
+    setInputMode(draft.inputMode);
+    setScriptText(draft.scriptText || "");
+    setTextPrompt(draft.textPrompt || "");
+    setEnhancedText(draft.enhancedText || "");
+    setSelectedStyle(draft.selectedStyle || "cinematic");
+    setSelectedAspect(draft.selectedAspect || "16:9");
+    setSelectedModel(draft.selectedModel || DEFAULT_VIDEO_MODEL_ID);
+    setSelectedDuration(draft.selectedDuration || 60);
+    setCustomDuration(draft.customDuration || "");
+    setIsCustomDuration(Boolean(draft.isCustomDuration));
+    setProjectType(draft.projectType || "custom");
+    setCreateStep(Math.max(0, Math.min(2, draft.createStep || 0)));
+    setParsedScenes(Array.isArray(draft.parsedScenes) ? draft.parsedScenes : []);
+    setParsedCharacters(Array.isArray(draft.parsedCharacters) ? draft.parsedCharacters : []);
+    setParsedCelebration(draft.parsedCelebration || null);
+    setParsedDefaultMusic(draft.parsedDefaultMusic || null);
+    setPreCharImages(draft.preCharImages || {});
+    setPreviewStoryboard(draft.previewStoryboard || null);
+    setPreviewImageUrl(draft.previewImageUrl || null);
+    setPreviewImageError(draft.previewImageError || null);
+    setPreviewModalOpen(false);
+  }, []);
+
+  const acceptPersistedDraftImages = useCallback((images: Record<string, string>) => {
+    setPreCharImages((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const [name, url] of Object.entries(images)) {
+        // Do not overwrite a newer local portrait with an older autosave response.
+        if (!previous[name] || previous[name].startsWith("data:image/")) {
+          if (previous[name] !== url) changed = true;
+          next[name] = url;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, []);
+
+  const {
+    autosaveStatus,
+    ensureDraftSaved,
+    resumeDraftProject,
+    clearDraftReference,
+  } = useCreateDraftAutosave({
+    enabled: authStatus === "authenticated" && currentView === "create",
+    title: projectTitle,
+    snapshot: createDraftSnapshot,
+    onRestore: restoreCreateDraft,
+    onPersistedImages: acceptPersistedDraftImages,
+  });
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3315,125 +3403,69 @@ function VidoraApp() {
 
   const handleCreateAndGenerate = async () => {
     const text = inputMode === "script" ? scriptText : textPrompt;
+    if (!projectTitle.trim()) {
+      toast({
+        title: "Give your project a title first",
+        description: "The title starts background autosave and recovery.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!text.trim() && parsedScenes.length === 0) {
       toast({ title: "Please provide content", variant: "destructive" });
+      return;
+    }
+    if (authStatus !== "authenticated") {
+      setAuthMode("login");
+      setAuthDialogOpen(true);
       return;
     }
 
     setIsCreating(true);
     try {
-      // Step 1: Create project
-      const projRes = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: projectTitle || "Untitled Project",
-          description: text.slice(0, 200),
-          style: selectedStyle,
-          aspectRatio: selectedAspect,
-          videoModel: selectedModel,
-          targetDuration: effectiveDuration,
-          projectType,
-          characters: parsedCharacters.length > 0 ? parsedCharacters.map((c) => ({
-            name: c.name,
-            role: c.role || "supporting",
-            description: c.description || null,
-            stylePrompt: c.stylePrompt || null,
-            // Include pre-project character image if user uploaded/generated one
-            ...(preCharImages[c.name] ? { imageBase64: preCharImages[c.name] } : {}),
-          })) : undefined,
-        }),
-      });
-
-      if (!projRes.ok && projRes.status !== 201) {
-        // Try to get error message from response body
-        let errorDetail = `Server returned status ${projRes.status}`;
-        try {
-          const errBody = await projRes.json();
-          errorDetail = errBody.error || errBody.message || errorDetail;
-        } catch { /* response wasn't JSON */ }
-        toast({ title: "Failed to create project", description: errorDetail, variant: "destructive" });
+      // Flush the latest keystrokes/character portraits before materializing.
+      const saved = await ensureDraftSaved();
+      if (!saved?.projectId) {
+        toast({
+          title: "Could not save project draft",
+          description: "Your local recovery copy is still preserved. Check your connection and try again.",
+          variant: "destructive",
+        });
         return;
       }
 
-      let projData;
-      try {
-        projData = await projRes.json();
-      } catch {
-        toast({ title: "Failed to create project", description: "Invalid response from server", variant: "destructive" });
-        return;
-      }
-
-      if (!projData.success) {
-        toast({ title: "Failed to create project", description: projData.error, variant: "destructive" });
-        return;
-      }
-
-      // If the API didn't return a project, surface the issue
-      if (!projData.project) {
-        toast({ title: "Failed to create project", description: "No project data returned. Please try again.", variant: "destructive" });
-        return;
-      }
-
-      const project = projData.project;
-
-      // Step 2: Create scenes
-      const scenesToCreate: ParsedSceneResult[] = parsedScenes.length > 0 ? parsedScenes : [{
-        prompt: enhancedText || text,
-        title: projectTitle || null,
-        dialogue: null,
-        characterNames: undefined,
-        visualNote: null,
-      }];
-
-      for (let i = 0; i < scenesToCreate.length; i++) {
-        const s = scenesToCreate[i];
-        // Resolve character names → IDs from the freshly-created project so
-        // scenes are linked to their characters (drives reference images +
-        // character-aware generation prompts). The API also accepts names
-        // as a fallback when IDs can't be resolved client-side.
-        const sceneCharIds = (s.characterNames || [])
-          .map((n: string) =>
-            (project.characters || []).find(
-              (ch: { id: string; name: string }) =>
-                ch.name.trim().toLowerCase() === (n || "").trim().toLowerCase()
-            )?.id
-          )
-          .filter(Boolean);
-        const sceneRes = await fetch(`/api/projects/${project.id}/scenes`, {
+      // Atomically convert the autosaved wizard snapshot into Character +
+      // VideoScene rows on the SAME project. No duplicate project is created.
+      const finalizeRes = await fetch(
+        "/api/projects/" + saved.projectId + "/finalize-draft",
+        {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt: s.prompt,
-            title: s.title || undefined,
-            dialogue: s.dialogue || undefined,
-            visualNote: s.visualNote || undefined,
-            characterIds: sceneCharIds.length > 0 ? sceneCharIds : undefined,
-            characterNames: s.characterNames || undefined,
-            duration: Math.floor(effectiveDuration / scenesToCreate.length),
-            // Smart music default: celebration scripts get a matching
-            // background track the moment scenes exist (mixable in export).
-            ...(parsedDefaultMusic ? { musicTrackUrl: parsedDefaultMusic.url, musicMood: parsedDefaultMusic.mood } : {}),
-          }),
+        },
+      );
+      const finalizeData = await finalizeRes.json();
+      if (!finalizeRes.ok || !finalizeData.success || !finalizeData.project) {
+        toast({
+          title: "Could not prepare project",
+          description: finalizeData.error || "The saved draft is safe. Please try again.",
+          variant: "destructive",
         });
-        if (!sceneRes.ok) {
-          toast({
-            title: `Scene ${i + 1} could not be created`,
-            description: "The project was created, but one scene is missing. You can add it in the studio.",
-            variant: "destructive",
-          });
-        }
+        return;
       }
 
-      // Step 3: enter the studio with the generation lock already engaged
-      autoGenFiredRef.current.add(project.id); // we trigger generation ourselves below
-      seenGeneratingRef.current = false; // fresh run — reset failure guard
+      const project = finalizeData.project as VideoProject;
+
+      // Enter studio with the generation lock already engaged.
+      autoGenFiredRef.current.add(project.id);
+      seenGeneratingRef.current = false;
       allTerminalSinceRef.current = null;
       setCurrentProject(project);
+      if (project.characters) setCharacters(project.characters);
       setCurrentView("studio");
       setGenerationStartedAt(Date.now());
       setGenerationPhase("starting");
-      setCreateStep(0); // reset wizard for next time
+      clearDraftReference();
+      setCreateStep(0);
       setParsedScenes([]);
       setParsedCharacters([]);
       setParsedCelebration(null);
@@ -3443,10 +3475,12 @@ function VidoraApp() {
       setEnhancedText("");
       setProjectTitle("");
       setPreCharImages({});
-      toast({ title: "Project created!", description: "Generating videos..." });
+      setPreviewStoryboard(null);
+      setPreviewImageUrl(null);
+      setPreviewImageError(null);
+      void fetchProjects();
+      toast({ title: "Project created!", description: "Your draft was saved. Generating videos..." });
 
-      // Step 4: Trigger generation (awaited, with error handling — the API
-      // returns immediately and continues in the background)
       try {
         const genRes = await fetch("/api/generate-video", {
           method: "POST",
@@ -3456,24 +3490,29 @@ function VidoraApp() {
         const genData = await genRes.json();
         if (genData.success) {
           setGenerationPhase(genData.alreadyDone ? "completed" : "generating");
-          if (!genData.alreadyDone) {
-            setTimeout(refreshProject, 3000);
-          }
+          if (!genData.alreadyDone) setTimeout(refreshProject, 3000);
         } else {
-          // Tokens / auth / server error — surface it and release the lock
           setGenerationPhase("idle");
-          toast({ title: "Video generation could not start", description: getApiError(genData), variant: "destructive" });
+          toast({
+            title: "Video generation could not start",
+            description: getApiError(genData),
+            variant: "destructive",
+          });
         }
       } catch {
         setGenerationPhase("idle");
-        toast({ title: "Video generation could not start", description: "Network error — please try again from the studio.", variant: "destructive" });
+        toast({
+          title: "Video generation could not start",
+          description: "Network error — the project is saved; retry from the studio.",
+          variant: "destructive",
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("Error creating project:", msg);
+      console.error("Error finalizing project draft:", msg);
       toast({
-        title: "Error creating project",
-        description: msg.length > 100 ? msg.slice(0, 100) + "..." : msg,
+        title: "Error preparing project",
+        description: "The background draft is still saved. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -5216,7 +5255,19 @@ function VidoraApp() {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
-  const openProject = (p: VideoProject) => {
+  const openProject = async (p: VideoProject) => {
+    if ((p.hasDraft || p.draftData) && p.scenes.length === 0) {
+      setCurrentProject(null);
+      const restored = await resumeDraftProject(p.id);
+      if (restored) {
+        setCurrentView("create");
+        toast({
+          title: "Draft restored",
+          description: "Your script, characters and storyboard are back.",
+        });
+        return;
+      }
+    }
     setCurrentProject(p);
     if (p.characters) setCharacters(p.characters);
     setCurrentView("studio");
@@ -5797,7 +5848,17 @@ function VidoraApp() {
                       </CardHeader>
                       <CardContent className="space-y-5">
                         <div className="space-y-1.5">
-                          <Label className="text-sm font-medium">Project Title</Label>
+                          <div className="flex items-center justify-between gap-3">
+                            <Label className="text-sm font-medium">Project Title</Label>
+                            {projectTitle.trim() && authStatus === "authenticated" && (
+                              <span className={`text-[11px] font-medium flex items-center gap-1 ${autosaveStatus === "error" ? "text-amber-600" : autosaveStatus === "saved" ? "text-emerald-600" : "text-muted-foreground"}`}>
+                                {autosaveStatus === "saving" ? <><Loader2 className="h-3 w-3 animate-spin" />Saving…</>
+                                  : autosaveStatus === "saved" ? <><CheckCircle className="h-3 w-3" />Saved</>
+                                  : autosaveStatus === "error" ? <><AlertCircle className="h-3 w-3" />Save retry pending</>
+                                  : <>Autosave ready</>}
+                              </span>
+                            )}
+                          </div>
                           <Input placeholder="My Cinematic Video" value={projectTitle} onChange={(e) => setProjectTitle(e.target.value)} className="h-10" />
                         </div>
 
