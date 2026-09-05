@@ -368,9 +368,13 @@ export async function generateSceneNarration(opts: {
   }
 
   if (audioFileExists(finalFilename)) {
+    // narrationVoice is an explicit/user source setting. A voice resolved from a
+    // linked character must remain derived so later character-voice edits can
+    // flow through pickSceneNarrationVoice instead of being shadowed by stale
+    // scene state.
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: finalUrl, narrationVoice: defaultVoice },
+      data: { narrationUrl: finalUrl },
     });
     return {
       url: finalUrl,
@@ -413,7 +417,7 @@ export async function generateSceneNarration(opts: {
 
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: url, narrationVoice: defaultVoice },
+      data: { narrationUrl: url },
     });
 
     return {
