@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
 import { saveGeneratedFile } from "@/lib/generated-store";
 import { isValidVideoModelId } from "@/lib/video-models";
+import { withClientSceneVideoUrl } from "@/lib/client-video-url";
 import crypto from "crypto";
 
 /**
@@ -38,6 +39,7 @@ export async function GET() {
 
     const projectsForClient = projects.map(({ draftData, ...project }) => ({
       ...project,
+      scenes: project.scenes.map((scene) => withClientSceneVideoUrl(scene)),
       hasDraft: Boolean(draftData),
     }));
 

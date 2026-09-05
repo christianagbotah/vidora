@@ -72,7 +72,7 @@ import { BrandKitDialog } from "@/components/BrandKitDialog";
 import AIAssistant from "@/components/AIAssistant";
 import ScrollToTop from "@/components/ScrollToTop";
 import NarrationProfileControls from "@/components/NarrationProfileControls";
-import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES, DUBBING_LANGUAGE_COUNT } from "@/lib/dubbing-languages";
+import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -784,7 +784,7 @@ function SortableSceneCard({
   onPreview, onGenerate, onRetry, onEditPrompt, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
   isGeneratingNarration, isGeneratingScene, projectGenerationInterrupted, onResumeGeneration,
-  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
+  onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onDeleteDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
   onPreview: (url: string) => void;
@@ -811,7 +811,6 @@ function SortableSceneCard({
   onSetMusic: (sceneId: string, trackUrl: string | null, volume: number) => void;
   onGenerateSubtitles: (sceneId: string) => void;
   onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
-  onGenerateDubbing: (sceneId: string, lang: string, langName: string) => void;
   onDeleteDubbing: (sceneId: string, lang: string, langName: string) => void;
   musicTracks: Array<{ id: string; title: string; mood: string; url: string; duration: number }>;
 }) {
@@ -1139,7 +1138,7 @@ function SortableSceneCard({
                               <p className="text-[10px] leading-snug text-muted-foreground">
                                 {narrationLanguage === "en"
                                   ? "Language, accent and style shape this scene's AI performance."
-                                  : "Uses this scene's saved translation for the selected language. Generate dubbing/translation first if needed."}
+                                  : "Vidora automatically prepares a translation when this language has not been generated yet."}
                               </p>
                               <Button
                                 size="sm"
@@ -1203,37 +1202,6 @@ function SortableSceneCard({
                             {scene.burnSubtitles ? "Burn ✓" : "Burn"}
                           </Button>
                         )}
-                        {/* ── Dubbing Selector (30+ languages, grouped) ── */}
-                        <Select
-                          value=""
-                          onValueChange={(v) => {
-                            const lang = ALL_DUBBING_LANGUAGES.find((l) => l.code === v);
-                            if (lang) onGenerateDubbing(scene.id, lang.code, lang.name);
-                          }}
-                        >
-                          <SelectTrigger className="h-7 w-[88px] text-xs px-1.5 gap-1">
-                            <Languages className="h-3 w-3 shrink-0" />
-                            <SelectValue placeholder="Dub" />
-                          </SelectTrigger>
-                          <SelectContent className="min-w-[240px] max-h-[320px]">
-                            <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                              {DUBBING_LANGUAGE_COUNT} languages
-                            </div>
-                            {DUBBING_LANGUAGE_GROUPS.map((group) => (
-                              <SelectGroup key={group.label}>
-                                <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pt-2">
-                                  {group.label}
-                                </SelectLabel>
-                                {group.languages.map((lang) => (
-                                  <SelectItem key={lang.code} value={lang.code} className="text-xs">
-                                    <span className="mr-1.5">{lang.flag}</span>
-                                    {lang.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            ))}
-                          </SelectContent>
-                        </Select>
                         <Select value={scene.transition} onValueChange={(v) => onTransitionChange(scene.id, v)}>
                           <SelectTrigger className="h-7 w-24 text-xs px-1.5">
                             <SelectValue />
@@ -3175,6 +3143,33 @@ function VidoraApp() {
     try {
       const scene = currentProject.scenes?.find((item) => item.id === sceneId);
       const language = profile?.language || scene?.narrationLang || "en";
+
+      if (language !== "en") {
+        const hasTranslation = scene?.translations?.some(
+          (translation) => translation.lang === language && Boolean(translation.translatedText?.trim()),
+        );
+        if (!hasTranslation) {
+          const translateRes = await fetch(`/api/scenes/${sceneId}/dubbing`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              lang: language,
+              voiceId: voice || scene?.narrationVoice || "tongtong",
+              translateOnly: true,
+            }),
+          });
+          const translateData = await translateRes.json();
+          if (!translateRes.ok || !translateData.success) {
+            toast({
+              title: "Translation failed",
+              description: getApiError(translateData, "Could not prepare this language."),
+              variant: "destructive",
+            });
+            return;
+          }
+        }
+      }
+
       const res = await fetch("/api/generate-narration", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3924,38 +3919,6 @@ function VidoraApp() {
       });
       if (currentProject) refreshProject();
     } catch { /* non-fatal */ }
-  };
-
-  // ── Dubbing ──
-  const handleGenerateDubbing = async (sceneId: string, lang: string, langName: string) => {
-    toast({ title: `Generating ${langName} dubbing...`, description: "Translating and synthesizing voice." });
-    try {
-      const res = await fetch(`/api/scenes/${sceneId}/dubbing`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast({
-          title: `${langName} dubbing ready!`,
-          description: data.chunks > 1 ? `Translation + voice generated (${data.chunks} segments).` : "Translation + voice generated.",
-        });
-        // Reload project so the new translation + audio URL appear in the scene card
-        if (currentProject) refreshProject();
-      } else {
-        // The API now returns a friendly user-facing message by default.
-        // Admins get the raw diagnostic via `adminDetail`; users see "service
-        // temporarily unavailable" instead of internal billing details.
-        toast({
-          title: "Dubbing failed",
-          description: getApiError(data, "Please try again in a moment."),
-          variant: "destructive",
-        });
-      }
-    } catch {
-      toast({ title: "Network error", description: "Could not reach the dubbing service.", variant: "destructive" });
-    }
   };
 
   const handleDeleteDubbing = async (sceneId: string, lang: string, langName: string) => {
@@ -7597,7 +7560,6 @@ function VidoraApp() {
                               onSetMusic={handleSetSceneMusic}
                               onGenerateSubtitles={handleGenerateSubtitles}
                               onToggleBurnSubtitles={handleToggleBurnSubtitles}
-                              onGenerateDubbing={handleGenerateDubbing}
                               onDeleteDubbing={handleDeleteDubbing}
                               musicTracks={musicTracks}
                             />

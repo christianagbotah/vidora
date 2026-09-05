@@ -9,6 +9,7 @@ import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
 import { persistProviderVideo } from "@/lib/provider-video-storage";
+import { zai } from "@/lib/zai";
 
 const execFileAsync = promisify(execFile);
 const AMBIENCE_VOLUME = 0.6;
@@ -45,6 +46,7 @@ interface PreviewScene {
   id: string;
   sceneNumber: number;
   videoUrl: string | null;
+  taskId: string | null;
   dialogue: string | null;
   narrationUrl: string | null;
   narrationVoice: string | null;
@@ -80,15 +82,47 @@ async function materializeVideo(scene: PreviewScene): Promise<string> {
   }
 
   // Legacy projects may still contain a provider-hosted URL. Archive it into
-  // Vidora's persistent generated store before ffmpeg touches it, then repair
-  // the scene row so future playback/preview no longer depends on provider
-  // cache semantics or signed URL lifetime.
-  const localUrl = await persistProviderVideo(scene.id, scene.videoUrl);
+  // Vidora's persistent generated store before ffmpeg touches it. If the old
+  // provider URL has expired but we still have the provider task id, refresh
+  // that task once to obtain a fresh media URL before giving up.
+  let providerUrl = scene.videoUrl;
+  let firstError: unknown = null;
+  let localUrl: string | null = null;
+  try {
+    localUrl = await persistProviderVideo(scene.id, providerUrl);
+  } catch (error) {
+    firstError = error;
+  }
+
+  if (!localUrl && scene.taskId) {
+    try {
+      const refreshed = await zai.pollVideoTask({
+        taskId: scene.taskId,
+        maxAttempts: 2,
+        intervalMs: 1_500,
+      });
+      if (refreshed.status === "success" && refreshed.videoUrl) {
+        providerUrl = refreshed.videoUrl;
+        localUrl = await persistProviderVideo(scene.id, providerUrl);
+      }
+    } catch (refreshError) {
+      console.warn(
+        `[full-preview] scene=${scene.id} provider task refresh failed:`,
+        refreshError instanceof Error ? refreshError.message : "unknown error",
+      );
+    }
+  }
+
+  if (!localUrl) {
+    const detail = firstError instanceof Error ? firstError.message : "provider media unavailable";
+    throw new Error(`Scene ${scene.sceneNumber} provider video could not be recovered: ${detail}`);
+  }
+
   const localPath = resolvePublicAssetPath(localUrl);
   if (!existsSync(localPath)) throw new Error(`Scene ${scene.sceneNumber} media copy produced no local file`);
   await db.videoScene.update({
     where: { id: scene.id },
-    data: { videoUrl: localUrl },
+    data: { videoUrl: localUrl, errorMessage: null },
   });
   scene.videoUrl = localUrl;
   return localPath;
