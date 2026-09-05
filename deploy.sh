@@ -173,6 +173,11 @@ mkdir -p logs
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
 
+# PM2 accepting the reload command is not enough: a worker can crash-loop after
+# launch while the web process still serves HTTP. Require the web app and both
+# durable workers to settle in the online state before declaring the release healthy.
+NODE_ENV=production bun scripts/check-pm2-health.ts
+
 HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   HTTP_CODE="$(curl -sS -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3004/ || true)"
