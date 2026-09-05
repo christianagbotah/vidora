@@ -62,6 +62,7 @@ export interface VoiceProfile {
   accent: string;
   voice: string;
   style: VoiceStyle;
+  /** 0 is reserved as an inheritance sentinel for scene/character overrides. */
   speed: number;
 }
 
@@ -71,6 +72,14 @@ export const DEFAULT_VOICE_PROFILE: VoiceProfile = {
   voice: "auto",
   style: "natural",
   speed: 1,
+};
+
+export const INHERIT_VOICE_PROFILE: VoiceProfile = {
+  language: "auto",
+  accent: "auto",
+  voice: "auto",
+  style: "auto",
+  speed: 0,
 };
 
 const LANGUAGE_IDS = new Set<string>(VOICE_LANGUAGES.map((item) => item.id));
@@ -90,26 +99,31 @@ export function sanitizeVoiceProfile(value: unknown): VoiceProfile {
     ? value as Record<string, unknown>
     : {};
   const speedRaw = Number(input.speed);
+  const speed = speedRaw === 0
+    ? 0
+    : Number.isFinite(speedRaw)
+      ? Math.max(0.7, Math.min(1.3, speedRaw))
+      : 1;
   return {
     language: cleanToken(input.language, "auto", LANGUAGE_IDS),
     accent: cleanToken(input.accent, "auto", ACCENT_IDS),
     // Provider-specific voice IDs are allowed here in addition to Vidora's logical voices.
     voice: cleanToken(input.voice, "auto"),
     style: cleanToken(input.style, "natural", STYLE_IDS) as VoiceStyle,
-    speed: Number.isFinite(speedRaw) ? Math.max(0.7, Math.min(1.3, speedRaw)) : 1,
+    speed,
   };
 }
 
-/** Merge explicit overrides onto a base profile. `auto` means inherit. */
+/** Merge explicit overrides onto a base profile. `auto`/speed 0 mean inherit. */
 export function mergeVoiceProfiles(base: VoiceProfile, override?: Partial<VoiceProfile> | null): VoiceProfile {
   if (!override) return sanitizeVoiceProfile(base);
-  const raw = sanitizeVoiceProfile({ ...DEFAULT_VOICE_PROFILE, ...override });
+  const raw = sanitizeVoiceProfile({ ...INHERIT_VOICE_PROFILE, ...override });
   const merged: VoiceProfile = {
     language: raw.language === "auto" ? base.language : raw.language,
     accent: raw.accent === "auto" ? base.accent : raw.accent,
     voice: raw.voice === "auto" ? base.voice : raw.voice,
     style: raw.style === "auto" ? base.style : raw.style,
-    speed: raw.speed,
+    speed: raw.speed === 0 ? base.speed : raw.speed,
   };
   return sanitizeVoiceProfile(merged);
 }
