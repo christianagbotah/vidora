@@ -14,6 +14,10 @@ export interface ModelAwareTTSOptions extends TTSOptions {
   model?: string;
 }
 
+export function resolveZaiTtsModel(explicitModel?: string, configuredModel?: string): string {
+  return explicitModel?.trim() || configuredModel?.trim() || "glm-tts";
+}
+
 /**
  * Compatibility adapter for the current Z.AI speech endpoint.
  *
@@ -24,7 +28,7 @@ export interface ModelAwareTTSOptions extends TTSOptions {
  */
 export async function ttsWithRequiredModel(opts: ModelAwareTTSOptions): Promise<ArrayBuffer> {
   const configuredModel = await getConfigValue("ai_tts_model", "ZAI_TTS_MODEL");
-  const model = opts.model?.trim() || configuredModel.trim() || "glm-tts";
+  const model = resolveZaiTtsModel(opts.model, configuredModel);
   const client = await getClient();
 
   const body = {
