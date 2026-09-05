@@ -71,7 +71,7 @@ const DEFAULT_VALUES: Record<string, string> = {
   ai_text_model: "",
   ai_text_fallback_provider: "zai",
   ai_tts_provider: "zai",
-  ai_tts_model: "glm-tts",
+  ai_tts_model: "",
   zai_tts_base_url: "https://open.bigmodel.cn/api/paas/v4",
   xai_base_url: "https://api.x.ai/v1",
   xai_text_model: "grok-4.6",
