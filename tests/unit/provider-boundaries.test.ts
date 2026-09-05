@@ -23,6 +23,7 @@ const REVIEWED_BOUNDARIES: Record<string, string> = {
   "src/app/api/split-scenes/legacy.ts": "legacy_local_parser_with_historical_provider_fallback",
   "src/app/api/transcribe/route.ts": "authenticated_metered",
   "src/lib/ai-provider-router.ts": "central_capability_router_for_text_and_tts",
+  "src/lib/full-preview-render.ts": "project_authorized_legacy_media_recovery_poll_only_no_generation",
   "src/lib/zai.ts": "provider_sdk_transport_internal",
 };
 
