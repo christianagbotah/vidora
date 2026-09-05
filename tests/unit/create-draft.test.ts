@@ -40,8 +40,8 @@ describe("create draft snapshot", () => {
     expect(snapshot.parsedScenes).toHaveLength(1);
     expect(snapshot.parsedScenes[0].characterNames).toEqual(["Ada", "Bob"]);
     expect(snapshot.parsedCharacters.map((character) => character.name)).toEqual(["Ada", "Bob"]);
-    expect(snapshot.preCharImages.Ada).toStartWith("data:image/png");
-    expect(snapshot.preCharImages.Bob).toStartWith("/generated/");
+    expect(snapshot.preCharImages.Ada.startsWith("data:image/png")).toBe(true);
+    expect(snapshot.preCharImages.Bob.startsWith("/generated/")).toBe(true);
     expect(snapshot.preCharImages.Mallory).toBeUndefined();
     expect(snapshot.savedAt).toBeTruthy();
   });
