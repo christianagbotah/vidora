@@ -96,6 +96,7 @@ model VideoScene {
   imageUrl          String?      @db.Text
   imageBase64       String?      @db.Text
   videoUrl          String?      @db.Text
+  previousVideoUrl  String?      @db.Text
   taskId            String?
   duration          Int          @default(10)
   transition        String       @default("fade")

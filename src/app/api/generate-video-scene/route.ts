@@ -74,10 +74,13 @@ export async function POST(req: NextRequest) {
     } else if (scene.characterIds) {
       try {
         const charIds: string[] = JSON.parse(scene.characterIds);
-        const firstChar = project.characters.find((c) => charIds.includes(c.id));
-        if (firstChar?.imageUrl && !firstChar.imageUrl.startsWith("data:")) {
-          referenceImage = firstChar.imageUrl;
-        }
+        const pictured = project.characters
+          .filter((character) => charIds.includes(character.id) && character.imageUrl && !character.imageUrl.startsWith("data:"))
+          .sort((a, b) => {
+            const priority = (role?: string | null) => /protagonist|primary|main|subject/i.test(role || "") ? 1 : 0;
+            return priority(b.role) - priority(a.role);
+          });
+        if (pictured[0]?.imageUrl) referenceImage = pictured[0].imageUrl;
       } catch {
         // Malformed legacy characterIds should not weaken authorization/billing.
       }

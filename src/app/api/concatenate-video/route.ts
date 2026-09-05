@@ -22,7 +22,7 @@ async function checkFfmpeg(): Promise<boolean> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { projectId } = await req.json();
+    const { projectId, previewOnly = false } = await req.json();
     if (!projectId) {
       return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
     }
@@ -53,23 +53,32 @@ export async function POST(req: NextRequest) {
     if (completedScenes.length === 0) {
       return NextResponse.json({ success: false, error: "No completed video scenes to concatenate" }, { status: 400 });
     }
+    if (previewOnly && completedScenes.length !== project.scenes.length) {
+      return NextResponse.json({
+        success: false,
+        error: `Full preview requires every scene to be complete (${completedScenes.length}/${project.scenes.length} ready).`,
+      }, { status: 409 });
+    }
 
     if (completedScenes.length === 1) {
-      // Just one scene — save as final video directly
-      await db.videoProject.update({
-        where: { id: projectId },
-        data: { finalVideoUrl: completedScenes[0].videoUrl, status: "completed" },
-      });
+      if (!previewOnly) {
+        await db.videoProject.update({
+          where: { id: projectId },
+          data: { finalVideoUrl: completedScenes[0].videoUrl, status: "completed" },
+        });
+      }
       return NextResponse.json({
         success: true,
-        finalVideoUrl: completedScenes[0].videoUrl,
+        ...(previewOnly ? { previewVideoUrl: completedScenes[0].videoUrl } : { finalVideoUrl: completedScenes[0].videoUrl }),
         sceneCount: 1,
-        message: "Single scene saved as final video",
+        message: previewOnly ? "Full preview ready" : "Single scene saved as final video",
       });
     }
 
-    // Mark as generating
-    await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
+    // A preview is a read-only review render. Export/final state must not move.
+    if (!previewOnly) {
+      await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
+    }
 
     const workDir = path.join(generatedStoreDir(), "concat_" + projectId);
     await mkdir(workDir, { recursive: true });
@@ -138,19 +147,20 @@ export async function POST(req: NextRequest) {
       }
 
       // Move final video to the persistent generated store
-      const finalFileName = "final_" + projectId + ".mp4";
-      const finalPath = generatedFilePath(finalFileName);
+      const resultFileName = (previewOnly ? "preview_" : "final_") + projectId + ".mp4";
+      const resultPath = generatedFilePath(resultFileName);
       const finalData = await readFile(outputPath);
-      await mkdir(path.dirname(finalPath), { recursive: true });
-      await writeFile(finalPath, finalData);
+      await mkdir(path.dirname(resultPath), { recursive: true });
+      await writeFile(resultPath, finalData);
 
-      const finalVideoUrl = "/generated/" + finalFileName;
+      const resultVideoUrl = "/generated/" + resultFileName;
 
-      // Update project
-      await db.videoProject.update({
-        where: { id: projectId },
-        data: { finalVideoUrl, status: "completed" },
-      });
+      if (!previewOnly) {
+        await db.videoProject.update({
+          where: { id: projectId },
+          data: { finalVideoUrl: resultVideoUrl, status: "completed" },
+        });
+      }
 
       // Clean up
       try { await rm(workDir, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
@@ -162,16 +172,20 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        finalVideoUrl,
+        ...(previewOnly ? { previewVideoUrl: resultVideoUrl } : { finalVideoUrl: resultVideoUrl }),
         sceneCount: completedScenes.length,
         estimatedDuration: durationStr,
-        message: "Full video created! (" + completedScenes.length + " scenes, ~" + durationStr + ")",
+        message: previewOnly
+          ? "Full project preview ready — review it before export."
+          : "Full video created! (" + completedScenes.length + " scenes, ~" + durationStr + ")",
       });
     } catch (err) {
       try { await rm(workDir, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
       const msg = err instanceof Error ? err.message : "Unknown error";
-      await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
-      return NextResponse.json({ success: false, error: "Failed to concatenate videos" }, { status: 500 });
+      if (!previewOnly) {
+        await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
+      }
+      return NextResponse.json({ success: false, error: previewOnly ? "Failed to build full preview" : "Failed to concatenate videos" }, { status: 500 });
     }
   } catch (error) {
     console.error("Concatenate error:", error);
