@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { db } from "@/lib/db";
 import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
+import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
 
 const execFileAsync = promisify(execFile);
 const AMBIENCE_VOLUME = 0.6;
@@ -238,23 +239,18 @@ async function currentSceneAudio(scene: PreviewScene): Promise<SceneAudio> {
     const voice = await pickSceneNarrationVoice(scene);
     // Always resolve through the deterministic narration generator. It replays
     // an existing matching fingerprint without charging again, while a stale
-    // provider/voice/dialogue artifact receives a new fingerprint.
+    // provider/voice/dialogue artifact receives a new fingerprint. The
+    // generator persists only narrationUrl; the resolved character voice stays
+    // derived and therefore does not mutate the reviewed source configuration.
     const narration = await generateSceneNarration({
       sceneId: scene.id,
       text: scene.dialogue,
       voice,
     });
     narrationPath = narration.path;
-    await db.videoScene.update({
-      where: { id: scene.id },
-      data: { narrationUrl: narration.url, narrationVoice: voice },
-    });
   } else if (scene.narrationUrl) {
     const filename = scene.narrationUrl.split("?")[0].split("/").pop();
-    if (filename) {
-      const candidate = resolvePublicAssetPath(`/api/audio/${filename}`);
-      if (existsSync(candidate)) narrationPath = candidate;
-    }
+    if (filename && audioFileExists(filename)) narrationPath = getAudioPath(filename);
   }
 
   let musicPath: string | null = null;
