@@ -85,6 +85,7 @@ export const INHERIT_VOICE_PROFILE: VoiceProfile = {
 const LANGUAGE_IDS = new Set<string>(VOICE_LANGUAGES.map((item) => item.id));
 const ACCENT_IDS = new Set<string>(VOICE_ACCENTS.map((item) => item.id));
 const STYLE_IDS = new Set<string>(VOICE_STYLES.map((item) => item.id));
+const LOGICAL_VOICE_IDS = new Set<string>(LOGICAL_VOICES.map((item) => item.id));
 
 function cleanToken(value: unknown, fallback: string, allowed?: Set<string>): string {
   if (typeof value !== "string") return fallback;
@@ -92,6 +93,14 @@ function cleanToken(value: unknown, fallback: string, allowed?: Set<string>): st
   if (!clean) return fallback;
   if (allowed && !allowed.has(clean)) return fallback;
   return clean;
+}
+
+function cleanVoice(value: unknown): string {
+  if (typeof value !== "string") return "auto";
+  const raw = value.trim().slice(0, 160);
+  if (!raw) return "auto";
+  const logical = raw.toLowerCase();
+  return LOGICAL_VOICE_IDS.has(logical) ? logical : raw;
 }
 
 export function sanitizeVoiceProfile(value: unknown): VoiceProfile {
@@ -107,8 +116,8 @@ export function sanitizeVoiceProfile(value: unknown): VoiceProfile {
   return {
     language: cleanToken(input.language, "auto", LANGUAGE_IDS),
     accent: cleanToken(input.accent, "auto", ACCENT_IDS),
-    // Provider-specific voice IDs are allowed here in addition to Vidora's logical voices.
-    voice: cleanToken(input.voice, "auto"),
+    // Known Vidora voices are normalized; provider-native IDs retain casing.
+    voice: cleanVoice(input.voice),
     style: cleanToken(input.style, "natural", STYLE_IDS) as VoiceStyle,
     speed,
   };
