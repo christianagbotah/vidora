@@ -50,17 +50,25 @@ export async function generateSceneNarration(
     readVoiceProfile(sceneVoiceProfileKey(scene.id)),
   ]);
 
-  let projectProfile = mergeVoiceProfiles(DEFAULT_VOICE_PROFILE, storedProject);
-  let sceneProfile = mergeVoiceProfiles(projectProfile, storedScene);
+  const projectProfile = mergeVoiceProfiles(DEFAULT_VOICE_PROFILE, storedProject);
 
-  // Preserve the pre-profile scene settings as explicit legacy overrides.
+  // Legacy scene settings are preserved as old explicit overrides, but a new
+  // Voice Studio scene profile is more recent and therefore wins over them.
+  let sceneProfile = projectProfile;
   if (scene.narrationLang?.trim()) {
     sceneProfile = { ...sceneProfile, language: scene.narrationLang.trim().toLowerCase() };
   }
-  const explicitVoice = opts.voice?.trim().toLowerCase();
   const legacyVoice = scene.narrationVoice?.trim().toLowerCase();
-  if (explicitVoice) sceneProfile = { ...sceneProfile, voice: explicitVoice };
-  else if (legacyVoice) sceneProfile = { ...sceneProfile, voice: legacyVoice };
+  if (legacyVoice) {
+    sceneProfile = { ...sceneProfile, voice: legacyVoice };
+  }
+  sceneProfile = mergeVoiceProfiles(sceneProfile, storedScene);
+
+  // A one-off API request is the highest-priority voice override.
+  const explicitVoice = opts.voice?.trim();
+  if (explicitVoice) {
+    sceneProfile = { ...sceneProfile, voice: explicitVoice };
+  }
 
   const characterIds = parseCharacterIds(scene.characterIds);
   const characters = characterIds.length
@@ -74,18 +82,20 @@ export async function generateSceneNarration(
   await Promise.all(characters.map(async (character) => {
     const storedCharacter = await readVoiceProfile(characterVoiceProfileKey(character.id));
     let effective = mergeVoiceProfiles(sceneProfile, storedCharacter);
-    const logicalVoice = character.voiceId?.trim().toLowerCase();
+    const logicalVoice = character.voiceId?.trim();
+    const lookupVoice = logicalVoice?.toLowerCase();
+
     // Existing Character.voiceId remains authoritative unless the new profile
     // explicitly chooses a different voice.
     if (storedCharacter?.voice === "auto" || !storedCharacter?.voice) {
       effective = { ...effective, voice: logicalVoice || sceneProfile.voice };
     }
-    if (logicalVoice) byVoice[logicalVoice] = effective;
+    if (lookupVoice) byVoice[lookupVoice] = effective;
   }));
 
   const forwarded = {
     ...opts,
-    voice: explicitVoice || legacyVoice || (sceneProfile.voice === "auto" ? undefined : sceneProfile.voice),
+    voice: sceneProfile.voice === "auto" ? undefined : sceneProfile.voice,
     speed: opts.speed ?? sceneProfile.speed,
   };
 
