@@ -586,8 +586,10 @@ function GenerationLockOverlay({
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-red-700">
                     {completed > 0
-                      ? `${completed} of ${total} scene${total > 1 ? "s" : ""} completed — ${failed} failed`
-                      : `${failed} of ${total} scene${total > 1 ? "s" : ""} failed`}
+                      ? `${completed} of ${total} scene${total > 1 ? "s" : ""} completed${failed > 0 ? ` — ${failed} failed` : " — generation interrupted"}`
+                      : failed > 0
+                        ? `${failed} of ${total} scene${total > 1 ? "s" : ""} failed`
+                        : "Generation run interrupted"}
                   </p>
                   <p className="text-xs text-red-600 mt-1">
                     {failedList[0]?.errorMessage
@@ -600,8 +602,8 @@ function GenerationLockOverlay({
                 <div className="px-4 py-2.5 flex items-center justify-between bg-slate-50/60 text-xs">
                   <span className="text-muted-foreground">
                     {moderationFlagged
-                      ? "Some scenes were flagged by the AI content filter — edit their prompts in the studio (Edit ✎ on the scene), then retry. Tokens for failed scenes were refunded."
-                      : "Failed scenes are retried with one click — tokens for failed scenes were refunded."}
+                      ? "Some scenes were flagged by the AI content filter — edit their prompts in the studio (Edit ✎ on the scene), then retry."
+                      : "Retry resumes only unfinished scenes. Confirmed provider failures reuse the original Vidora token charge; safe pre-submission failures are refunded before a fresh retry."}
                   </span>
                 </div>
               </div>
@@ -760,9 +762,9 @@ function GenerationLockOverlay({
               disabled={isRetrying}
             >
               {isRetrying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-1.5" />}
-              {isRetrying ? "Retrying…" : "Retry Failed Scenes"}
+              {isRetrying ? "Retrying…" : failed > 0 ? "Retry Failed Scenes" : "Resume Generation"}
             </Button>
-            <Button variant="outline" className="flex-1" onClick={onContinue}>
+            <Button variant="outline" className="flex-1" onClick={onBack}>
               Back to Project
             </Button>
           </div>
@@ -2302,7 +2304,7 @@ function VidoraApp() {
         (s) => s.status === "pending" && !s.videoUrl,
       );
       if (
-        hasPending && !isAnyGenerating && !isGenerating && !generationActive &&
+        hasPending && currentProject.status !== "failed" && !isAnyGenerating && !isGenerating && !generationActive &&
         !autoGenFiredRef.current.has(currentProject.id)
       ) {
         autoGenFiredRef.current.add(currentProject.id);
@@ -2371,6 +2373,10 @@ function VidoraApp() {
      interrupted session and must not hold the user hostage. */
   useEffect(() => {
     if (currentView !== "studio" || !currentProject || generationPhase !== "idle" || generationOverlayDismissed) return;
+    if (currentProject.status === "failed") {
+      setGenerationPhase("failed");
+      return;
+    }
     const FRESH_RUN_MS = 30 * 60_000;
     const anyFreshGenerating = safeScenes.some(
       (s) => (s.status === "generating" || s.status === "queued") && !s.videoUrl &&
@@ -2457,28 +2463,54 @@ function VidoraApp() {
     }
   };
 
-  /* ── Retry failed scenes from the generation lock overlay ──
-     Resets failed scenes to "pending" so the generate API picks them
-     up again, then restarts generation (locks the page again). */
+  /* ── Retry/resume the durable generation run ──
+     The server owns reconciliation. The client must never clear task IDs or
+     manually rewrite scene state because that can lose in-flight provider work. */
   const handleRetryFailedScenes = async () => {
-    if (!currentProject) return;
-    const failedScenes = safeScenes.filter((s) => s.status === "failed" && !s.videoUrl);
-    if (failedScenes.length === 0) return;
+    if (!currentProject || isGenerating) return;
     setGenerationOverlayDismissed(false);
-    setGenerationPhase("generating");
+    setGenerationPhase("starting");
+    setIsGenerating(true);
+    seenGeneratingRef.current = false;
+    allTerminalSinceRef.current = null;
     try {
-      await Promise.all(failedScenes.map((scene) =>
-        fetch(`/api/projects/${currentProject.id}/scenes/${scene.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "pending" }),
-        }).catch(() => { /* ignore individual resets */ })
-      ));
+      const res = await fetch("/api/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentProject.id, retry: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setGenerationPhase("failed");
+        toast({
+          title: data.reconciliationRequired ? "Retry needs review" : "Retry failed",
+          description: data.reason || getApiError(data, "Could not resume generation."),
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: data.alreadyRunning ? "Generation is already running" : "Retry started",
+        description: data.reusedOriginalCharge
+          ? "Unfinished scenes resumed with the original Vidora token charge — no additional Vidora tokens were deducted."
+          : data.refundedAndRecharged
+            ? "The earlier failed Vidora charge was refunded before this fresh retry charge."
+            : data.message,
+      });
+      setGenerationStartedAt(Date.now());
+      setGenerationPhase(data.alreadyDone ? "completed" : "generating");
       await refreshProject();
-      await handleGenerateAll();
+      if (!data.alreadyDone) setTimeout(refreshProject, 3000);
     } catch {
-      setGenerationPhase("idle");
-      toast({ title: "Retry failed", description: "Could not retry — try again from the studio.", variant: "destructive" });
+      setGenerationPhase("failed");
+      toast({
+        title: "Retry failed",
+        description: "Could not resume generation. Your project and provider task IDs are still preserved.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
     }
   };
 
