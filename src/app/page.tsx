@@ -398,6 +398,7 @@ function GenerationLockOverlay({
   projectTitle,
   scenes,
   onContinue,
+  onBack,
   onRetry,
   isRetrying,
 }: {
@@ -405,6 +406,7 @@ function GenerationLockOverlay({
   projectTitle: string;
   scenes: VideoScene[];
   onContinue: () => void;
+  onBack: () => void;
   onRetry: () => void;
   isRetrying: boolean;
 }) {
@@ -714,13 +716,28 @@ function GenerationLockOverlay({
               <p className="text-[11px] text-muted-foreground text-center border-t border-slate-100 pt-3">
                 {isEstimated
                   ? "Progress is estimated in real time and updates as each clip finishes."
-                  : "The page stays locked while your video renders — this usually takes a few minutes."}
+                  : "Rendering continues in the background — you can safely return to your project while it finishes."}
               </p>
             </>
           )}
         </div>
 
         {/* ── Footer actions ── */}
+        {isActive && (
+          <div className="px-6 pb-6 space-y-2">
+            {failed > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {failed} scene{failed === 1 ? " has" : "s have"} failed. You can return to the project now and retry failed scenes without waiting on this screen.
+              </div>
+            )}
+            <Button variant="outline" className="w-full h-11" onClick={onBack}>
+              <ArrowLeft className="h-4 w-4 mr-1.5" />Back to Project
+            </Button>
+            <p className="text-[11px] text-muted-foreground text-center">
+              Rendering continues safely in the background. You can leave this screen and return to the project at any time.
+            </p>
+          </div>
+        )}
         {phase === "completed" && (
           <div className="px-6 pb-6">
             <Button className="btn-gradient w-full h-12 text-base" onClick={onContinue}>
@@ -1688,10 +1705,14 @@ function VidoraApp() {
   /* ── Create wizard + generation lock ── */
   // Wizard step for the Create view: 0 = details, 1 = parameters, 2 = review & generate
   const [createStep, setCreateStep] = useState(0);
-  // Generation overlay phase — locks the ENTIRE page while videos render
+  // Generation overlay phase. Rendering itself is durable/background-safe;
+  // the overlay is only a progress surface and must never trap the user.
   const [generationPhase, setGenerationPhase] = useState<"idle" | "starting" | "generating" | "completed" | "failed">("idle");
   // Timestamp (ms) when the current generation run started — drives elapsed timer
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
+  // Once a user deliberately leaves the progress overlay, do not immediately
+  // reopen it from the reload/recovery effect while the same run is active.
+  const [generationOverlayDismissed, setGenerationOverlayDismissed] = useState(false);
   /* ── Background export job (/api/export-video runs the ffmpeg pipeline
      server-side while the UI polls progress; survives page refresh) ── */
   const [exportJob, setExportJob] = useState<ExportJobState | null>(null);
@@ -2342,7 +2363,7 @@ function VidoraApp() {
      "generating" for 30+ minutes without a DB update is a zombie from an
      interrupted session and must not hold the user hostage. */
   useEffect(() => {
-    if (currentView !== "studio" || !currentProject || generationPhase !== "idle") return;
+    if (currentView !== "studio" || !currentProject || generationPhase !== "idle" || generationOverlayDismissed) return;
     const FRESH_RUN_MS = 30 * 60_000;
     const anyFreshGenerating = safeScenes.some(
       (s) => (s.status === "generating" || s.status === "queued") && !s.videoUrl &&
@@ -2352,7 +2373,7 @@ function VidoraApp() {
       setGenerationStartedAt((prev) => prev ?? Date.now());
       setGenerationPhase("generating");
     }
-  }, [currentView, currentProject, safeScenes, generationPhase]);
+  }, [currentView, currentProject, safeScenes, generationPhase, generationOverlayDismissed]);
 
   // ── Keyboard shortcuts for studio view ──
   const [activeSceneIdx, setActiveSceneIdx] = useState(0);
@@ -2396,6 +2417,7 @@ function VidoraApp() {
 
   const handleGenerateAll = async () => {
     if (!currentProject) return;
+    setGenerationOverlayDismissed(false);
     setIsGenerating(true);
     seenGeneratingRef.current = false; // fresh run — reset failure guard
     allTerminalSinceRef.current = null; // …and the fast-fail timer
@@ -2435,7 +2457,8 @@ function VidoraApp() {
     if (!currentProject) return;
     const failedScenes = safeScenes.filter((s) => s.status === "failed" && !s.videoUrl);
     if (failedScenes.length === 0) return;
-    setGenerationPhase("generating"); // keep the page locked during retry
+    setGenerationOverlayDismissed(false);
+    setGenerationPhase("generating");
     try {
       await Promise.all(failedScenes.map((scene) =>
         fetch(`/api/projects/${currentProject.id}/scenes/${scene.id}`, {
@@ -3462,6 +3485,7 @@ function VidoraApp() {
       setCurrentProject(project);
       if (project.characters) setCharacters(project.characters);
       setCurrentView("studio");
+      setGenerationOverlayDismissed(false);
       setGenerationStartedAt(Date.now());
       setGenerationPhase("starting");
       clearDraftReference();
@@ -5432,6 +5456,22 @@ function VidoraApp() {
 
       {/* ── Main Content ── */}
       <main className="flex-1 pt-14 pb-20 md:pb-0">
+        {currentView !== "home" && (
+          <div className="sticky top-14 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/85">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => goBack()}
+                className="-ml-2 hover:bg-violet-50"
+                aria-label={`Back to ${VIEW_LABELS[backTargetView]}`}
+              >
+                <ArrowLeft className="h-4 w-4 mr-1.5" />
+                Back to {VIEW_LABELS[backTargetView]}
+              </Button>
+            </div>
+          </div>
+        )}
         <AnimatePresence mode="wait">
 
           {/* ═══════════════════════════════════════════════════════
@@ -9591,9 +9631,9 @@ function VidoraApp() {
       </main>
 
       {/* ═══════════════════════════════════════════════════════
-          GENERATION LOCK OVERLAY
-          Blocks the entire page (header, content, navs, footer) while
-          videos are being generated. Non-dismissible until done.
+          GENERATION PROGRESS OVERLAY
+          Shows full-screen progress while video jobs run, but remains safely
+          dismissible because generation is durable and continues in background.
           ═══════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {generationPhase !== "idle" && currentProject && (
@@ -9603,7 +9643,8 @@ function VidoraApp() {
             projectTitle={currentProject.title}
             scenes={safeScenes}
             isRetrying={isGenerating}
-            onContinue={() => { setGenerationPhase("idle"); setGenerationStartedAt(null); }}
+            onContinue={() => { setGenerationOverlayDismissed(false); setGenerationPhase("idle"); setGenerationStartedAt(null); }}
+            onBack={() => { setGenerationOverlayDismissed(true); setGenerationPhase("idle"); }}
             onRetry={handleRetryFailedScenes}
           />
         )}
