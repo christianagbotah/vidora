@@ -91,6 +91,47 @@ fi
 # Dependency install is intentionally frozen. Never silently rewrite bun.lock on production.
 bun install --frozen-lockfile
 
+# Media export is a production feature, not an optional host capability. Validate
+# the exact FFmpeg surface used by Vidora before spending time on build/backups
+# or restarting PM2. This catches stripped FFmpeg builds where title cards fail
+# because drawtext (libfreetype/fontconfig) is unavailable.
+for media_bin in ffmpeg ffprobe; do
+  if ! command -v "$media_bin" >/dev/null 2>&1; then
+    echo "FATAL: $media_bin is required for Vidora video export but is not installed"
+    exit 1
+  fi
+done
+
+FFMPEG_FILTERS="$(ffmpeg -hide_banner -filters 2>&1 || true)"
+required_ffmpeg_filters=(drawtext xfade concat scale pad amix)
+for filter_name in "${required_ffmpeg_filters[@]}"; do
+  if ! grep -Eq "[[:space:]]${filter_name}[[:space:]]" <<<"$FFMPEG_FILTERS"; then
+    echo "FATAL: FFmpeg filter '$filter_name' is unavailable; install a full FFmpeg build before deploying"
+    exit 1
+  fi
+done
+
+FFMPEG_ENCODERS="$(ffmpeg -hide_banner -encoders 2>&1 || true)"
+required_ffmpeg_encoders=(libx264 aac libvpx libopus)
+for encoder_name in "${required_ffmpeg_encoders[@]}"; do
+  if ! grep -Eq "[[:space:]]${encoder_name}[[:space:]]" <<<"$FFMPEG_ENCODERS"; then
+    echo "FATAL: FFmpeg encoder '$encoder_name' is unavailable; Vidora cannot provide all advertised export formats"
+    exit 1
+  fi
+done
+
+# A filter can be listed yet still fail at runtime when its font dependency is
+# missing. Exercise the same default-font drawtext path used by title cards.
+if ! ffmpeg -nostdin -hide_banner -loglevel error \
+  -f lavfi -i "color=c=black:s=320x180:d=0.1:r=24" \
+  -vf "drawtext=text='Vidora':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2" \
+  -frames:v 1 -f null - >/dev/null 2>&1; then
+  echo "FATAL: FFmpeg drawtext runtime probe failed; title-card export would be degraded"
+  exit 1
+fi
+
+echo "FFmpeg export capability preflight: OK"
+
 # Preflight quality checks happen before backup/migrations/restart.
 bunx prisma validate
 bunx prisma generate
