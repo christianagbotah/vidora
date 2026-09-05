@@ -15,6 +15,12 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 const PREVIEW_TRANSITIONS = new Set<FullPreviewTransition>(["fade", "dissolve", "wipe", "slide", "cut"]);
 
+interface ReviewedRenderConfig {
+  transition: FullPreviewTransition;
+  withTitleCard: boolean;
+  includeAudio: boolean;
+}
+
 async function checkFfmpeg(): Promise<boolean> {
   try {
     await execFileAsync("which", ["ffmpeg"]);
@@ -27,13 +33,22 @@ async function checkFfmpeg(): Promise<boolean> {
 
 /**
  * Persist review only if the project render inputs are still exactly the ones
- * that were loaded before preview rendering began. PostgreSQL increments
- * cutVersion for visual changes plus dialogue/voice/music source changes.
+ * that were loaded before preview rendering began. The render configuration is
+ * stored atomically with the reviewed cut so ExportJob insertion can enforce
+ * that the final content settings are the same ones the user actually saw.
  */
-async function markCurrentCutReviewed(projectId: string, expectedCutVersion: number): Promise<void> {
+async function markCurrentCutReviewed(
+  projectId: string,
+  expectedCutVersion: number,
+  renderConfig: ReviewedRenderConfig,
+): Promise<void> {
   const result = await db.videoProject.updateMany({
     where: { id: projectId, cutVersion: expectedCutVersion },
-    data: { reviewedCutVersion: expectedCutVersion, reviewedAt: new Date() },
+    data: {
+      reviewedCutVersion: expectedCutVersion,
+      reviewedAt: new Date(),
+      reviewedRenderConfig: renderConfig,
+    },
   });
   if (result.count !== 1) {
     throw new Error("Project changed while the full preview was being built");
@@ -112,7 +127,12 @@ export async function POST(req: NextRequest) {
           withTitleCard: withTitleCard === true,
           includeAudio: includeAudio !== false,
         });
-        await markCurrentCutReviewed(projectId, expectedCutVersion);
+        const reviewedRenderConfig: ReviewedRenderConfig = {
+          transition: preview.transition,
+          withTitleCard: preview.withTitleCard,
+          includeAudio: preview.includeAudio,
+        };
+        await markCurrentCutReviewed(projectId, expectedCutVersion, reviewedRenderConfig);
         const min = Math.floor(preview.durationSeconds / 60);
         const sec = Math.round(preview.durationSeconds % 60);
         const duration = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
@@ -121,11 +141,10 @@ export async function POST(req: NextRequest) {
           previewVideoUrl: preview.previewVideoUrl,
           sceneCount: preview.sceneCount,
           reviewedCutVersion: expectedCutVersion,
+          reviewedRenderConfig,
           estimatedDuration: duration,
           render: {
-            transition: preview.transition,
-            withTitleCard: preview.withTitleCard,
-            includeAudio: preview.includeAudio,
+            ...reviewedRenderConfig,
             voices: preview.voices,
             musicScenes: preview.musicScenes,
             ambienceScenes: preview.ambienceScenes,
