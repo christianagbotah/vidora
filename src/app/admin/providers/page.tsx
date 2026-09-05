@@ -28,6 +28,7 @@ const EDITABLE_KEYS = [
   "ai_text_fallback_provider",
   "ai_tts_provider",
   "ai_tts_model",
+  "zai_tts_base_url",
   "xai_base_url",
   "xai_text_model",
   "elevenlabs_base_url",
@@ -65,6 +66,7 @@ export default function AIProviderAdminPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingVoice, setTestingVoice] = useState(false);
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
 
@@ -138,6 +140,26 @@ export default function AIProviderAdminPage() {
     }
   };
 
+  const testActiveVoice = async () => {
+    setTestingVoice(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/admin/config/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "tts" }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "Voice provider test failed");
+      setMessage(`Voice connected: ${data.provider} / ${data.model} / ${data.voice} in ${data.latencyMs} ms (${data.audioBytes} bytes).`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Voice provider test failed");
+    } finally {
+      setTestingVoice(false);
+    }
+  };
+
   const textProvider = form.ai_text_provider || "zai";
   const fallbackProvider = form.ai_text_fallback_provider || "zai";
   const ttsProvider = form.ai_tts_provider || "zai";
@@ -176,11 +198,15 @@ export default function AIProviderAdminPage() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={testActiveText} disabled={testing || saving}>
+            <Button variant="outline" onClick={testActiveText} disabled={testing || testingVoice || saving}>
               {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-2 h-4 w-4" />}
               Test text model
             </Button>
-            <Button onClick={save} disabled={saving || testing}>
+            <Button variant="outline" onClick={testActiveVoice} disabled={testing || testingVoice || saving}>
+              {testingVoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mic2 className="mr-2 h-4 w-4" />}
+              Test voice model
+            </Button>
+            <Button onClick={save} disabled={saving || testing || testingVoice}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               Save routing
             </Button>
@@ -325,8 +351,21 @@ export default function AIProviderAdminPage() {
               </div>
               <div className="space-y-2">
                 <Label>TTS model</Label>
-                <Input value={form.ai_tts_model || ""} onChange={(event) => setField("ai_tts_model", event.target.value)} placeholder={ttsProvider === "elevenlabs" ? "eleven_v3" : "Leave blank for Z.ai default"} />
+                <Input value={form.ai_tts_model || ""} onChange={(event) => setField("ai_tts_model", event.target.value)} placeholder={ttsProvider === "elevenlabs" ? "eleven_v3" : "glm-tts"} />
               </div>
+              {ttsProvider === "zai" && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>GLM-TTS base URL</Label>
+                  <Input
+                    value={form.zai_tts_base_url || ""}
+                    onChange={(event) => setField("zai_tts_base_url", event.target.value)}
+                    placeholder="https://open.bigmodel.cn/api/paas/v4"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Voice synthesis uses BigModel/Open Platform independently from the global api.z.ai video/chat endpoint.
+                  </p>
+                </div>
+              )}
               {ttsProvider === "elevenlabs" && (
                 <>
                   <div className="space-y-2">
@@ -362,6 +401,7 @@ export default function AIProviderAdminPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <SecretBadge configs={configs} configKey="zai_api_key" env="ZAI_API_KEY" />
+              <SecretBadge configs={configs} configKey="zai_tts_api_key" env="ZAI_TTS_API_KEY" />
               <SecretBadge configs={configs} configKey="xai_api_key" env="XAI_API_KEY" />
               <SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" />
               <SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" />
