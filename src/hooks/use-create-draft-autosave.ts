@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import type {
   CreateDraftSaveResponse,
   CreateDraftSaveStatus,
@@ -15,6 +16,12 @@ type RestoredProject = {
   id: string;
   title: string;
   draftData?: string | null;
+};
+
+type LocalFallback = {
+  projectId?: string | null;
+  title?: string;
+  snapshot?: CreateDraftSnapshot;
 };
 
 interface UseCreateDraftAutosaveOptions {
@@ -53,6 +60,14 @@ export function useCreateDraftAutosave({
   onRestore,
   onPersistedImages,
 }: UseCreateDraftAutosaveOptions) {
+  const { data: authSession } = useSession();
+  const accountScope = useMemo(() => {
+    const email = authSession?.user?.email?.trim().toLowerCase();
+    return encodeURIComponent(email || "signed-in-user");
+  }, [authSession?.user?.email]);
+  const draftIdStorageKey = `${DRAFT_ID_KEY}:${accountScope}`;
+  const draftFallbackStorageKey = `${DRAFT_FALLBACK_KEY}:${accountScope}`;
+
   const [projectId, setProjectId] = useState<string | null>(null);
   const [status, setStatus] = useState<CreateDraftSaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -74,29 +89,51 @@ export function useCreateDraftAutosave({
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
+  // A session identity change must never reuse another account's in-memory
+  // project id or restoration state, even on a shared browser/device.
+  useEffect(() => {
+    projectIdRef.current = null;
+    setProjectId(null);
+    setStatus("idle");
+    setLastSavedAt(null);
+    setRestoreChecked(false);
+  }, [accountScope]);
+
   const rememberProjectId = useCallback((id: string | null) => {
     projectIdRef.current = id;
     setProjectId(id);
     if (typeof window === "undefined") return;
-    if (id) localStorage.setItem(DRAFT_ID_KEY, id);
-    else localStorage.removeItem(DRAFT_ID_KEY);
-  }, []);
+    if (id) localStorage.setItem(draftIdStorageKey, id);
+    else localStorage.removeItem(draftIdStorageKey);
+  }, [draftIdStorageKey]);
 
-  const restoreFallback = useCallback(() => {
-    if (typeof window === "undefined") return false;
+  const readFallback = useCallback((expectedProjectId?: string | null): LocalFallback | null => {
+    if (typeof window === "undefined") return null;
     try {
-      const raw = localStorage.getItem(DRAFT_FALLBACK_KEY);
-      if (!raw) return false;
-      const parsed = JSON.parse(raw) as { title?: string; snapshot?: CreateDraftSnapshot };
-      if (!parsed.title || !parsed.snapshot || parsed.snapshot.version !== 1) return false;
-      restoringRef.current = true;
-      onRestore(parsed.title, parsed.snapshot);
-      queueMicrotask(() => { restoringRef.current = false; });
-      return true;
+      const raw = localStorage.getItem(draftFallbackStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as LocalFallback;
+      if (!parsed.title || !parsed.snapshot || parsed.snapshot.version !== 1) return null;
+      // When a server draft id is known, never restore a fallback that belongs
+      // to a different draft. Older v1 envelopes without projectId are still
+      // accepted only when no expected id exists.
+      if (expectedProjectId && parsed.projectId && parsed.projectId !== expectedProjectId) return null;
+      return parsed;
     } catch {
-      return false;
+      return null;
     }
-  }, [onRestore]);
+  }, [draftFallbackStorageKey]);
+
+  const restoreFallback = useCallback((expectedProjectId?: string | null) => {
+    const parsed = readFallback(expectedProjectId);
+    if (!parsed?.title || !parsed.snapshot) return false;
+    restoringRef.current = true;
+    if (expectedProjectId) rememberProjectId(expectedProjectId);
+    else if (parsed.projectId) rememberProjectId(parsed.projectId);
+    onRestore(parsed.title, parsed.snapshot);
+    queueMicrotask(() => { restoringRef.current = false; });
+    return true;
+  }, [onRestore, readFallback, rememberProjectId]);
 
   const loadDraft = useCallback(async (requestedProjectId?: string | null): Promise<boolean> => {
     if (!enabled) return false;
@@ -124,42 +161,46 @@ export function useCreateDraftAutosave({
     }
   }, [enabled, onRestore, rememberProjectId]);
 
-  // Full reload recovery: prefer the exact draft id remembered by this
-  // browser, then the user's latest server draft, then the small local fallback.
+  // Full reload recovery. The local fallback is written synchronously on every
+  // edit and can therefore be newer than PostgreSQL during the debounce window.
+  // Prefer it when it belongs to the remembered server project, then fall back
+  // to the exact server draft, then the user's latest server draft.
   useEffect(() => {
     if (!enabled || restoreChecked) return;
     let cancelled = false;
     (async () => {
-      const remembered = typeof window !== "undefined" ? localStorage.getItem(DRAFT_ID_KEY) : null;
+      const remembered = typeof window !== "undefined"
+        ? localStorage.getItem(draftIdStorageKey)
+        : null;
       let restored = false;
-      if (remembered) restored = await loadDraft(remembered);
-      // A synchronous fallback can be newer than the server when a refresh
-      // happens inside the 700ms debounce window, so prefer it next.
-      if (!restored && !cancelled) restored = restoreFallback();
+      if (remembered && !cancelled) restored = restoreFallback(remembered);
+      if (!restored && remembered) restored = await loadDraft(remembered);
+      if (!restored && !remembered && !cancelled) restored = restoreFallback(null);
       if (!restored) restored = await loadDraft(null);
       if (!cancelled) setRestoreChecked(true);
     })();
     return () => { cancelled = true; };
-  }, [enabled, restoreChecked, loadDraft, restoreFallback]);
+  }, [enabled, restoreChecked, loadDraft, restoreFallback, draftIdStorageKey]);
 
   // Small synchronous fallback for sudden refresh/crash before the debounced
   // network save finishes. Base64 images are intentionally excluded; those
-  // move to generated-store via the server autosave.
+  // are flushed immediately to generated-store by the server save below.
   useEffect(() => {
     if (!enabled || !title.trim() || restoringRef.current || typeof window === "undefined") return;
     try {
-      localStorage.setItem(DRAFT_FALLBACK_KEY, JSON.stringify({
+      localStorage.setItem(draftFallbackStorageKey, JSON.stringify({
+        projectId: projectIdRef.current,
         title: title.trim(),
         snapshot: {
           ...snapshot,
           preCharImages: hasOnlyDurableImageUrls(snapshot.preCharImages),
           savedAt: new Date().toISOString(),
         },
-      }));
+      } satisfies LocalFallback));
     } catch {
-      // Browser storage can be disabled; server autosave remains authoritative.
+      // Browser storage can be disabled or full; server autosave remains authoritative.
     }
-  }, [enabled, title, snapshot]);
+  }, [enabled, title, snapshot, draftFallbackStorageKey]);
 
   const saveNow = useCallback(async (): Promise<SaveResult | null> => {
     if (!enabled || restoringRef.current) return null;
@@ -205,12 +246,17 @@ export function useCreateDraftAutosave({
     return chained;
   }, [enabled, onPersistedImages, rememberProjectId]);
 
-  // Debounce normal typing/option changes. Once a title exists, every create
-  // wizard state transition becomes recoverable without a Save button.
+  // Debounce ordinary typing/option changes. Fresh base64 character portraits
+  // are different: the local fallback intentionally excludes them, so save
+  // those immediately into persistent generated-store before a refresh can
+  // discard an expensive generation result.
   useEffect(() => {
     if (!enabled || !restoreChecked || restoringRef.current || !title.trim()) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => { void saveNow(); }, AUTOSAVE_DELAY_MS);
+    const hasUnpersistedPortrait = Object.values(snapshot.preCharImages)
+      .some((value) => value.startsWith("data:image/"));
+    const delay = hasUnpersistedPortrait ? 0 : AUTOSAVE_DELAY_MS;
+    timerRef.current = setTimeout(() => { void saveNow(); }, delay);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -236,8 +282,8 @@ export function useCreateDraftAutosave({
     rememberProjectId(null);
     setStatus("idle");
     setLastSavedAt(null);
-    if (typeof window !== "undefined") localStorage.removeItem(DRAFT_FALLBACK_KEY);
-  }, [rememberProjectId]);
+    if (typeof window !== "undefined") localStorage.removeItem(draftFallbackStorageKey);
+  }, [rememberProjectId, draftFallbackStorageKey]);
 
   return {
     draftProjectId: projectId,
