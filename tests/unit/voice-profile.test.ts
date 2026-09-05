@@ -28,6 +28,10 @@ describe("voice profiles", () => {
     });
   });
 
+  test("preserves provider-native voice ID casing", () => {
+    expect(sanitizeVoiceProfile({ voice: "AbCDef123VoiceID" }).voice).toBe("AbCDef123VoiceID");
+  });
+
   test("scene and character auto values inherit project defaults", () => {
     const project = {
       ...DEFAULT_VOICE_PROFILE,
@@ -91,6 +95,16 @@ describe("ElevenLabs accent-aware voice routing", () => {
         kazi: "generic-kazi-provider-voice",
       },
     })).toBe("ghana-kazi-provider-voice");
+  });
+
+  test("keeps direct provider voice ID casing when no map is needed", () => {
+    expect(resolveElevenLabsProfileVoice(undefined, {
+      ...profile,
+      voice: "AbCDef123VoiceID",
+    }, {
+      elevenLabsDefaultVoiceId: "default-provider-voice",
+      elevenLabsVoiceMap: {},
+    })).toBe("AbCDef123VoiceID");
   });
 
   test("falls back to the configured provider default", () => {
