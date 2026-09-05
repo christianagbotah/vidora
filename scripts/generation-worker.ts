@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
 import { friendlySceneError } from "@/lib/zai-errors";
-import { saveGeneratedFile, toAbsoluteUrl } from "@/lib/generated-store";
+import { saveGeneratedFile } from "@/lib/generated-store";
+import { toProviderFetchUrl } from "@/lib/provider-media-access";
 import { resolveModelForRequest } from "@/lib/video-models";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
 import { autoNarrateScene } from "@/lib/narration";
@@ -162,7 +163,7 @@ async function submitSceneTask(opts: {
       ctx.aspectRatio,
       `Scene ${scene.sceneNumber}`
     );
-    referenceImage = toAbsoluteUrl(normalized, origin) ?? undefined;
+    referenceImage = toProviderFetchUrl(normalized, origin) ?? undefined;
   }
 
   const prompt = buildSceneVideoPrompt({

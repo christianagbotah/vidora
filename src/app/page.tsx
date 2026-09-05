@@ -654,9 +654,16 @@ function GenerationLockOverlay({
                         }`}>
                           {scene.sceneNumber}
                         </div>
-                        <p className="text-sm text-slate-600 truncate flex-1 min-w-0">
-                          {scene.title || scene.prompt?.slice(0, 60) || `Scene ${scene.sceneNumber}`}
-                        </p>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-600 truncate">
+                            {scene.title || scene.prompt?.slice(0, 60) || `Scene ${scene.sceneNumber}`}
+                          </p>
+                          {isFailed && scene.errorMessage && (
+                            <p className="text-[10px] leading-snug text-red-600 mt-0.5 line-clamp-2" title={scene.errorMessage}>
+                              {scene.errorMessage.slice(0, 180)}
+                            </p>
+                          )}
+                        </div>
                         <div className="shrink-0 flex items-center gap-1.5">
                           {isDone ? (
                             <><CheckCircle className="h-4 w-4 text-emerald-500" /><span className="text-[10px] font-semibold text-emerald-600 hidden sm:inline">Complete</span></>

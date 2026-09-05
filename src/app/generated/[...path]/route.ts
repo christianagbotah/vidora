@@ -6,6 +6,7 @@ import {
   shareAccessCookieName,
   verifyShareAccessToken,
 } from "@/lib/share-access";
+import { verifyProviderMediaToken } from "@/lib/provider-media-access";
 
 export const runtime = "nodejs";
 
@@ -34,6 +35,16 @@ async function authorizeGeneratedMedia(
   // Watermarked acquisition previews contain no private project data.
   if (rel.startsWith("previews/")) {
     return { allowed: true, publicCache: true };
+  }
+
+  // External rendering providers cannot carry the user's Vidora session.
+  // A short-lived HMAC capability grants read access to exactly this file.
+  if (verifyProviderMediaToken(
+    rel,
+    req.nextUrl.searchParams.get("vpm_exp"),
+    req.nextUrl.searchParams.get("vpm_sig")
+  )) {
+    return { allowed: true, publicCache: false };
   }
 
   if (rel.startsWith("users/")) {
