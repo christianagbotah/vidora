@@ -32,9 +32,25 @@ function todayStr(timezone?: string): string {
   }
 }
 
+/**
+ * Serialize preview quota mutations on the real User row.
+ *
+ * Do not use pg_advisory_xact_lock() through Prisma $queryRaw here: PostgreSQL
+ * returns that function as type `void`, which Prisma cannot deserialize. A
+ * row-level FOR UPDATE lock protects the exact quota owner, avoids advisory
+ * hash collisions, and remains scoped to the surrounding transaction.
+ */
 async function lockPreviewUser(tx: any, userId: string): Promise<void> {
-  const key = `vidora-preview-user:${userId}`;
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  const rows = await tx.$queryRaw`
+    SELECT "id"
+    FROM "User"
+    WHERE "id" = ${userId}
+    FOR UPDATE
+  ` as Array<{ id: string }>;
+
+  if (rows.length !== 1) {
+    throw new Error("User not found");
+  }
 }
 
 export async function consumePreviewQuota(
