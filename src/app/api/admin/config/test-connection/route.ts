@@ -11,8 +11,10 @@ export const runtime = "nodejs";
 /**
  * POST /api/admin/config/test-connection
  *
- * New mode: { provider: "active" } verifies the currently-selected text
- * provider through the same capability router production scene planning uses.
+ * New mode: { provider: "active" } verifies the currently-selected PRIMARY
+ * text provider only. Automatic fallback is deliberately disabled so a broken
+ * primary can never be reported to the admin as connected because its fallback
+ * happened to succeed.
  *
  * Legacy mode: { baseUrl, apiKey } keeps the existing one-off Z.ai credential
  * test for backward compatibility with the original admin screen.
@@ -49,6 +51,7 @@ export async function POST(req: NextRequest) {
         temperature: 0,
         maxTokens: 12,
         timeoutMs: 20_000,
+        disableFallback: true,
       });
       return NextResponse.json({
         success: true,

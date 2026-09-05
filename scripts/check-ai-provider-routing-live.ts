@@ -4,8 +4,12 @@ import { zai } from "../src/lib/zai";
 
 const TIMEOUT_MS = 15_000;
 
-function effectiveTextModel(provider: TextProviderId, settings: AIProviderSettings): string {
-  if (settings.textModel) return settings.textModel;
+function effectiveTextModel(
+  provider: TextProviderId,
+  settings: AIProviderSettings,
+  includeActiveOverride: boolean,
+): string {
+  if (includeActiveOverride && settings.textModel) return settings.textModel;
   if (provider === "xai") return settings.xaiTextModel;
   if (provider === "compatible") return settings.compatibleTextModel;
   return process.env.ZAI_CHAT_MODEL?.trim() || "glm-4.5-flash";
@@ -87,8 +91,12 @@ async function probeOpenAICompatibleText(opts: {
   }
 }
 
-async function probeTextProvider(provider: TextProviderId, settings: AIProviderSettings): Promise<void> {
-  const model = effectiveTextModel(provider, settings);
+async function probeTextProvider(
+  provider: TextProviderId,
+  settings: AIProviderSettings,
+  includeActiveOverride: boolean,
+): Promise<void> {
+  const model = effectiveTextModel(provider, settings, includeActiveOverride);
   if (provider === "zai") {
     await zai.chat({
       model,
@@ -175,10 +183,12 @@ async function probeElevenLabs(settings: AIProviderSettings): Promise<void> {
 async function main(): Promise<void> {
   try {
     const settings = await getAIProviderSettings();
-    await probeTextProvider(settings.textProvider, settings);
+    await probeTextProvider(settings.textProvider, settings, true);
 
     if (settings.textFallbackProvider !== "none" && settings.textFallbackProvider !== settings.textProvider) {
-      await probeTextProvider(settings.textFallbackProvider, settings);
+      // The global ai_text_model is an active-route override. A different
+      // fallback provider intentionally uses its own provider-specific model.
+      await probeTextProvider(settings.textFallbackProvider, settings, false);
     }
 
     if (settings.ttsProvider === "elevenlabs") {
