@@ -65,13 +65,21 @@ export function stripSpeakerAttributions(text: string): string {
 
 export interface DialogueSegment {
   speaker: string | null;
+  /** Optional screenplay performance cue kept separate from spoken words. */
+  direction: string | null;
   text: string;
 }
 
+function performanceCueFromSpeakerLabel(label: string): string | null {
+  const match = label.match(/\(([^()]*)\)\s*$/);
+  const cue = match?.[1]?.trim().replace(/\s+/g, " ").slice(0, 64) || "";
+  return cue || null;
+}
+
 /**
- * Parse screenplay-style dialogue without losing speaker identity. Continuation
- * lines are attached to the preceding speaker so multiline model output still
- * becomes one coherent performance.
+ * Parse screenplay-style dialogue without losing speaker identity or delivery
+ * direction. Continuation lines are attached to the preceding speaker so
+ * multiline model output still becomes one coherent performance.
  */
 export function parseDialogueSegments(text: string): DialogueSegment[] {
   const segments: DialogueSegment[] = [];
@@ -80,11 +88,13 @@ export function parseDialogueSegments(text: string): DialogueSegment[] {
     if (!line) continue;
     const attributed = line.match(ATTRIBUTION_CAPTURE_RE);
     if (attributed) {
-      const speaker = attributed[1]
+      const rawSpeaker = attributed[1].trim();
+      const direction = performanceCueFromSpeakerLabel(rawSpeaker);
+      const speaker = rawSpeaker
         .replace(/\s*\([^)]*\)\s*$/, "")
         .trim();
       const spoken = cleanSpokenText(attributed[2]);
-      if (spoken) segments.push({ speaker, text: spoken });
+      if (spoken) segments.push({ speaker, direction, text: spoken });
       continue;
     }
 
@@ -92,7 +102,7 @@ export function parseDialogueSegments(text: string): DialogueSegment[] {
     if (!spoken) continue;
     const previous = segments[segments.length - 1];
     if (previous) previous.text = `${previous.text} ${spoken}`.trim();
-    else segments.push({ speaker: null, text: spoken });
+    else segments.push({ speaker: null, direction: null, text: spoken });
   }
   return segments;
 }
@@ -173,6 +183,7 @@ export interface NarrationResult {
 
 interface PlannedSpeechChunk {
   speaker: string | null;
+  direction: string | null;
   text: string;
   voice: string;
 }
@@ -245,7 +256,12 @@ async function buildSpeechPlan(opts: {
       }
     }
     for (const chunk of splitTextIntoChunks(segment.text, 700)) {
-      output.push({ speaker: segment.speaker, text: chunk, voice });
+      output.push({
+        speaker: segment.speaker,
+        direction: segment.direction,
+        text: chunk,
+        voice,
+      });
     }
   }
   return output;
@@ -255,7 +271,8 @@ async function buildSpeechPlan(opts: {
  * Generate a complete scene performance and charge the owning user exactly
  * once for the logical performance. Each explicitly attributed character line
  * may use that character's configured voice; group/narrator lines use the
- * scene default voice.
+ * scene default voice. Performance direction is kept out of the spoken text
+ * and is passed to providers as structured metadata.
  */
 export async function generateSceneNarration(opts: {
   sceneId: string;
@@ -374,6 +391,7 @@ export async function generateSceneNarration(opts: {
       const speech = await synthesizeProviderSpeech({
         input: chunks[i].text,
         voice: chunks[i].voice,
+        direction: chunks[i].direction,
         speed,
       });
       const tempFilename = `chunk_${scene.id}_${fingerprint}_${i}_${crypto.randomUUID()}.${speech.extension}`;
