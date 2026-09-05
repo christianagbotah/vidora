@@ -6,6 +6,14 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 
 export const runtime = "nodejs";
 
+function normalizeRequestedVoice(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw) return undefined;
+  const logical = raw.toLowerCase();
+  return TTS_VOICES.some((voice) => voice.id === logical) ? logical : raw.slice(0, 160);
+}
+
 export async function POST(req: NextRequest) {
   let session: { userId: string; role: string; email: string } | null = null;
 
@@ -51,9 +59,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const voice = typeof body.voice === "string" ? body.voice.toLowerCase() : "tongtong";
-    const speed = Number(body.speed ?? 1);
-    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) {
+    // Omitting voice/speed now means "use the effective Voice Studio profile".
+    // Explicit request values remain authoritative for one-off generation calls.
+    const voice = normalizeRequestedVoice(body.voice);
+    const hasSpeed = body.speed !== undefined && body.speed !== null && body.speed !== "";
+    const speed = hasSpeed ? Number(body.speed) : undefined;
+    if (speed !== undefined && (!Number.isFinite(speed) || speed < 0.5 || speed > 2)) {
       return NextResponse.json(
         { success: false, error: "Invalid narration speed" },
         { status: 400 }
@@ -74,7 +85,7 @@ export async function POST(req: NextRequest) {
       success: true,
       narrationUrl: result.url,
       text: narrationText,
-      voice,
+      voice: voice || scene.narrationVoice || "auto",
       chunks: result.chunks,
       concatenated: result.concatenated,
       tokensCharged: result.tokensCharged,

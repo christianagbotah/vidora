@@ -30,6 +30,12 @@
       "@/lib/zai": [
         "./src/lib/zai-tts-compat.ts"
       ],
+      "@/lib/narration": [
+        "./src/lib/narration-profile.ts"
+      ],
+      "@/lib/ai-provider-router": [
+        "./src/lib/ai-provider-router-profile.ts"
+      ],
       "@/*": [
         "./src/*"
       ]
