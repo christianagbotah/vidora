@@ -1,22 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import path from "path";
-import { copyFile, unlink, writeFile } from "fs/promises";
 import {
   DUBBING_LANGUAGES,
   DUBBING_LANGUAGE_GROUPS,
   getDubbingLanguage,
 } from "@/lib/dubbing-languages";
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
+import { concatWavChunks } from "@/lib/narration";
+import { generateProviderText, synthesizeProviderSpeech } from "@/lib/ai-provider-router";
+import {
+  DEFAULT_VOICE_PROFILE,
+  mergeVoiceProfiles,
+  projectVoiceProfileKey,
+  readVoiceProfile,
+  sceneVoiceProfileKey,
+} from "@/lib/voice-profile";
+import { runWithVoiceSynthesisContext } from "@/lib/voice-profile-context";
 
 export const runtime = "nodejs";
-const execFileAsync = promisify(execFile);
 
 function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   if (text.length <= maxLen) return [text];
@@ -33,33 +38,6 @@ function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   }
   if (current) chunks.push(current.trim());
   return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
-}
-
-async function concatAudioFiles(chunkPaths: string[], outputPath: string): Promise<boolean> {
-  if (chunkPaths.length === 1) {
-    try {
-      await copyFile(chunkPaths[0], outputPath);
-      return true;
-    } catch (err) {
-      console.error("[dubbing] single-chunk copy failed:", err);
-      return false;
-    }
-  }
-
-  const listFile = outputPath + ".concat.txt";
-  const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
-  try {
-    await writeFile(listFile, listContent, "utf8");
-    await execFileAsync("ffmpeg", [
-      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
-    ], { timeout: 30_000 });
-    return true;
-  } catch (err) {
-    console.error("[dubbing] ffmpeg concat failed:", err);
-    return false;
-  } finally {
-    await unlink(listFile).catch(() => undefined);
-  }
 }
 
 export async function POST(
@@ -97,7 +75,6 @@ export async function POST(
     }
 
     const langName = langMeta.name;
-    const voice = (voiceId || "tongtong").toLowerCase();
     let translation = await db.sceneTranslation.findUnique({ where: { sceneId_lang: { sceneId: id, lang } } });
 
     if (translation?.status === "ready" && translation.translatedText && translation.narrationUrl) {
@@ -128,10 +105,13 @@ export async function POST(
           );
         }
 
-        const translatedText = await zai.chat({
-          systemPrompt: `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`,
+        const translatedText = await generateProviderText({
+          systemPrompt: `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve names, speaker labels, meaning, tone, emotion and pacing. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`,
           userPrompt: sourceText,
-          retry: { label: `translate to ${lang}`, timeoutMs: 30_000, maxRetries: 2 },
+          thinking: "disabled",
+          temperature: 0.15,
+          maxTokens: 4_000,
+          timeoutMs: 45_000,
         });
 
         cleanTranslation = translatedText.replace(/^["'“”]+|["'“”]+$/g, "").trim();
@@ -147,9 +127,29 @@ export async function POST(
         });
       }
 
+      // Project/scene Voice Studio settings provide accent, style and speed.
+      // The requested dubbing language always wins for this translated track.
+      const [storedProject, storedScene] = await Promise.all([
+        readVoiceProfile(projectVoiceProfileKey(scene.projectId)),
+        readVoiceProfile(sceneVoiceProfileKey(scene.id)),
+      ]);
+      let profile = mergeVoiceProfiles(DEFAULT_VOICE_PROFILE, storedProject);
+      if (scene.narrationLang?.trim()) profile = { ...profile, language: scene.narrationLang.trim().toLowerCase() };
+      if (scene.narrationVoice?.trim()) profile = { ...profile, voice: scene.narrationVoice.trim() };
+      profile = mergeVoiceProfiles(profile, storedScene);
+      profile = {
+        ...profile,
+        language: lang,
+        voice: typeof voiceId === "string" && voiceId.trim()
+          ? voiceId.trim()
+          : profile.voice,
+      };
+
       const chunks = splitTextIntoChunks(cleanTranslation);
       ensureAudioDir();
       const chunkPaths: string[] = [];
+      let resolvedVoice = profile.voice;
+
       for (let i = 0; i < chunks.length; i++) {
         const ttsCharge = await deductTokensForOperation({
           userId,
@@ -166,19 +166,22 @@ export async function POST(
           );
         }
 
-        const arrayBuffer = await zai.tts({
-          input: chunks[i],
-          voice,
-          retry: { label: `tts ${lang} chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
-        });
-        const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.wav`;
-        chunkPaths.push(writeAudioFile(chunkFilename, buffer));
+        const speech = await runWithVoiceSynthesisContext(
+          { sceneProfile: profile, byVoice: {} },
+          () => synthesizeProviderSpeech({
+            input: chunks[i],
+            voice: profile.voice === "auto" ? undefined : profile.voice,
+            speed: profile.speed,
+          }),
+        );
+        resolvedVoice = speech.voice;
+        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.${speech.extension}`;
+        chunkPaths.push(writeAudioFile(chunkFilename, speech.buffer));
       }
 
       const finalFilename = `dub_${id}_${lang}_${Date.now()}.wav`;
       const finalPath = getAudioPath(finalFilename);
-      const concatenated = await concatAudioFiles(chunkPaths, finalPath);
+      const concatenated = await concatWavChunks(chunkPaths, finalPath);
       let narrationUrl: string;
       if (concatenated) {
         narrationUrl = `/api/audio/${finalFilename}`;
@@ -189,7 +192,7 @@ export async function POST(
 
       const updated = await db.sceneTranslation.update({
         where: { id: translation.id },
-        data: { narrationUrl, voiceId: voice, status: "ready" },
+        data: { narrationUrl, voiceId: resolvedVoice, status: "ready" },
       });
       return NextResponse.json({ success: true, translation: updated, chunks: chunks.length });
     } catch (aiError) {
