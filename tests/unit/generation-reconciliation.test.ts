@@ -3,6 +3,7 @@ import {
   canAutoReconcileReferenceDownloadFailure,
   generationRunSceneIds,
   isExplicitReferenceDownloadFailure,
+  type ReconciliationSceneLike,
 } from "../../src/lib/generation-reconciliation";
 
 const baseRun = {
@@ -15,7 +16,7 @@ const baseRun = {
   targetSceneId: null,
 };
 
-const baseScenes = [
+const baseScenes: ReconciliationSceneLike[] = [
   { id: "s1", status: "failed", taskId: null, videoUrl: null, errorMessage: "image download fail" },
   { id: "s2", status: "queued", taskId: null, videoUrl: null, errorMessage: null },
 ];
