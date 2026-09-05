@@ -2,6 +2,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { db } from "@/lib/db";
 
 const createdUsers: string[] = [];
+const DEFAULT_RENDER = {
+  transition: "fade",
+  withTitleCard: false,
+  includeAudio: true,
+} as const;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -22,7 +27,11 @@ async function markReviewed(projectId: string) {
   const project = await db.videoProject.findUniqueOrThrow({ where: { id: projectId } });
   return db.videoProject.update({
     where: { id: projectId },
-    data: { reviewedCutVersion: project.cutVersion, reviewedAt: new Date() },
+    data: {
+      reviewedCutVersion: project.cutVersion,
+      reviewedAt: new Date(),
+      reviewedRenderConfig: DEFAULT_RENDER,
+    },
   });
 }
 
@@ -69,8 +78,6 @@ describe("audio-aware project review invalidation", () => {
     const reviewed = await markReviewed(project.id);
     const reviewedVersion = reviewed.cutVersion;
 
-    // narrationUrl is a derived artifact. Persisting the deterministic audio
-    // generated during preview/export must not invalidate the review itself.
     await db.videoScene.update({
       where: { id: scene.id },
       data: { narrationUrl: "/api/audio/current-performance.wav" },
@@ -78,6 +85,7 @@ describe("audio-aware project review invalidation", () => {
     const afterDerivedWrite = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
     expect(afterDerivedWrite.cutVersion).toBe(reviewedVersion);
     expect(afterDerivedWrite.reviewedCutVersion).toBe(reviewedVersion);
+    expect(afterDerivedWrite.reviewedRenderConfig).toEqual(DEFAULT_RENDER);
 
     await db.videoScene.update({
       where: { id: scene.id },
@@ -87,6 +95,7 @@ describe("audio-aware project review invalidation", () => {
     expect(afterDialogue.cutVersion).toBeGreaterThan(reviewedVersion);
     expect(afterDialogue.reviewedCutVersion).toBeNull();
     expect(afterDialogue.reviewedAt).toBeNull();
+    expect(afterDialogue.reviewedRenderConfig).toBeNull();
 
     const reviewedAfterDialogue = await markReviewed(project.id);
     await db.videoScene.update({
@@ -96,6 +105,7 @@ describe("audio-aware project review invalidation", () => {
     const afterMusic = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
     expect(afterMusic.cutVersion).toBeGreaterThan(reviewedAfterDialogue.cutVersion);
     expect(afterMusic.reviewedCutVersion).toBeNull();
+    expect(afterMusic.reviewedRenderConfig).toBeNull();
 
     const reviewedAfterMusic = await markReviewed(project.id);
     await db.character.update({
@@ -105,6 +115,7 @@ describe("audio-aware project review invalidation", () => {
     const afterVoice = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
     expect(afterVoice.cutVersion).toBeGreaterThan(reviewedAfterMusic.cutVersion);
     expect(afterVoice.reviewedCutVersion).toBeNull();
+    expect(afterVoice.reviewedRenderConfig).toBeNull();
 
     await markReviewed(project.id);
     const job = await db.exportJob.create({
@@ -113,6 +124,7 @@ describe("audio-aware project review invalidation", () => {
         userId: user.id,
         activeKey: `project:${project.id}`,
         status: "queued",
+        params: JSON.stringify(DEFAULT_RENDER),
       },
     });
 
