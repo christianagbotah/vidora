@@ -18,6 +18,12 @@ export function resolveZaiTtsModel(explicitModel?: string, configuredModel?: str
   return explicitModel?.trim() || configuredModel?.trim() || "glm-tts";
 }
 
+type SpeechTransportResponse = {
+  arrayBuffer(): Promise<ArrayBuffer>;
+};
+
+type SpeechTransport = (body: Record<string, unknown>) => Promise<SpeechTransportResponse>;
+
 /**
  * Compatibility adapter for the current Z.AI speech endpoint.
  *
@@ -31,7 +37,7 @@ export async function ttsWithRequiredModel(opts: ModelAwareTTSOptions): Promise<
   const model = resolveZaiTtsModel(opts.model, configuredModel);
   const client = await getClient();
 
-  const body = {
+  const body: Record<string, unknown> = {
     model,
     input: opts.input,
     voice: opts.voice ?? "tongtong",
@@ -40,12 +46,15 @@ export async function ttsWithRequiredModel(opts: ModelAwareTTSOptions): Promise<
     stream: false,
   };
 
-  const response = await withRetry(
+  // The installed SDK's declaration predates the provider-required `model`
+  // field. Narrow just this transport boundary instead of weakening types in
+  // the rest of the Z.AI wrapper.
+  const createSpeech = client.audio.tts.create as unknown as SpeechTransport;
+
+  const response = await withRetry<SpeechTransportResponse>(
     (signal) =>
       Promise.race([
-        // The installed SDK's TypeScript declaration predates the required
-        // `model` field, but the transport serializes the supplied JSON body.
-        client.audio.tts.create(body as never),
+        createSpeech(body),
         new Promise<never>((_, reject) => {
           signal.addEventListener(
             "abort",
