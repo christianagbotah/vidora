@@ -5,6 +5,7 @@ import path from "path";
 const PROVIDER_CALL_RE = /zai\.(chat|vision|generateImage|generateVideo|tts|asr|pollVideoTask)\s*\(/g;
 
 const REVIEWED_BOUNDARIES: Record<string, string> = {
+  "scripts/check-ai-provider-routing-live.ts": "production_deploy_active_route_live_probe",
   "scripts/check-zai-live.ts": "production_deploy_free_live_probe",
   "scripts/generation-worker.ts": "durable_worker_paid_generation",
   "src/app/api/ai/health/route.ts": "admin_only_cached_live_probe",

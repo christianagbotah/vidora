@@ -96,10 +96,15 @@ bun install --frozen-lockfile
 # time on builds/backups or touching migrations/PM2.
 bash scripts/check-ffmpeg-export.sh
 
-# Public AI health intentionally checks configuration only. Deployment performs
-# one admin-equivalent free-model call locally so stale/expired credentials can
-# never produce a false-success release. It runs before backup/migration/restart.
+# Z.ai remains Vidora's video provider in this release, so authenticate the
+# effective live Z.ai credential before touching the running release.
 NODE_ENV=production bun scripts/check-zai-live.ts
+
+# Provider routing is independently configurable. Validate the ACTIVE primary
+# text provider/model, any declared fallback, and the selected TTS provider
+# before backup/migration/restart. This prevents a seemingly successful deploy
+# with a stale Grok/compatible key or unusable ElevenLabs model/voice mapping.
+NODE_ENV=production bun scripts/check-ai-provider-routing-live.ts
 
 # Preflight quality checks happen before backup/migrations/restart.
 bunx prisma validate
