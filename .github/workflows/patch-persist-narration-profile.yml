@@ -1,0 +1,31 @@
+name: Patch persisted narration profile
+
+on:
+  push:
+    branches:
+      - feat/persist-narration-profiles-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[profile-patch-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact persistence patch
+        run: python3 scripts/patch-persist-narration-profile.py
+      - name: Commit patched files
+        run: |
+          if git diff --quiet; then
+            echo "No changes produced"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/schema.prisma src/types/video.ts src/lib/narration.ts src/app/page.tsx 'src/app/api/projects/[id]/scenes/[sceneId]/route.ts'
+          git commit -m "feat: persist narration profiles and enable regeneration [profile-patch-applied]"
+          git push
