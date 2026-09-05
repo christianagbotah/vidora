@@ -764,7 +764,7 @@ function GenerationLockOverlay({
               {isRetrying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RotateCcw className="h-4 w-4 mr-1.5" />}
               {isRetrying ? "Retrying…" : failed > 0 ? "Retry Failed Scenes" : "Resume Generation"}
             </Button>
-            <Button variant="outline" className="flex-1" onClick={onContinue}>
+            <Button variant="outline" className="flex-1" onClick={onBack}>
               Back to Project
             </Button>
           </div>
