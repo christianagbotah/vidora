@@ -4,6 +4,7 @@ import { constructClient, ZAIError, classifyError } from "@/lib/zai";
 import {
   generateProviderText,
   getAIProviderSettings,
+  synthesizeProviderSpeech,
 } from "@/lib/ai-provider-router";
 
 export const runtime = "nodejs";
@@ -11,10 +12,10 @@ export const runtime = "nodejs";
 /**
  * POST /api/admin/config/test-connection
  *
- * New mode: { provider: "active" } verifies the currently-selected PRIMARY
- * text provider only. Automatic fallback is deliberately disabled so a broken
- * primary can never be reported to the admin as connected because its fallback
- * happened to succeed.
+ * { provider: "active" } verifies the currently-selected PRIMARY text provider.
+ * { provider: "tts" } verifies the currently-selected TTS provider without
+ * charging Vidora user tokens. Provider-side API usage for the short probe may
+ * still be billed by that provider.
  *
  * Legacy mode: { baseUrl, apiKey } keeps the existing one-off Z.ai credential
  * test for backward compatibility with the original admin screen.
@@ -39,6 +40,38 @@ export async function POST(req: NextRequest) {
   const mode = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
   const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+
+  if (mode === "tts") {
+    try {
+      const settings = await getAIProviderSettings();
+      const started = Date.now();
+      const result = await synthesizeProviderSpeech({
+        input: "Vidora voice connection test.",
+        voice: "tongtong",
+        speed: 1,
+      });
+      return NextResponse.json({
+        success: true,
+        message: "Active TTS provider connection successful",
+        provider: result.provider,
+        model: result.model,
+        voice: result.voice,
+        audioBytes: result.buffer.length,
+        latencyMs: Date.now() - started,
+        configuredProvider: settings.ttsProvider,
+      });
+    } catch (err) {
+      const classified = err instanceof ZAIError ? err : classifyError(err);
+      return NextResponse.json(
+        {
+          success: false,
+          error: classified.message,
+          kind: classified.kind,
+        },
+        { status: classified.kind === "auth" ? 401 : classified.kind === "validation" ? 400 : 502 },
+      );
+    }
+  }
 
   if (mode === "active" || (!baseUrl && !apiKey)) {
     try {
