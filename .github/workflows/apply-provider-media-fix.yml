@@ -1,0 +1,87 @@
+name: Apply provider media hotfix
+
+on:
+  push:
+    branches:
+      - fix/provider-media-signed-url
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/provider-media-signed-url
+          fetch-depth: 0
+
+      - name: Apply guarded provider media patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path_str, old, new):
+              path = Path(path_str)
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Guard failed in {path_str}: expected 1 match, got {count}: {old[:120]!r}")
+              path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/app/generated/[...path]/route.ts',
+              '''import {\n  shareAccessCookieName,\n  verifyShareAccessToken,\n} from "@/lib/share-access";''',
+              '''import {\n  shareAccessCookieName,\n  verifyShareAccessToken,\n} from "@/lib/share-access";\nimport { verifyProviderMediaToken } from "@/lib/provider-media-access";'''
+          )
+          replace_once(
+              'src/app/generated/[...path]/route.ts',
+              '''  // Watermarked acquisition previews contain no private project data.\n  if (rel.startsWith("previews/")) {\n    return { allowed: true, publicCache: true };\n  }\n\n  if (rel.startsWith("users/")) {''',
+              '''  // Watermarked acquisition previews contain no private project data.\n  if (rel.startsWith("previews/")) {\n    return { allowed: true, publicCache: true };\n  }\n\n  // External rendering providers cannot carry the user's Vidora session.\n  // A short-lived HMAC capability grants read access to exactly this file.\n  if (verifyProviderMediaToken(\n    rel,\n    req.nextUrl.searchParams.get("vpm_exp"),\n    req.nextUrl.searchParams.get("vpm_sig")\n  )) {\n    return { allowed: true, publicCache: false };\n  }\n\n  if (rel.startsWith("users/")) {'''
+          )
+
+          replace_once(
+              'scripts/generation-worker.ts',
+              '''import { saveGeneratedFile, toAbsoluteUrl } from "@/lib/generated-store";''',
+              '''import { saveGeneratedFile } from "@/lib/generated-store";\nimport { toProviderFetchUrl } from "@/lib/provider-media-access";'''
+          )
+          replace_once(
+              'scripts/generation-worker.ts',
+              '''    referenceImage = toAbsoluteUrl(normalized, origin) ?? undefined;''',
+              '''    referenceImage = toProviderFetchUrl(normalized, origin) ?? undefined;'''
+          )
+
+          replace_once(
+              'src/lib/zai-errors.ts',
+              '''  if (/aspect.?ratio|image (size|resolution)|resolution (mismatch|not)/i.test(raw)) {\n    return "The scene's reference image didn't match the project's orientation. This is now auto-corrected — please retry the scene.";\n  }''',
+              '''  if (/image download fail|failed to download image|image.*download.*fail/i.test(raw)) {\n    return "The AI rendering service could not download this scene's reference image. Please retry; if it continues, regenerate or re-upload the reference image.";\n  }\n  if (/aspect.?ratio|image (size|resolution)|resolution (mismatch|not)/i.test(raw)) {\n    return "The scene's reference image didn't match the project's orientation. This is now auto-corrected — please retry the scene.";\n  }'''
+          )
+
+          replace_once(
+              'src/app/page.tsx',
+              '''                        <p className="text-sm text-slate-600 truncate flex-1 min-w-0">\n                          {scene.title || scene.prompt?.slice(0, 60) || `Scene ${scene.sceneNumber}`}\n                        </p>\n                        <div className="shrink-0 flex items-center gap-1.5">''',
+              '''                        <div className="flex-1 min-w-0">\n                          <p className="text-sm text-slate-600 truncate">\n                            {scene.title || scene.prompt?.slice(0, 60) || `Scene ${scene.sceneNumber}`}\n                          </p>\n                          {isFailed && scene.errorMessage && (\n                            <p className="text-[10px] leading-snug text-red-600 mt-0.5 line-clamp-2" title={scene.errorMessage}>\n                              {scene.errorMessage.slice(0, 180)}\n                            </p>\n                          )}\n                        </div>\n                        <div className="shrink-0 flex items-center gap-1.5">'''
+          )
+          PY
+
+          git diff --check
+          grep -q 'verifyProviderMediaToken' 'src/app/generated/[...path]/route.ts'
+          grep -q 'toProviderFetchUrl' scripts/generation-worker.ts
+          grep -q 'image download fail' src/lib/zai-errors.ts
+          grep -q 'scene.errorMessage.slice(0, 180)' src/app/page.tsx
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/app/generated/'[...path]'/route.ts scripts/generation-worker.ts src/lib/zai-errors.ts src/app/page.tsx
+          git commit -m 'fix(generation): sign private reference media for provider fetches'
+          git push origin HEAD:fix/provider-media-signed-url
