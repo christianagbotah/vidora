@@ -782,7 +782,7 @@ function SortableSceneCard({
   scene, sceneIndex, totalScenes, projectStyle,
   onPreview, onGenerate, onRetry, onEditPrompt, onDelete, onNarrate,
   onTransitionChange, onEnhanceScene, onMoodChange, onCameraChange, onLightingChange,
-  isGeneratingNarration, isGeneratingScene,
+  isGeneratingNarration, isGeneratingScene, projectGenerationInterrupted, onResumeGeneration,
   onSetMusic, onGenerateSubtitles, onToggleBurnSubtitles, onGenerateDubbing, onDeleteDubbing, musicTracks,
 }: {
   scene: VideoScene; sceneIndex: number; totalScenes: number; projectStyle: string;
@@ -801,6 +801,8 @@ function SortableSceneCard({
   onLightingChange: (id: string, lighting: string) => void;
   isGeneratingNarration: boolean;
   isGeneratingScene: boolean;
+  projectGenerationInterrupted: boolean;
+  onResumeGeneration: () => void;
   onSetMusic: (sceneId: string, trackUrl: string | null, volume: number) => void;
   onGenerateSubtitles: (sceneId: string) => void;
   onToggleBurnSubtitles: (sceneId: string, burn: boolean) => void;
@@ -852,7 +854,9 @@ function SortableSceneCard({
     audio.volume = video.volume;
   };
 
-  const generating = isGeneratingScene || scene.status === "generating" || scene.status === "queued";
+  const generating = !projectGenerationInterrupted && (
+    isGeneratingScene || scene.status === "generating" || scene.status === "queued"
+  );
 
   const statusColor = scene.status === "completed"
     ? "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -894,8 +898,8 @@ function SortableSceneCard({
                       <Film className="h-6 w-6 text-slate-300" />
                     </div>
                   )}
-                  <Badge className={`absolute bottom-1 right-1 text-[9px] font-semibold px-1.5 z-10 ${statusColor}`}>
-                    {scene.status}
+                  <Badge className={`absolute bottom-1 right-1 text-[9px] font-semibold px-1.5 z-10 ${projectGenerationInterrupted && !scene.videoUrl ? "bg-amber-50 text-amber-700 border-amber-200" : statusColor}`}>
+                    {projectGenerationInterrupted && !scene.videoUrl ? "interrupted" : scene.status}
                   </Badge>
                 </div>
               </div>
@@ -978,15 +982,20 @@ function SortableSceneCard({
                       ) : scene.imageUrl ? (
                         /* Clickable thumbnail preview */
                         <button
-                          onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
+                          onClick={() => projectGenerationInterrupted
+                            ? onResumeGeneration()
+                            : onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
                           disabled={generating}
                           className="w-full group/preview relative rounded-lg overflow-hidden border border-slate-200 hover:border-violet-300 transition-colors disabled:cursor-default"
+                          title={projectGenerationInterrupted ? "Resume interrupted generation" : "Generate this scene"}
                         >
                           <img src={scene.imageUrl} alt="" className="w-full aspect-video object-cover" />
                           <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/preview:bg-black/40 transition-colors">
                             {generating
                               ? <Loader2 className="h-8 w-8 text-white drop-shadow-lg animate-spin" />
-                              : <Play className="h-8 w-8 text-white drop-shadow-lg" />}
+                              : projectGenerationInterrupted
+                                ? <RotateCcw className="h-8 w-8 text-white drop-shadow-lg" />
+                                : <Play className="h-8 w-8 text-white drop-shadow-lg" />}
                           </div>
                         </button>
                       ) : (
@@ -1037,7 +1046,15 @@ function SortableSceneCard({
                     <div className="flex-1 min-w-0">
                       {/* Actions */}
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        {!scene.videoUrl && !generating && (
+                        {!scene.videoUrl && projectGenerationInterrupted && (
+                          <Button
+                            size="sm" className="h-7 text-xs px-2.5 btn-gradient"
+                            onClick={onResumeGeneration}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5 mr-1" />Resume Generation
+                          </Button>
+                        )}
+                        {!scene.videoUrl && !generating && !projectGenerationInterrupted && (
                           <Button
                             size="sm" variant="outline" className="h-7 text-xs px-2.5"
                             onClick={() => onGenerate(scene.id, scene.enhancedPrompt || scene.prompt)}
@@ -1045,7 +1062,7 @@ function SortableSceneCard({
                             <Play className="h-3.5 w-3.5 mr-1" />Generate Video
                           </Button>
                         )}
-                        {!scene.videoUrl && !generating && scene.status !== "failed" && (
+                        {!scene.videoUrl && !generating && !projectGenerationInterrupted && scene.status !== "failed" && (
                           <Button
                             size="sm" variant="ghost" className="h-7 w-7 p-0"
                             onClick={() => onEditPrompt(scene)}
@@ -1059,7 +1076,7 @@ function SortableSceneCard({
                             <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Generating...
                           </Button>
                         )}
-                        {scene.status === "failed" && !generating && (
+                        {scene.status === "failed" && !generating && !projectGenerationInterrupted && (
                           <div className="flex items-center gap-1">
                             <Button
                               size="sm" variant="outline" className="h-7 text-xs px-2.5"
@@ -2064,10 +2081,15 @@ function VidoraApp() {
     ? currentProject.scenes : [];
   const safeCharacters = currentProject?.characters && Array.isArray(currentProject.characters)
     ? currentProject.characters : [];
-  // A scene counts as "generating" while it is queued for this batch
-  // (task not created yet) OR actively rendering — both block duplicate
-  // runs and drive the fast 5s refresh cadence.
-  const isAnyGenerating = safeScenes.some((s) => s.status === "generating" || s.status === "queued");
+  // Project-level failure is authoritative over stale scene flags. A held
+  // GenerationRun may leave scenes as queued/generating while the project is
+  // deliberately marked failed for safe reconciliation. In that state the
+  // studio must expose Retry/Resume instead of trapping the user behind
+  // disabled "Generating" controls.
+  const projectGenerationInterrupted = currentProject?.status === "failed" || generationPhase === "failed";
+  const isAnyGenerating = !projectGenerationInterrupted && safeScenes.some(
+    (s) => s.status === "generating" || s.status === "queued"
+  );
   const completedSceneCount = safeScenes.filter((s) => s.videoUrl).length;
   const failedSceneCount = safeScenes.filter((s) => s.status === "failed").length;
   // True while the full-screen generation lock overlay should block the page
@@ -7054,19 +7076,21 @@ function VidoraApp() {
               {/* ── B. & C. Generation Controls & AI Tools ── */}
               <div className="flex flex-wrap items-center gap-3">
                 <Button
-                  onClick={handleGenerateAll}
-                  disabled={isAnyGenerating || isGenerating}
+                  onClick={projectGenerationInterrupted ? handleRetryFailedScenes : handleGenerateAll}
+                  disabled={isGenerating || (!projectGenerationInterrupted && isAnyGenerating)}
                   className="btn-gradient"
                 >
                   {isGenerating ? (
-                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Generating...</>
+                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />{projectGenerationInterrupted ? "Resuming..." : "Generating..."}</>
+                  ) : projectGenerationInterrupted ? (
+                    <><RotateCcw className="h-4 w-4 mr-1.5" />Resume Generation</>
                   ) : isAnyGenerating ? (
                     <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />In Progress...</>
                   ) : (
                     <><Play className="h-4 w-4 mr-1.5" />Generate All Videos</>
                   )}
                 </Button>
-                {failedSceneCount > 0 && (
+                {failedSceneCount > 0 && !projectGenerationInterrupted && (
                   <Button onClick={handleGenerateAll} variant="outline" className="text-amber-600 border-amber-200 hover:bg-amber-50">
                     <RotateCcw className="h-4 w-4 mr-1.5" />Retry Failed ({failedSceneCount})
                   </Button>
@@ -7149,39 +7173,25 @@ function VidoraApp() {
                   {safeCharacters.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {safeCharacters.map((char) => (
-                        <div key={char.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors">
-                          <div className="h-10 w-10 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
-                            {char.imageUrl ? (
-                              <img src={char.imageUrl} alt={char.name} className="h-full w-full object-cover" />
-                            ) : (
-                              <Users className="h-4 w-4 text-violet-500" />
-                            )}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold truncate">{char.name}</p>
-                            {char.role && (
-                              <Badge variant="outline" className="text-xs px-1 py-0">{char.role}</Badge>
-                            )}
-                          </div>
-                          <div className="flex flex-col gap-1 shrink-0">
-                            <Button
-                              size="sm" variant="ghost" className="h-6 w-6 p-0"
-                              onClick={() => { setCharUploadTargetId(char.id); charFileInputRef.current?.click(); }}
-                              title="Upload Image"
-                            >
-                              <UploadCloud className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              size="sm" variant="ghost" className="h-6 w-6 p-0"
-                              onClick={() => handleGenerateCharPortrait(char.id)}
-                              title="Generate AI Portrait"
-                            >
-                              <Wand2 className="h-3 w-3" />
-                            </Button>
+                        <div key={char.id} className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:border-violet-200 transition-colors">
+                          <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-full overflow-hidden bg-gradient-to-br from-violet-200 to-fuchsia-200 flex items-center justify-center shrink-0">
+                              {char.imageUrl ? (
+                                <img src={char.imageUrl} alt={char.name} className="h-full w-full object-cover" />
+                              ) : (
+                                <Users className="h-4 w-4 text-violet-500" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold truncate">{char.name}</p>
+                              {char.role && (
+                                <Badge variant="outline" className="text-xs px-1 py-0">{char.role}</Badge>
+                              )}
+                            </div>
                             <Select value={char.voiceId || charVoiceAssign[char.id] || ""} onValueChange={(v) => handleAssignVoice(char.id, v)}>
-                              <SelectTrigger className="h-6 w-16 text-xs px-0.5">
-                                <Volume2 className="h-2.5 w-2.5" />
-                                <SelectValue />
+                              <SelectTrigger className="h-7 w-24 text-xs px-1.5 shrink-0">
+                                <Volume2 className="h-3 w-3 shrink-0" />
+                                <SelectValue placeholder="Voice" />
                               </SelectTrigger>
                               <SelectContent>
                                 {TTS_VOICES.map((v) => (
@@ -7191,11 +7201,31 @@ function VidoraApp() {
                                 ))}
                               </SelectContent>
                             </Select>
+                          </div>
+                          <div className="mt-2 flex items-center justify-end gap-1 border-t border-slate-100 pt-2">
                             <Button
-                              size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-400 hover:text-red-600 hover:bg-red-50"
-                              onClick={() => handleDeleteClick("character", char.id)}
+                              size="sm" variant="ghost" className="h-7 w-7 p-0"
+                              onClick={() => { setCharUploadTargetId(char.id); charFileInputRef.current?.click(); }}
+                              title="Upload Image"
+                              aria-label="Upload character image"
                             >
-                              <Trash2 className="h-3 w-3" />
+                              <UploadCloud className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm" variant="ghost" className="h-7 w-7 p-0"
+                              onClick={() => handleGenerateCharPortrait(char.id)}
+                              title="Generate AI Portrait"
+                              aria-label="Generate AI character portrait"
+                            >
+                              <Wand2 className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-400 hover:text-red-600 hover:bg-red-50"
+                              onClick={() => handleDeleteClick("character", char.id)}
+                              title="Delete Character"
+                              aria-label="Delete character"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>
                         </div>
@@ -7269,6 +7299,8 @@ function VidoraApp() {
                               onPreview={openVideoPreview}
                               onGenerate={handleGenerateSingle}
                               isGeneratingScene={generatingScenes.has(scene.id)}
+                              projectGenerationInterrupted={projectGenerationInterrupted}
+                              onResumeGeneration={handleRetryFailedScenes}
                               onRetry={handleRetryScene}
                               onEditPrompt={handleEditScenePrompt}
                               onDelete={handleDeleteClick}
