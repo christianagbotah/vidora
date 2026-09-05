@@ -93,10 +93,6 @@ export function canAutoReconcileReferenceDownloadFailure(
  * failed result while polling that exact task. We can safely reactivate the
  * SAME charged GenerationRun and retry only its unfinished scope without
  * deducting Vidora tokens a second time.
- *
- * Unsubmitted queued/pending scenes in the same batch are also safe because
- * they have no taskId. Any submitting/generating scene, or any taskId attached
- * to a non-failed unfinished scene, keeps the run fail-closed.
  */
 export function canRetryTerminalProviderFailure(
   run: ReconciliationRunLike,
@@ -137,5 +133,84 @@ export function canRetryTerminalProviderFailure(
     safe: true,
     sceneIds: scope.sceneIds,
     retrySceneIds: unfinished.map((scene) => scene.id),
+  };
+}
+
+/**
+ * Resume a held run that still has provider task IDs. This is safe because
+ * polling an already-persisted task ID cannot create a duplicate provider
+ * charge. Terminally failed task IDs may be cleared and resubmitted under the
+ * same original Vidora token charge; in-flight task IDs are preserved.
+ */
+export function canRecoverHeldProviderRun(
+  run: ReconciliationRunLike,
+  allProjectScenes: ReconciliationSceneLike[]
+): {
+  safe: boolean;
+  sceneIds: string[];
+  queueSceneIds: string[];
+  preserveTaskSceneIds: string[];
+  reason?: string;
+} {
+  const empty = (reason: string, sceneIds: string[] = []) => ({
+    safe: false,
+    sceneIds,
+    queueSceneIds: [],
+    preserveTaskSceneIds: [],
+    reason,
+  });
+
+  if (run.status !== "needs_reconciliation" || !run.activeKey) {
+    return empty("run is not held for reconciliation");
+  }
+  if (run.refundTransactionId) {
+    return empty("the original Vidora token charge was already refunded");
+  }
+  if (run.totalTokens > 0 && !run.chargeTransactionId) {
+    return empty("charge state is incomplete");
+  }
+
+  const scope = scopedScenes(run, allProjectScenes);
+  if (scope.reason) return empty(scope.reason, scope.sceneIds);
+
+  const unfinished = scope.scoped.filter((scene) => !scene.videoUrl);
+  if (unfinished.length === 0) return empty("run has no unfinished scenes", scope.sceneIds);
+
+  // A submission with no persisted taskId is ambiguous. The explicit
+  // reference-download path is handled separately before this function.
+  if (unfinished.some((scene) => scene.status === "submitting" && !scene.taskId)) {
+    return empty("provider submission state is ambiguous", scope.sceneIds);
+  }
+  if (unfinished.some((scene) => scene.status === "failed" && !scene.taskId)) {
+    return empty("a failed scene has no persisted provider task", scope.sceneIds);
+  }
+
+  const preserveTaskSceneIds = unfinished
+    .filter((scene) => Boolean(scene.taskId) && scene.status !== "failed")
+    .map((scene) => scene.id);
+  const terminalFailedSceneIds = unfinished
+    .filter((scene) => Boolean(scene.taskId) && scene.status === "failed")
+    .map((scene) => scene.id);
+  const neverSubmittedSceneIds = unfinished
+    .filter((scene) => !scene.taskId && (scene.status === "queued" || scene.status === "pending"))
+    .map((scene) => scene.id);
+
+  const classified = new Set([
+    ...preserveTaskSceneIds,
+    ...terminalFailedSceneIds,
+    ...neverSubmittedSceneIds,
+  ]);
+  if (classified.size !== unfinished.length) {
+    return empty("held run contains an unsupported scene state", scope.sceneIds);
+  }
+  if (preserveTaskSceneIds.length === 0 && terminalFailedSceneIds.length === 0) {
+    return empty("no persisted provider task is available to recover", scope.sceneIds);
+  }
+
+  return {
+    safe: true,
+    sceneIds: scope.sceneIds,
+    queueSceneIds: [...terminalFailedSceneIds, ...neverSubmittedSceneIds],
+    preserveTaskSceneIds,
   };
 }
