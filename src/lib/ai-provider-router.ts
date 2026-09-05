@@ -27,6 +27,8 @@ export interface ProviderTextOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  /** Explicit health/admin probes can disable automatic provider fallback. */
+  disableFallback?: boolean;
 }
 
 export interface ProviderSpeechOptions {
@@ -322,13 +324,24 @@ export async function generateProviderText(request: ProviderTextOptions): Promis
   try {
     return await runTextProvider(settings.textProvider, request, settings);
   } catch (primaryError) {
+    if (request.disableFallback) throw primaryError;
     const fallback = settings.textFallbackProvider;
     if (fallback === "none" || fallback === settings.textProvider) throw primaryError;
     console.warn(
       `[ai-provider] text provider ${settings.textProvider} failed; trying fallback ${fallback}:`,
       primaryError instanceof Error ? primaryError.message : "unknown error",
     );
-    return runTextProvider(fallback, request, settings);
+
+    // `ai_text_model` and request.model belong to the ACTIVE route. A fallback
+    // provider must use its own configured/default model rather than inheriting
+    // a model slug from a different provider (for example grok-4.6 -> Z.ai).
+    const fallbackSettings: AIProviderSettings = { ...settings, textModel: "" };
+    const fallbackRequest: ProviderTextOptions = {
+      ...request,
+      model: undefined,
+      disableFallback: true,
+    };
+    return runTextProvider(fallback, fallbackRequest, fallbackSettings);
   }
 }
 
