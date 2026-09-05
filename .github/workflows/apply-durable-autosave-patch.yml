@@ -1,0 +1,39 @@
+name: Apply durable autosave patch
+
+on:
+  push:
+    branches:
+      - feature/durable-create-autosave
+    paths:
+      - .github/workflows/apply-durable-autosave-patch.yml
+      - scripts/apply-durable-autosave-patch.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/durable-create-autosave
+          fetch-depth: 0
+
+      - name: Apply guarded source patch
+        run: node scripts/apply-durable-autosave-patch.mjs
+
+      - name: Verify patch produced changes
+        run: |
+          git diff --check
+          git status --short
+          test -n "$(git status --porcelain)"
+
+      - name: Commit integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add prisma/schema.prisma src/types/video.ts src/app/api/projects/route.ts src/hooks/use-create-draft-autosave.ts src/app/page.tsx
+          git commit -m "feat(drafts): integrate durable create autosave"
+          git push origin HEAD:feature/durable-create-autosave
