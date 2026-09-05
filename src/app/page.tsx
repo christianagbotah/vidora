@@ -1725,6 +1725,8 @@ function VidoraApp() {
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
   const [fullPreviewUrl, setFullPreviewUrl] = useState<string | null>(null);
   const [isBuildingFullPreview, setIsBuildingFullPreview] = useState(false);
+  const [projectLanguage, setProjectLanguage] = useState("en");
+  const [isChangingProjectLanguage, setIsChangingProjectLanguage] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -2116,6 +2118,16 @@ function VidoraApp() {
     ? currentProject.scenes : [];
   const safeCharacters = currentProject?.characters && Array.isArray(currentProject.characters)
     ? currentProject.characters : [];
+
+  useEffect(() => {
+    const narratable = (currentProject?.scenes || []).filter((scene) => scene.dialogue?.trim());
+    if (narratable.length === 0) {
+      setProjectLanguage("en");
+      return;
+    }
+    const languages = new Set(narratable.map((scene) => scene.narrationLang || "en"));
+    if (languages.size === 1) setProjectLanguage([...languages][0]);
+  }, [currentProject?.id, currentProject?.scenes]);
   // Project-level failure is authoritative over stale scene flags. A held
   // GenerationRun may leave scenes as queued/generating while the project is
   // deliberately marked failed for safe reconciliation. In that state the
@@ -3885,10 +3897,11 @@ function VidoraApp() {
   // ── Subtitles ──
   const handleGenerateSubtitles = async (sceneId: string) => {
     try {
+      const scene = safeScenes.find((item) => item.id === sceneId);
       const res = await fetch(`/api/scenes/${sceneId}/subtitles`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lang: "en" }),
+        body: JSON.stringify({ lang: scene?.narrationLang || "en" }),
       });
       const data = await res.json();
       if (data.success) {
@@ -4032,6 +4045,103 @@ function VidoraApp() {
       toast({ title: "Error", variant: "destructive" });
     } finally {
       setPublishingPlatform(null);
+    }
+  };
+
+  const handleApplyProjectLanguage = async () => {
+    if (!currentProject || isChangingProjectLanguage) return;
+    const languageMeta = ALL_DUBBING_LANGUAGES.find((item) => item.code === projectLanguage);
+    if (!languageMeta) {
+      toast({ title: "Unsupported language", variant: "destructive" });
+      return;
+    }
+
+    const narratableScenes = safeScenes.filter((scene) => scene.dialogue?.trim());
+    if (narratableScenes.length === 0) {
+      toast({ title: "No spoken dialogue", description: "This video has no scene dialogue to translate." });
+      return;
+    }
+
+    setIsChangingProjectLanguage(true);
+    let updatedScenes = 0;
+    let subtitleWarnings = 0;
+    try {
+      for (const scene of narratableScenes) {
+        const voice = scene.narrationVoice || "tongtong";
+        const accent = projectLanguage === "en"
+          ? (scene.narrationAccent === "native" ? "auto" : scene.narrationAccent || "auto")
+          : "native";
+        const style = scene.narrationStyle || "natural";
+
+        if (projectLanguage !== "en") {
+          const translateRes = await fetch(`/api/scenes/${scene.id}/dubbing`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang: projectLanguage, voiceId: voice, translateOnly: true }),
+          });
+          const translateData = await translateRes.json();
+          if (!translateRes.ok || !translateData.success) {
+            throw new Error(`Scene ${scene.sceneNumber}: ${getApiError(translateData, "translation failed")}`);
+          }
+        }
+
+        const narrationRes = await fetch("/api/generate-narration", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: currentProject.id,
+            sceneId: scene.id,
+            voice,
+            language: projectLanguage,
+            accent,
+            style,
+            ...(projectLanguage === "en" ? { text: scene.dialogue } : {}),
+          }),
+        });
+        const narrationData = await narrationRes.json();
+        if (!narrationRes.ok || !narrationData.success) {
+          throw new Error(`Scene ${scene.sceneNumber}: ${getApiError(narrationData, "narration failed")}`);
+        }
+        updatedScenes += 1;
+
+        if (scene.subtitleSrt || scene.subtitleStatus === "ready" || scene.burnSubtitles) {
+          const subtitleRes = await fetch(`/api/scenes/${scene.id}/subtitles`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lang: projectLanguage }),
+          });
+          const subtitleData = await subtitleRes.json();
+          if (!subtitleRes.ok || !subtitleData.success) {
+            subtitleWarnings += 1;
+            if (scene.burnSubtitles) {
+              await fetch(`/api/scenes/${scene.id}/subtitles`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ burnSubtitles: false }),
+              }).catch(() => undefined);
+            }
+          }
+        }
+      }
+
+      setFullPreviewUrl(null);
+      await refreshProject();
+      toast({
+        title: `Video language changed to ${languageMeta.name}`,
+        description: subtitleWarnings > 0
+          ? `${updatedScenes} scene voices updated. ${subtitleWarnings} subtitle track(s) could not be rebuilt and were kept out of burned captions.`
+          : `${updatedScenes} scene voices${updatedScenes === 1 ? "" : "s"} updated. Build a new full preview to review the localized cut.`,
+      });
+    } catch (error) {
+      setFullPreviewUrl(null);
+      await refreshProject();
+      toast({
+        title: "Language change stopped",
+        description: `${updatedScenes}/${narratableScenes.length} scenes were updated. ${error instanceof Error ? error.message : "Please retry to continue."}`,
+        variant: "destructive",
+      });
+    } finally {
+      setIsChangingProjectLanguage(false);
     }
   };
 
@@ -7123,6 +7233,47 @@ function VidoraApp() {
                                 </>
                               );
                             })()}
+                          </p>
+                        </div>
+
+                        {/* Video Language */}
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium flex items-center gap-1.5">
+                            <Languages className="h-3.5 w-3.5 text-muted-foreground" />Video Language
+                            <span className="text-xs font-normal text-muted-foreground">(changes spoken dialogue across the current video)</span>
+                          </Label>
+                          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                            <Select value={projectLanguage} onValueChange={setProjectLanguage} disabled={isChangingProjectLanguage}>
+                              <SelectTrigger className="h-9 sm:w-[260px] text-sm">
+                                <SelectValue placeholder="Choose video language" />
+                              </SelectTrigger>
+                              <SelectContent className="max-h-[320px]">
+                                {DUBBING_LANGUAGE_GROUPS.map((group) => (
+                                  <SelectGroup key={group.label}>
+                                    <SelectLabel>{group.label}</SelectLabel>
+                                    {group.languages.map((lang) => (
+                                      <SelectItem key={lang.code} value={lang.code}>
+                                        <span className="mr-1.5">{lang.flag}</span>{lang.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-9 border-violet-200 text-violet-700 hover:bg-violet-50"
+                              onClick={handleApplyProjectLanguage}
+                              disabled={isChangingProjectLanguage || safeScenes.every((scene) => !scene.dialogue?.trim())}
+                            >
+                              {isChangingProjectLanguage
+                                ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Localizing video...</>
+                                : <><Languages className="h-3.5 w-3.5 mr-1.5" />Apply to Entire Video</>}
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Keeps the existing visual clips, translates scene dialogue, regenerates the active voice track, and rebuilds existing subtitles in the selected language.
                           </p>
                         </div>
 

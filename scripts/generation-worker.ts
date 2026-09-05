@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { zai, ZAIError } from "@/lib/zai";
 import { friendlySceneError } from "@/lib/zai-errors";
 import { saveGeneratedFile } from "@/lib/generated-store";
+import { persistProviderVideo } from "@/lib/provider-video-storage";
 import { toProviderFetchUrl } from "@/lib/provider-media-access";
 import { resolveModelForRequest } from "@/lib/video-models";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
@@ -270,9 +271,28 @@ async function pollSubmittedTask(opts: {
   });
 
   if (result.status === "success" && result.videoUrl) {
+    let localVideoUrl: string;
+    try {
+      localVideoUrl = await persistProviderVideo(opts.sceneId, result.videoUrl);
+    } catch (error) {
+      console.warn(
+        `[generation-worker] scene=${opts.sceneId} rendered but provider media copy is pending:`,
+        error instanceof Error ? error.message : "unknown error",
+      );
+      await db.videoScene.update({
+        where: { id: opts.sceneId },
+        data: {
+          status: "generating",
+          errorMessage: "Video rendered successfully; Vidora is securing the media file locally before completion.",
+        },
+      });
+      await heartbeat(opts.runId);
+      return "waiting";
+    }
+
     await db.videoScene.update({
       where: { id: opts.sceneId },
-      data: { videoUrl: result.videoUrl, status: "completed", errorMessage: null },
+      data: { videoUrl: localVideoUrl, status: "completed", errorMessage: null },
     });
     await heartbeat(opts.runId);
     // Narration has its own shared metered/idempotent provider boundary.

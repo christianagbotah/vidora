@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
+import { persistProviderVideo } from "@/lib/provider-video-storage";
 
 const execFileAsync = promisify(execFile);
 const AMBIENCE_VOLUME = 0.6;
@@ -47,7 +48,11 @@ interface PreviewScene {
   dialogue: string | null;
   narrationUrl: string | null;
   narrationVoice: string | null;
+  narrationLang: string | null;
+  narrationAccent: string | null;
+  narrationStyle: string | null;
   characterIds: string | null;
+  translations: Array<{ lang: string; translatedText: string | null }>;
   musicTrackUrl: string | null;
   musicVolume: number;
 }
@@ -66,33 +71,27 @@ interface AudioLayer {
   fadeOut: boolean;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function downloadWithRetry(url: string, destination: string): Promise<void> {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await writeFile(destination, Buffer.from(await response.arrayBuffer()));
-      return;
-    } catch (error) {
-      if (attempt === 3) throw error;
-      await sleep(600 * attempt);
-    }
-  }
-}
-
-async function materializeVideo(scene: PreviewScene, workDir: string, index: number): Promise<string> {
+async function materializeVideo(scene: PreviewScene): Promise<string> {
   if (!scene.videoUrl) throw new Error(`Scene ${scene.sceneNumber} has no generated clip`);
   if (scene.videoUrl.startsWith("/")) {
     const local = resolvePublicAssetPath(scene.videoUrl);
     if (existsSync(local)) return local;
+    throw new Error(`Scene ${scene.sceneNumber} local video file is missing`);
   }
-  const local = path.join(workDir, `scene_${String(index + 1).padStart(3, "0")}.mp4`);
-  await downloadWithRetry(scene.videoUrl, local);
-  return local;
+
+  // Legacy projects may still contain a provider-hosted URL. Archive it into
+  // Vidora's persistent generated store before ffmpeg touches it, then repair
+  // the scene row so future playback/preview no longer depends on provider
+  // cache semantics or signed URL lifetime.
+  const localUrl = await persistProviderVideo(scene.id, scene.videoUrl);
+  const localPath = resolvePublicAssetPath(localUrl);
+  if (!existsSync(localPath)) throw new Error(`Scene ${scene.sceneNumber} media copy produced no local file`);
+  await db.videoScene.update({
+    where: { id: scene.id },
+    data: { videoUrl: localUrl },
+  });
+  scene.videoUrl = localUrl;
+  return localPath;
 }
 
 async function videoDuration(filePath: string): Promise<number> {
@@ -237,15 +236,30 @@ async function currentSceneAudio(scene: PreviewScene): Promise<SceneAudio> {
   let narrationPath: string | null = null;
   if (scene.dialogue?.trim()) {
     const voice = await pickSceneNarrationVoice(scene);
+    const language = scene.narrationLang || "en";
+    let narrationText = scene.dialogue.trim();
+    if (language !== "en") {
+      const translated = scene.translations.find(
+        (translation) => translation.lang === language && translation.translatedText?.trim(),
+      );
+      narrationText = translated?.translatedText?.trim() || "";
+      if (!narrationText) {
+        throw new Error(
+          `Scene ${scene.sceneNumber} is set to ${language} but has no translated dialogue. Apply the video language again before previewing.`,
+        );
+      }
+    }
+
     // Always resolve through the deterministic narration generator. It replays
     // an existing matching fingerprint without charging again, while a stale
-    // provider/voice/dialogue artifact receives a new fingerprint. The
-    // generator persists only narrationUrl; the resolved character voice stays
-    // derived and therefore does not mutate the reviewed source configuration.
+    // provider/voice/dialogue/profile artifact receives a new fingerprint.
     const narration = await generateSceneNarration({
       sceneId: scene.id,
-      text: scene.dialogue,
+      text: narrationText,
       voice,
+      language,
+      accent: scene.narrationAccent || undefined,
+      style: scene.narrationStyle || undefined,
     });
     narrationPath = narration.path;
   } else if (scene.narrationUrl) {
@@ -306,7 +320,7 @@ export async function renderFullProjectPreview(
   const includeAudio = options.includeAudio !== false;
   const project = await db.videoProject.findUnique({
     where: { id: projectId },
-    include: { scenes: { orderBy: { sceneNumber: "asc" } } },
+    include: { scenes: { orderBy: { sceneNumber: "asc" }, include: { translations: true } } },
   });
   if (!project) throw new Error("Project not found");
   if (project.cutVersion !== expectedCutVersion) throw new Error("Project changed before preview rendering started");
@@ -320,7 +334,7 @@ export async function renderFullProjectPreview(
   try {
     const scenePaths: string[] = [];
     for (let index = 0; index < scenes.length; index++) {
-      scenePaths.push(await materializeVideo(scenes[index], workDir, index));
+      scenePaths.push(await materializeVideo(scenes[index]));
     }
     const targetSize = await videoSize(scenePaths[0]);
     const sceneDurations = await Promise.all(scenePaths.map(videoDuration));
@@ -384,7 +398,7 @@ export async function renderFullProjectPreview(
         audioInputs.push(audio.musicPath);
         musicScenes++;
       }
-      if (ambience[videoIndex]) {
+      if (ambience[videoIndex] && !sceneAudio[sceneIndex]?.narrationPath) {
         const span = sceneSpan(durations, videoIndex, definition.duration);
         audioLayers.push({
           inputIndex: videoIndex,

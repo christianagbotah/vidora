@@ -76,7 +76,7 @@ export async function POST(
       return NextResponse.json({ success: false, error: "Please sign in to generate dubbing" }, { status: 401 });
     }
 
-    const { lang, voiceId } = await req.json();
+    const { lang, voiceId, translateOnly } = await req.json();
     const langMeta = lang ? getDubbingLanguage(lang) : null;
     if (!langMeta) {
       return NextResponse.json(
@@ -144,6 +144,19 @@ export async function POST(
         translation = await db.sceneTranslation.update({
           where: { id: translation.id },
           data: { status: "generating" },
+        });
+      }
+
+      if (translateOnly === true) {
+        const translatedOnly = await db.sceneTranslation.update({
+          where: { id: translation.id },
+          data: { status: "translated" },
+        });
+        return NextResponse.json({
+          success: true,
+          translation: translatedOnly,
+          translatedOnly: true,
+          tokensChargedForVoice: 0,
         });
       }
 

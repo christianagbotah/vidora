@@ -3,6 +3,18 @@ import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { isValidVideoModelId } from "@/lib/video-models";
 
+function withScenePlaybackUrls<T extends { scenes: Array<{ id: string; videoUrl: string | null }> }>(project: T): T {
+  return {
+    ...project,
+    scenes: project.scenes.map((scene) => ({
+      ...scene,
+      videoUrl: scene.videoUrl && /^https?:\/\//i.test(scene.videoUrl)
+        ? `/api/scenes/${scene.id}/video`
+        : scene.videoUrl,
+    })),
+  } as T;
+}
+
 /**
  * GET /api/projects/[id]
  *
@@ -37,7 +49,7 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ success: true, project });
+    return NextResponse.json({ success: true, project: withScenePlaybackUrls(project) });
   } catch (error) {
     console.error("Failed to fetch project:", error);
     return NextResponse.json(
@@ -92,7 +104,7 @@ export async function PUT(
       },
     });
 
-    return NextResponse.json({ success: true, project });
+    return NextResponse.json({ success: true, project: withScenePlaybackUrls(project) });
   } catch (error) {
     console.error("Failed to update project:", error);
     return NextResponse.json(
