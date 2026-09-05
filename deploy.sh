@@ -132,6 +132,11 @@ fi
 
 echo "FFmpeg export capability preflight: OK"
 
+# Public AI health intentionally checks configuration only. Deployment performs
+# one admin-equivalent free-model call locally so stale/expired credentials can
+# never produce a false-success release. It runs before backup/migration/restart.
+NODE_ENV=production bun scripts/check-zai-live.ts
+
 # Preflight quality checks happen before backup/migrations/restart.
 bunx prisma validate
 bunx prisma generate
