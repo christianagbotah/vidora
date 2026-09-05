@@ -191,8 +191,10 @@ export async function POST(
         }
         const linkedWithImages = linkedIds
           .map((characterId) => charById.get(characterId))
-          .filter((character): character is NonNullable<typeof character> => Boolean(character?.imageUrl));
-        const directReference = linkedWithImages.length === 1 ? linkedWithImages[0].imageUrl : null;
+          .filter((character) => Boolean(character?.imageUrl));
+        const directReference = linkedWithImages.length === 1
+          ? linkedWithImages[0]?.imageUrl || null
+          : null;
 
         await tx.videoScene.create({
           data: {

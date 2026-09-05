@@ -2692,6 +2692,7 @@ function VidoraApp() {
         }
         setEditPromptScene(null);
         setFullPreviewUrl(null);
+        autoGenFiredRef.current.add(currentProject.id);
         await refreshProject();
         toast({
           title: "Scene correction saved",

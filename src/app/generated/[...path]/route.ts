@@ -57,6 +57,15 @@ async function authorizeGeneratedMedia(
     };
   }
 
+  // Review-cut files are private and intentionally are not stored in
+  // VideoProject.finalVideoUrl. Their filename contains only the project id;
+  // access is still resolved through the normal project authorization layer.
+  const reviewCut = /^preview_([A-Za-z0-9_-]+)\.mp4$/.exec(rel);
+  if (reviewCut?.[1]) {
+    const access = await requireProjectAccess(reviewCut[1], false);
+    return { allowed: access.ok, publicCache: false };
+  }
+
   const mediaUrl = `/generated/${rel}`;
   const project = await db.videoProject.findFirst({
     where: {
@@ -68,6 +77,7 @@ async function authorizeGeneratedMedia(
               OR: [
                 { imageUrl: mediaUrl },
                 { videoUrl: mediaUrl },
+                { previousVideoUrl: mediaUrl },
                 { referenceImageUrl: mediaUrl },
                 { musicTrackUrl: mediaUrl },
               ],
