@@ -1,0 +1,31 @@
+name: Patch video language and provider media
+
+on:
+  push:
+    branches:
+      - fix/video-language-and-provider-media-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[video-language-patch-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact patch
+        run: python3 scripts/patch-video-language-and-provider-media.py
+      - name: Commit patched files
+        run: |
+          if git diff --quiet; then
+            echo "No changes produced"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/generation-worker.ts src/lib/full-preview-render.ts src/app/api/scenes/'[id]'/dubbing/route.ts src/app/api/scenes/'[id]'/subtitles/route.ts src/app/page.tsx
+          git commit -m "feat: switch whole video language and secure provider media [video-language-patch-applied]"
+          git push
