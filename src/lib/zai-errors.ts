@@ -57,6 +57,9 @@ export function friendlySceneError(raw: string | null | undefined): string {
   if (/rate.?limit|too many requests/i.test(raw) || /\b429\b/.test(raw)) {
     return "The AI video service is busy right now. Please wait a few minutes and retry — failed scenes are refunded automatically.";
   }
+  if (/image download fail|failed to download image|image.*download.*fail/i.test(raw)) {
+    return "The AI rendering service could not download this scene's reference image. Please retry; if it continues, regenerate or re-upload the reference image.";
+  }
   if (/aspect.?ratio|image (size|resolution)|resolution (mismatch|not)/i.test(raw)) {
     return "The scene's reference image didn't match the project's orientation. This is now auto-corrected — please retry the scene.";
   }
