@@ -36,7 +36,12 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json({ success: true, projects });
+    const projectsForClient = projects.map(({ draftData, ...project }) => ({
+      ...project,
+      hasDraft: Boolean(draftData),
+    }));
+
+    return NextResponse.json({ success: true, projects: projectsForClient });
   } catch (error) {
     console.error("Failed to fetch projects:", error);
     return NextResponse.json(

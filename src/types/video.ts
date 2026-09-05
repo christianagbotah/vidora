@@ -73,6 +73,10 @@ export interface VideoProject {
   projectType?: string;
   /** Z.ai video model id (see src/lib/video-models.ts) — null = CogVideoX-3 default. */
   videoModel?: string | null;
+  /** True when the project has a resumable Create-page server draft. */
+  hasDraft?: boolean;
+  draftData?: string | null;
+  lastAutosavedAt?: string | null;
   finalVideoUrl?: string | null;
   createdAt: string;
   updatedAt: string;
