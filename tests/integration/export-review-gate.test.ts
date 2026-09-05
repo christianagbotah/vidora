@@ -2,6 +2,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { db } from "@/lib/db";
 
 const createdUsers: string[] = [];
+const DEFAULT_RENDER = {
+  transition: "fade",
+  withTitleCard: false,
+  includeAudio: true,
+} as const;
 
 function errorText(error: unknown): string {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
@@ -55,21 +60,21 @@ afterAll(async () => {
 });
 
 describe("server-enforced full-video review gate", () => {
-  test("blocks unreviewed export, freezes an active reviewed cut, and invalidates review after mutation", async () => {
+  test("binds export to reviewed cut and content config, freezes active export, and invalidates review after mutation", async () => {
     const { user, project, scene } = await createProjectWithClip();
 
     const afterSceneCreate = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
     expect(afterSceneCreate.cutVersion).toBeGreaterThan(0);
     expect(afterSceneCreate.reviewedCutVersion).toBeNull();
+    expect(afterSceneCreate.reviewedRenderConfig).toBeNull();
 
-    // Direct POST /api/export-video ultimately creates this row. The database
-    // must reject it even if a caller bypasses the browser's preview state.
     await expectDatabaseGuard(
       () => db.exportJob.create({
         data: {
           projectId: project.id,
           userId: user.id,
           activeKey: `project:${project.id}`,
+          params: JSON.stringify(DEFAULT_RENDER),
         },
       }),
       "VIDORA_PREVIEW_REQUIRED",
@@ -80,19 +85,37 @@ describe("server-enforced full-video review gate", () => {
       data: {
         reviewedCutVersion: afterSceneCreate.cutVersion,
         reviewedAt: new Date(),
+        reviewedRenderConfig: DEFAULT_RENDER,
       },
     });
+
+    // Same visual/audio cut but a different transition is materially different
+    // content and must require a new preview before a durable job can exist.
+    await expectDatabaseGuard(
+      () => db.exportJob.create({
+        data: {
+          projectId: project.id,
+          userId: user.id,
+          activeKey: `project:${project.id}`,
+          params: JSON.stringify({ ...DEFAULT_RENDER, transition: "slide" }),
+        },
+      }),
+      "VIDORA_PREVIEW_REQUIRED",
+    );
 
     const job = await db.exportJob.create({
       data: {
         projectId: project.id,
         userId: user.id,
         activeKey: `project:${project.id}`,
+        params: JSON.stringify({
+          quality: "ultra", // encoding-only differences remain allowed
+          format: "webm",
+          ...DEFAULT_RENDER,
+        }),
       },
     });
 
-    // Once a reviewed export is queued/running, a second tab cannot swap the
-    // clip underneath the background worker.
     await expectDatabaseGuard(
       () => db.videoScene.update({
         where: { id: scene.id },
@@ -115,9 +138,8 @@ describe("server-enforced full-video review gate", () => {
     expect(afterCutChange.cutVersion).toBeGreaterThan(afterSceneCreate.cutVersion);
     expect(afterCutChange.reviewedCutVersion).toBeNull();
     expect(afterCutChange.reviewedAt).toBeNull();
+    expect(afterCutChange.reviewedRenderConfig).toBeNull();
 
-    // Legacy/direct concatenate paths write finalVideoUrl without ExportJob.
-    // The final-video trigger closes that alternate bypass as well.
     await expectDatabaseGuard(
       () => db.videoProject.update({
         where: { id: project.id },
@@ -131,6 +153,7 @@ describe("server-enforced full-video review gate", () => {
       data: {
         reviewedCutVersion: afterCutChange.cutVersion,
         reviewedAt: new Date(),
+        reviewedRenderConfig: DEFAULT_RENDER,
       },
     });
 
@@ -139,5 +162,27 @@ describe("server-enforced full-video review gate", () => {
       data: { finalVideoUrl: "/generated/final-reviewed.mp4", status: "completed" },
     });
     expect(finalized.finalVideoUrl).toBe("/generated/final-reviewed.mp4");
+  });
+
+  test("changing project title invalidates the reviewed render configuration", async () => {
+    const { project } = await createProjectWithClip();
+    const current = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
+    await db.videoProject.update({
+      where: { id: project.id },
+      data: {
+        reviewedCutVersion: current.cutVersion,
+        reviewedAt: new Date(),
+        reviewedRenderConfig: DEFAULT_RENDER,
+      },
+    });
+
+    await db.videoProject.update({
+      where: { id: project.id },
+      data: { title: "A different reviewed title" },
+    });
+    const changed = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
+    expect(changed.cutVersion).toBeGreaterThan(current.cutVersion);
+    expect(changed.reviewedCutVersion).toBeNull();
+    expect(changed.reviewedRenderConfig).toBeNull();
   });
 });
