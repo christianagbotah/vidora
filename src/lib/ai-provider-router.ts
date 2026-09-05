@@ -33,6 +33,8 @@ export interface ProviderSpeechOptions {
   input: string;
   voice?: string;
   speed?: number;
+  /** Optional screenplay delivery cue, e.g. excited, whispering, warmly. */
+  direction?: string | null;
 }
 
 export interface ProviderSpeechResult {
@@ -54,6 +56,26 @@ const ZAI_LOGICAL_VOICES = new Set([
   "douji",
   "luodo",
 ]);
+
+const ELEVEN_V3_RE = /^eleven_v3(?:$|[-_:])/i;
+
+const PERFORMANCE_DIRECTION_ALIASES: Array<[RegExp, string]> = [
+  [/\b(excited|excitedly|enthusiastic|enthusiastically|energetic|energetically)\b/i, "excited"],
+  [/\b(happy|happily|cheerful|cheerfully|joyful|joyfully)\b/i, "happily"],
+  [/\b(whisper|whispers|whispering|softly|hushed)\b/i, "whispering"],
+  [/\b(shout|shouts|shouting|yell|yelling|loudly)\b/i, "shouts"],
+  [/\b(laugh|laughs|laughing|giggle|giggling|chuckle|chuckling)\b/i, "laughing"],
+  [/\b(sad|sadly|somber|somberly|melancholy)\b/i, "sad"],
+  [/\b(angry|angrily|furious|furiously)\b/i, "angry"],
+  [/\b(curious|curiously|wondering)\b/i, "curious"],
+  [/\b(mischievous|mischievously|playful|playfully)\b/i, "mischievously"],
+  [/\b(cry|cries|crying|tearful|tearfully)\b/i, "crying"],
+  [/\b(sigh|sighs|sighing)\b/i, "sighs"],
+  [/\b(calm|calmly|gentle|gently|soothing|soothingly)\b/i, "calmly"],
+  [/\b(proud|proudly)\b/i, "proudly"],
+  [/\b(surprised|surprisingly|astonished)\b/i, "surprised"],
+  [/\b(warm|warmly|affectionate|affectionately)\b/i, "warmly"],
+];
 
 function normalizeBaseUrl(value: string, fallback: string): string {
   const base = (value || fallback).trim().replace(/\/+$/, "");
@@ -88,6 +110,42 @@ function asTextProvider(value: string, fallback: TextProviderId): TextProviderId
 function asTtsProvider(value: string, fallback: TtsProviderId): TtsProviderId {
   const normalized = value.trim().toLowerCase() as TtsProviderId;
   return TTS_PROVIDERS.has(normalized) ? normalized : fallback;
+}
+
+/**
+ * Convert a screenplay performance cue into a conservative Eleven v3 audio
+ * tag. Unknown or overlong cues are intentionally ignored rather than passing
+ * arbitrary model/user text into the provider's control syntax.
+ */
+export function normalizePerformanceDirection(direction?: string | null): string | null {
+  const clean = (direction || "")
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .replace(/^\(|\)$/g, "")
+    .replace(/[^A-Za-z\s'-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+  if (!clean) return null;
+  for (const [pattern, tag] of PERFORMANCE_DIRECTION_ALIASES) {
+    if (pattern.test(clean)) return tag;
+  }
+  return null;
+}
+
+/**
+ * Eleven v3 supports bracketed natural-language audio tags. Other TTS engines
+ * must receive only the spoken words so stage directions can never be read
+ * aloud accidentally.
+ */
+export function formatElevenLabsPerformanceText(
+  input: string,
+  direction: string | null | undefined,
+  model: string,
+): string {
+  if (!ELEVEN_V3_RE.test(model)) return input;
+  const tag = normalizePerformanceDirection(direction);
+  return tag ? `[${tag}] ${input}` : input;
 }
 
 export async function getAIProviderSettings(): Promise<AIProviderSettings> {
@@ -296,6 +354,8 @@ async function elevenLabsSpeech(
   if (!apiKey) throw new Error("ElevenLabs API key is not configured");
   const voice = resolveElevenLabsVoice(request.voice, settings);
   const model = settings.ttsModel || "eleven_v3";
+  const isV3 = ELEVEN_V3_RE.test(model);
+  const text = formatElevenLabsPerformanceText(request.input, request.direction, model);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -309,12 +369,14 @@ async function elevenLabsSpeech(
           Accept: "audio/mpeg",
         },
         body: JSON.stringify({
-          text: request.input,
+          text,
           model_id: model,
           voice_settings: {
-            stability: 0.42,
+            // v3 expression is primarily directed through audio tags. Keep the
+            // voice settings stable so emotional delivery does not become noisy.
+            stability: isV3 ? 0.5 : 0.48,
             similarity_boost: 0.78,
-            style: 0.55,
+            style: 0,
             use_speaker_boost: true,
             speed: Math.max(0.7, Math.min(1.2, request.speed ?? 1)),
           },
@@ -323,8 +385,8 @@ async function elevenLabsSpeech(
       },
     );
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`ElevenLabs TTS failed (HTTP ${response.status}): ${text.slice(0, 400)}`);
+      const textBody = await response.text();
+      throw new Error(`ElevenLabs TTS failed (HTTP ${response.status}): ${textBody.slice(0, 400)}`);
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     if (!buffer.length) throw new Error("ElevenLabs returned empty audio");
@@ -349,6 +411,8 @@ export async function synthesizeProviderSpeech(
 
   const voice = (request.voice || "tongtong").trim().toLowerCase();
   const audio = await zai.tts({
+    // Z.ai receives only spoken words; performance cues are intentionally not
+    // injected because this adapter does not expose a structured style control.
     input: request.input,
     voice,
     speed: request.speed ?? 1,
@@ -380,15 +444,16 @@ NON-NEGOTIABLE QUALITY RULES:
 4. Give named characters their own short, natural lines. Avoid one generic narrator speaking for everybody when character dialogue is appropriate.
 5. Keep each 10-second scene speakable: normally 1-3 short utterances, with enough time for acting and reactions.
 6. Dialogue must advance the story and match what the viewer sees. Avoid filler.
-7. Visual directions must never contain dialogue labels. Spoken lines must always use Speaker: text.
-8. Do not add copyrighted song lyrics. If music is requested, describe mood/instrumentation only.
-9. Maintain character continuity, visual identity, location continuity, and emotional progression across scenes.
-10. End with a satisfying payoff/CTA/greeting appropriate to the user's intent.
+7. Add a short parenthetical delivery cue only when it materially improves the performance, for example Marshall (excited): Happy birthday, Giannis! or Narrator (warmly): Today is a special day. Prefer clear cues such as excited, cheerful, whispering, softly, warmly, curious, sad, angry, playful, or proudly. Do not over-direct every line.
+8. Visual directions must never contain dialogue labels. Spoken lines without a cue use Speaker: text; lines with a cue use Speaker (excited): text.
+9. Do not add copyrighted song lyrics. If music is requested, describe mood/instrumentation only.
+10. Maintain character continuity, visual identity, location continuity, and emotional progression across scenes.
+11. End with a satisfying payoff/CTA/greeting appropriate to the user's intent.
 
 OUTPUT FORMAT ONLY — no markdown fences and no commentary:
 Scene 1 - Short title
 Visual: precise cinematic visual direction
-Speaker Name: exact spoken line
+Speaker Name (optional short delivery cue): exact spoken line
 Another Speaker: exact spoken line
 
 Repeat for exactly ${sceneCount} scenes. Every scene must contain a Visual: line. Use Narrator: only when narration genuinely improves clarity.`;
