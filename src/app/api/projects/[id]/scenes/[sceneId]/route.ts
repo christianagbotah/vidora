@@ -38,7 +38,7 @@ export async function PUT(
     const body = await req.json();
     const {
       prompt, enhancedPrompt, duration, transition, status, imageUrl,
-      mood, cameraMove, lighting, narrationVoice, narrationLang,
+      mood, cameraMove, lighting, narrationVoice, narrationLang, narrationAccent, narrationStyle,
       title, visualNote, dialogue, characterIds, referenceImageUrl,
       videoUrl, previousVideoUrl,
       // Internal-state resets (scene prompt editor + retry flow): clear the
@@ -57,6 +57,8 @@ export async function PUT(
         characterIds: true,
         narrationVoice: true,
         narrationLang: true,
+        narrationAccent: true,
+        narrationStyle: true,
       },
     });
     if (!existing) {
@@ -70,7 +72,9 @@ export async function PUT(
       (dialogue !== undefined && nullableText(dialogue) !== existing.dialogue) ||
       (characterIds !== undefined && nullableText(characterIds) !== existing.characterIds) ||
       (narrationVoice !== undefined && nullableText(narrationVoice) !== existing.narrationVoice) ||
-      (narrationLang !== undefined && nullableText(narrationLang) !== existing.narrationLang);
+      (narrationLang !== undefined && nullableText(narrationLang) !== existing.narrationLang) ||
+      (narrationAccent !== undefined && nullableText(narrationAccent) !== existing.narrationAccent) ||
+      (narrationStyle !== undefined && nullableText(narrationStyle) !== existing.narrationStyle);
 
     const scene = await db.videoScene.update({
       where: { id: sceneId },
@@ -85,6 +89,8 @@ export async function PUT(
         ...(cameraMove !== undefined && { cameraMove: cameraMove || null }),
         ...(narrationVoice !== undefined && { narrationVoice: narrationVoice || null }),
         ...(narrationLang !== undefined && { narrationLang: narrationLang || null }),
+        ...(narrationAccent !== undefined && { narrationAccent: narrationAccent || null }),
+        ...(narrationStyle !== undefined && { narrationStyle: narrationStyle || null }),
         ...(title !== undefined && { title: title || null }),
         ...(visualNote !== undefined && { visualNote: visualNote || null }),
         ...(dialogue !== undefined && { dialogue: dialogue || null }),
@@ -104,6 +110,7 @@ export async function PUT(
     const invalidatesAssembly =
       prompt !== undefined || enhancedPrompt !== undefined || characterIds !== undefined ||
       dialogue !== undefined || narrationVoice !== undefined || narrationLang !== undefined ||
+      narrationAccent !== undefined || narrationStyle !== undefined ||
       referenceImageUrl !== undefined || videoUrl === null;
     if (invalidatesAssembly) {
       await db.videoProject.update({

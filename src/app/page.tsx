@@ -826,8 +826,8 @@ function SortableSceneCard({
   const [expandedPrompt, setExpandedPrompt] = useState(false);
   const [narrationVoice, setNarrationVoice] = useState(scene.narrationVoice || "tongtong");
   const [narrationLanguage, setNarrationLanguage] = useState(scene.narrationLang || "en");
-  const [narrationAccent, setNarrationAccent] = useState("auto");
-  const [narrationStyle, setNarrationStyle] = useState("natural");
+  const [narrationAccent, setNarrationAccent] = useState(scene.narrationAccent || "auto");
+  const [narrationStyle, setNarrationStyle] = useState(scene.narrationStyle || "natural");
 
   // ── Scene voice ↔ video sync ──
   // Generated scenes carry an AI voice (narrationUrl). The studio player
@@ -1120,7 +1120,7 @@ function SortableSceneCard({
                             )}
                           </div>
                         )}
-                        {scene.dialogue && !scene.narrationUrl && (
+                        {scene.dialogue && (
                           <div className="w-full basis-full rounded-lg border border-violet-100 bg-violet-50/40 p-2.5 space-y-2">
                             <NarrationProfileControls
                               compact
@@ -1154,7 +1154,7 @@ function SortableSceneCard({
                               >
                                 {isGeneratingNarration
                                   ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />...</>
-                                  : <><Volume2 className="h-3.5 w-3.5 mr-1" />Narrate</>
+                                  : <><Volume2 className="h-3.5 w-3.5 mr-1" />{scene.narrationUrl ? "Regenerate" : "Narrate"}</>
                                 }
                               </Button>
                             </div>

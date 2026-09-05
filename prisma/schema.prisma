@@ -96,6 +96,8 @@ model VideoScene {
   subtitleLang      String?
   burnSubtitles     Boolean      @default(false)
   narrationLang     String?
+  narrationAccent   String?
+  narrationStyle    String?
   imageUrl          String?      @db.Text
   imageBase64       String?      @db.Text
   videoUrl          String?      @db.Text

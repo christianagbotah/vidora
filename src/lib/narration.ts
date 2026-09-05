@@ -297,6 +297,8 @@ export async function generateSceneNarration(opts: {
       id: true,
       narrationUrl: true,
       narrationLang: true,
+      narrationAccent: true,
+      narrationStyle: true,
       characterIds: true,
       project: { select: { userId: true } },
     },
@@ -311,8 +313,8 @@ export async function generateSceneNarration(opts: {
   const speed = Math.max(0.5, Math.min(2, Number(opts.speed) || 1));
   const profile = normalizeNarrationProfile({
     language: opts.language || scene.narrationLang || undefined,
-    accent: opts.accent,
-    style: opts.style,
+    accent: opts.accent || scene.narrationAccent || undefined,
+    style: opts.style || scene.narrationStyle || undefined,
   });
   if (!opts.text.trim()) throw new Error("No speakable text");
   if (opts.text.length > 12_000) throw new Error("Narration text is too long");
@@ -390,7 +392,12 @@ export async function generateSceneNarration(opts: {
   if (audioFileExists(finalFilename)) {
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: finalUrl, narrationLang: profile.language },
+      data: {
+        narrationUrl: finalUrl,
+        narrationLang: profile.language,
+        narrationAccent: profile.accent,
+        narrationStyle: profile.style,
+      },
     });
     return {
       url: finalUrl,
@@ -434,7 +441,12 @@ export async function generateSceneNarration(opts: {
 
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: url, narrationLang: profile.language },
+      data: {
+        narrationUrl: url,
+        narrationLang: profile.language,
+        narrationAccent: profile.accent,
+        narrationStyle: profile.style,
+      },
     });
 
     return {
@@ -464,6 +476,8 @@ export interface NarratableScene {
   narrationUrl?: string | null;
   narrationVoice?: string | null;
   narrationLang?: string | null;
+  narrationAccent?: string | null;
+  narrationStyle?: string | null;
   characterIds?: string | null;
 }
 
@@ -504,6 +518,8 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
         narrationUrl: true,
         narrationVoice: true,
         narrationLang: true,
+        narrationAccent: true,
+        narrationStyle: true,
         characterIds: true,
       },
     });
@@ -519,6 +535,8 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
       text: scene.dialogue,
       voice,
       language: scene.narrationLang || undefined,
+      accent: scene.narrationAccent || undefined,
+      style: scene.narrationStyle || undefined,
     });
     return { ok: true, url: result.url };
   } catch (err) {

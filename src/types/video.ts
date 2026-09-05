@@ -49,6 +49,8 @@ export interface VideoScene {
   subtitleLang?: string | null;
   burnSubtitles?: boolean;
   narrationLang?: string | null;
+  narrationAccent?: string | null;
+  narrationStyle?: string | null;
   imageUrl?: string | null;
   imageBase64?: string | null;
   videoUrl?: string | null;
