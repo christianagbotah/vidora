@@ -1,8 +1,11 @@
 import crypto from "crypto";
-import { sanitizeRelPath } from "./generated-store";
+import { readFileSync } from "fs";
+import path from "path";
+import { resolvePublicAssetPath, sanitizeRelPath } from "./generated-store";
 
 const TOKEN_VERSION = 1;
 export const PROVIDER_MEDIA_TTL_SECONDS = 15 * 60;
+export const PROVIDER_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 function signingSecret(): string {
   const secret = process.env.NEXTAUTH_SECRET?.trim();
@@ -52,10 +55,33 @@ export function verifyProviderMediaToken(
   return supplied.length === wanted.length && crypto.timingSafeEqual(supplied, wanted);
 }
 
+function localGeneratedBase64(parsed: URL): string | undefined {
+  if (!parsed.pathname.startsWith("/generated/")) return undefined;
+
+  const ext = path.extname(parsed.pathname).toLowerCase();
+  if (![".png", ".jpg", ".jpeg"].includes(ext)) return undefined;
+
+  try {
+    const filePath = resolvePublicAssetPath(parsed.pathname);
+    const bytes = readFileSync(filePath);
+    if (bytes.length === 0 || bytes.length > PROVIDER_IMAGE_MAX_BYTES) return undefined;
+    return bytes.toString("base64");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Produce a short-lived URL an external rendering provider can fetch without
- * receiving the user's Vidora session cookie. Only same-origin /generated/*
- * media is signed; unrelated/external URLs pass through unchanged.
+ * Prepare image input for an external rendering provider.
+ *
+ * Z.ai's video API accepts image_url as either a URL or Base64 image bytes.
+ * For Vidora-owned same-origin /generated/* PNG/JPEG assets, prefer Base64 so
+ * the provider never has to traverse Cloudflare, session auth, cookies, DNS,
+ * or signed-media routing to fetch a private reference image. Third-party
+ * image URLs are left untouched.
+ *
+ * If a local generated file is unavailable, unsupported, or above Z.ai's 5 MB
+ * input limit, fall back to the existing short-lived signed capability URL.
  */
 export function toProviderFetchUrl(
   mediaUrl: string | undefined | null,
@@ -64,15 +90,20 @@ export function toProviderFetchUrl(
   if (!mediaUrl) return undefined;
   const normalizedOrigin = origin.replace(/\/$/, "");
   let parsed: URL;
+  let originUrl: URL;
   try {
     parsed = new URL(mediaUrl, `${normalizedOrigin}/`);
+    originUrl = new URL(normalizedOrigin);
   } catch {
     return undefined;
   }
 
   if (!/^https?:$/.test(parsed.protocol)) return undefined;
-  if (parsed.origin !== new URL(normalizedOrigin).origin) return parsed.toString();
+  if (parsed.origin !== originUrl.origin) return parsed.toString();
   if (!parsed.pathname.startsWith("/generated/")) return parsed.toString();
+
+  const inline = localGeneratedBase64(parsed);
+  if (inline) return inline;
 
   const rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
   const { exp, sig } = createProviderMediaToken(rel);
