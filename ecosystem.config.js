@@ -8,9 +8,14 @@ const commonEnv = {
   CONFIG_ENCRYPTION_KEY: process.env.CONFIG_ENCRYPTION_KEY,
   GENERATED_DIR: process.env.GENERATED_DIR,
 
+  // Provider credentials stay server-side. Capability/model selection lives in
+  // SystemConfig and can change without exposing these secrets to the browser.
   ZAI_BASE_URL: process.env.ZAI_BASE_URL,
   ZAI_API_KEY: process.env.ZAI_API_KEY,
   ZAI_CHAT_MODEL: process.env.ZAI_CHAT_MODEL || "glm-4-plus",
+  XAI_API_KEY: process.env.XAI_API_KEY,
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
+  AI_COMPATIBLE_API_KEY: process.env.AI_COMPATIBLE_API_KEY,
 
   PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
   PAYSTACK_PUBLIC_KEY: process.env.PAYSTACK_PUBLIC_KEY,
