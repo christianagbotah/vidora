@@ -20,6 +20,21 @@ async function checkFfmpeg(): Promise<boolean> {
   }
 }
 
+/**
+ * Persist review only if the project cut is still exactly the one that was
+ * loaded before preview rendering began. A second tab may regenerate/reorder a
+ * scene while ffmpeg is working; updateMany makes that race fail closed.
+ */
+async function markCurrentCutReviewed(projectId: string, expectedCutVersion: number): Promise<void> {
+  const result = await db.videoProject.updateMany({
+    where: { id: projectId, cutVersion: expectedCutVersion },
+    data: { reviewedCutVersion: expectedCutVersion, reviewedAt: new Date() },
+  });
+  if (result.count !== 1) {
+    throw new Error("Project cut changed while the full preview was being built");
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { projectId, previewOnly = false } = await req.json();
@@ -61,7 +76,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (completedScenes.length === 1) {
-      if (!previewOnly) {
+      if (previewOnly) {
+        await markCurrentCutReviewed(projectId, project.cutVersion);
+      } else {
         await db.videoProject.update({
           where: { id: projectId },
           data: { finalVideoUrl: completedScenes[0].videoUrl, status: "completed" },
@@ -71,6 +88,7 @@ export async function POST(req: NextRequest) {
         success: true,
         ...(previewOnly ? { previewVideoUrl: completedScenes[0].videoUrl } : { finalVideoUrl: completedScenes[0].videoUrl }),
         sceneCount: 1,
+        reviewedCutVersion: previewOnly ? project.cutVersion : undefined,
         message: previewOnly ? "Full preview ready" : "Single scene saved as final video",
       });
     }
@@ -155,7 +173,9 @@ export async function POST(req: NextRequest) {
 
       const resultVideoUrl = "/generated/" + resultFileName;
 
-      if (!previewOnly) {
+      if (previewOnly) {
+        await markCurrentCutReviewed(projectId, project.cutVersion);
+      } else {
         await db.videoProject.update({
           where: { id: projectId },
           data: { finalVideoUrl: resultVideoUrl, status: "completed" },
@@ -174,6 +194,7 @@ export async function POST(req: NextRequest) {
         success: true,
         ...(previewOnly ? { previewVideoUrl: resultVideoUrl } : { finalVideoUrl: resultVideoUrl }),
         sceneCount: completedScenes.length,
+        reviewedCutVersion: previewOnly ? project.cutVersion : undefined,
         estimatedDuration: durationStr,
         message: previewOnly
           ? "Full project preview ready — review it before export."
@@ -181,7 +202,6 @@ export async function POST(req: NextRequest) {
       });
     } catch (err) {
       try { await rm(workDir, { recursive: true, force: true }); } catch (_e) { /* ignore */ }
-      const msg = err instanceof Error ? err.message : "Unknown error";
       if (!previewOnly) {
         await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } });
       }
