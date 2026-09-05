@@ -1,0 +1,32 @@
+name: Apply post-generation review hardening
+
+on:
+  push:
+    branches:
+      - feature/post-generation-edit-preview
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/patch-post-generation-review-hardening.py
+      - run: git diff --check
+      - name: Commit review fixes
+        run: |
+          if git diff --quiet; then
+            echo "No review changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'src/app/api/projects/[id]/finalize-draft/route.ts' \
+            'src/app/generated/[...path]/route.ts' src/app/page.tsx
+          git commit -m "fix(editor): harden revision race and preview media access"
+          git push origin HEAD:feature/post-generation-edit-preview
