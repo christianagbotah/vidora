@@ -1005,13 +1005,22 @@ function SortableSceneCard({
                         </div>
                       )}
                       {scene.videoUrl && (
-                        <a
-                          href={scene.videoUrl}
-                          download
-                          className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700 mt-1"
-                        >
-                          <Download className="h-3.5 w-3.5" />Download video
-                        </a>
+                        <div className="mt-1 flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => onEditPrompt(scene)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-800"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />Edit &amp; Regenerate
+                          </button>
+                          <a
+                            href={scene.videoUrl}
+                            download
+                            className="inline-flex items-center gap-1 text-xs text-violet-500 hover:text-violet-700"
+                          >
+                            <Download className="h-3.5 w-3.5" />Download clip
+                          </a>
+                        </div>
                       )}
 
                       {/* Narration audio — the scene's AI voice. It also plays
@@ -1689,7 +1698,11 @@ function VidoraApp() {
      regenerate — the retry guidance points here. */
   const [editPromptScene, setEditPromptScene] = useState<VideoScene | null>(null);
   const [editPromptText, setEditPromptText] = useState("");
+  const [editReferenceCharacterId, setEditReferenceCharacterId] = useState("");
   const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+  const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
+  const [fullPreviewUrl, setFullPreviewUrl] = useState<string | null>(null);
+  const [isBuildingFullPreview, setIsBuildingFullPreview] = useState(false);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -2639,11 +2652,19 @@ function VidoraApp() {
   /* Open the scene-prompt editor prefilled with the scene's current text. */
   const handleEditScenePrompt = (scene: VideoScene) => {
     setEditPromptText(scene.enhancedPrompt || scene.prompt);
+    let linkedCharacterId = "";
+    try {
+      const parsed = scene.characterIds ? JSON.parse(scene.characterIds) : [];
+      if (Array.isArray(parsed) && typeof parsed[0] === "string") linkedCharacterId = parsed[0];
+    } catch { /* legacy malformed characterIds */ }
+    if (!linkedCharacterId && scene.referenceImageUrl) {
+      linkedCharacterId = safeCharacters.find((character) => character.imageUrl === scene.referenceImageUrl)?.id || "";
+    }
+    setEditReferenceCharacterId(linkedCharacterId);
     setEditPromptScene(scene);
   };
 
-  /* Save the edited prompt (clears the stale enhanced prompt + error) and
-     optionally regenerates the scene right away. */
+  /* Save a correction and optionally replace only this scene. */
   const handleSaveScenePrompt = async (andGenerate: boolean) => {
     if (!currentProject || !editPromptScene) return;
     const text = editPromptText.trim();
@@ -2653,39 +2674,58 @@ function VidoraApp() {
     }
     setIsSavingPrompt(true);
     const sceneId = editPromptScene.id;
+    const selectedCharacter = safeCharacters.find((character) => character.id === editReferenceCharacterId);
     try {
-      const res = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        // Replace the prompt, clear the stale enhanced prompt + error so
-        // the new text is exactly what generation uses.
-        body: JSON.stringify({
-          prompt: text,
-          enhancedPrompt: null,
-          status: "pending",
-          errorMessage: null,
-          taskId: null,
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast({ title: "Could not save prompt", description: getApiError(data), variant: "destructive" });
-        return;
-      }
-      setEditPromptScene(null);
-      // Suppress the studio's pending-scene auto-generation BEFORE the
-      // refresh lands — refreshProject() re-renders and the auto-gen effect
-      // would otherwise race past the check below ("Save Only" contract).
-      if (!andGenerate) autoGenFiredRef.current.add(currentProject.id);
-      await refreshProject();
       if (andGenerate) {
-        toast({ title: "Prompt updated", description: "Regenerating this scene…" });
-        handleGenerateSingle(sceneId, text);
+        const prepRes = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}/regenerate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: text,
+            characterId: selectedCharacter?.id || null,
+          }),
+        });
+        const prep = await prepRes.json();
+        if (!prepRes.ok || !prep.success) {
+          toast({ title: "Could not prepare replacement", description: getApiError(prep), variant: "destructive" });
+          return;
+        }
+        setEditPromptScene(null);
+        setFullPreviewUrl(null);
+        await refreshProject();
+        toast({
+          title: "Scene correction saved",
+          description: selectedCharacter?.imageUrl
+            ? `Using ${selectedCharacter.name}'s reference image for the replacement clip.`
+            : "Regenerating only this scene. The previous clip is preserved until replacement succeeds.",
+        });
+        await handleGenerateSingle(sceneId, text);
       } else {
-        toast({ title: "Prompt updated", description: "Use Generate Video when you're ready." });
+        const res = await fetch(`/api/projects/${currentProject.id}/scenes/${sceneId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: text,
+            enhancedPrompt: null,
+            errorMessage: null,
+            ...(selectedCharacter ? {
+              characterIds: JSON.stringify([selectedCharacter.id]),
+              referenceImageUrl: selectedCharacter.imageUrl || null,
+            } : {}),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          toast({ title: "Could not save scene edit", description: getApiError(data), variant: "destructive" });
+          return;
+        }
+        setEditPromptScene(null);
+        setFullPreviewUrl(null);
+        await refreshProject();
+        toast({ title: "Scene edit saved", description: "The current clip is unchanged until you choose Regenerate." });
       }
     } catch {
-      toast({ title: "Could not save prompt", variant: "destructive" });
+      toast({ title: "Could not save scene edit", variant: "destructive" });
     } finally {
       setIsSavingPrompt(false);
     }
@@ -3953,6 +3993,38 @@ function VidoraApp() {
       toast({ title: "Error", variant: "destructive" });
     } finally {
       setPublishingPlatform(null);
+    }
+  };
+
+  const handleBuildFullPreview = async () => {
+    if (!currentProject || isBuildingFullPreview) return;
+    if (safeScenes.length === 0 || safeScenes.some((scene) => !scene.videoUrl)) {
+      toast({
+        title: "Finish all scenes first",
+        description: `Full preview needs every scene complete (${completedSceneCount}/${safeScenes.length} ready).`,
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsBuildingFullPreview(true);
+    try {
+      const res = await fetch("/api/concatenate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentProject.id, previewOnly: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.previewVideoUrl) {
+        toast({ title: "Preview failed", description: getApiError(data, "Could not build the full preview."), variant: "destructive" });
+        return;
+      }
+      setFullPreviewUrl(data.previewVideoUrl);
+      setFullPreviewOpen(true);
+      toast({ title: "Full preview ready", description: "Review the entire video before exporting or downloading." });
+    } catch {
+      toast({ title: "Preview failed", description: "Could not build the full project preview.", variant: "destructive" });
+    } finally {
+      setIsBuildingFullPreview(false);
     }
   };
 
@@ -7104,6 +7176,18 @@ function VidoraApp() {
                     <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Checking...</>
                   ) : (
                     <><Shield className="h-4 w-4 mr-1.5" />Check Continuity</>
+                  )}
+                </Button>
+                <Button
+                  onClick={handleBuildFullPreview}
+                  disabled={isBuildingFullPreview || safeScenes.length === 0 || completedSceneCount !== safeScenes.length || projectGenerationInterrupted}
+                  variant="outline"
+                  className="text-violet-600 border-violet-200 hover:bg-violet-50"
+                >
+                  {isBuildingFullPreview ? (
+                    <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Building Preview...</>
+                  ) : (
+                    <><Eye className="h-4 w-4 mr-1.5" />Preview Full Video</>
                   )}
                 </Button>
                 <Button
@@ -10589,6 +10673,32 @@ function VidoraApp() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={fullPreviewOpen} onOpenChange={setFullPreviewOpen}>
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Play className="h-5 w-5 text-violet-600" />Full Video Preview</DialogTitle>
+            <DialogDescription>
+              Watch the complete current cut before export. If anything is wrong, close this preview, edit that scene, and regenerate only the replacement.
+            </DialogDescription>
+          </DialogHeader>
+          {fullPreviewUrl ? (
+            <div className="space-y-3">
+              <video src={fullPreviewUrl} controls autoPlay className="w-full max-h-[70vh] rounded-xl bg-black" preload="metadata" />
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{completedSceneCount} scenes in the current cut</span>
+                <span>Preview generation does not export or charge download tokens.</span>
+              </div>
+            </div>
+          ) : (
+            <div className="py-12 flex items-center justify-center"><Loader2 className="h-7 w-7 animate-spin text-violet-500" /></div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFullPreviewOpen(false)}>Back to Editing</Button>
+            <Button onClick={() => { setFullPreviewOpen(false); setExportDialogOpen(true); }} disabled={!fullPreviewUrl}>Export This Cut</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ═══════════════════════════════════════════════════════
           SCENE PROMPT EDITOR
           For failed / content-filter-flagged scenes (and any unrendered
@@ -10599,14 +10709,45 @@ function VidoraApp() {
       <Dialog open={Boolean(editPromptScene)} onOpenChange={(open) => !open && setEditPromptScene(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Scene Prompt</DialogTitle>
+            <DialogTitle>{editPromptScene?.videoUrl ? "Edit & Regenerate Scene" : "Edit Scene Prompt"}</DialogTitle>
             <DialogDescription>
-              {editPromptScene?.status === "failed"
-                ? "Rephrase the scene description (e.g. replace real celebrity or brand names with your own description), then regenerate."
-                : "Adjust the scene description used for generation."}
+              {editPromptScene?.videoUrl
+                ? "Correct this completed scene without rebuilding the project. Choose the exact character/photo the replacement must follow."
+                : editPromptScene?.status === "failed"
+                  ? "Rephrase the scene and optionally bind a character reference before retrying."
+                  : "Adjust the scene description and character reference used for generation."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {safeCharacters.some((character) => character.imageUrl) && (
+              <div className="space-y-2">
+                <Label>Character / face reference</Label>
+                <Select value={editReferenceCharacterId || "none"} onValueChange={(value) => setEditReferenceCharacterId(value === "none" ? "" : value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose the person/character this scene must use" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Keep current scene reference</SelectItem>
+                    {safeCharacters.filter((character) => character.imageUrl).map((character) => (
+                      <SelectItem key={character.id} value={character.id}>{character.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {(() => {
+                  const selected = safeCharacters.find((character) => character.id === editReferenceCharacterId);
+                  return selected?.imageUrl ? (
+                    <div className="flex items-center gap-3 rounded-lg border border-violet-100 bg-violet-50/50 p-2.5">
+                      <img src={selected.imageUrl} alt={selected.name} className="h-14 w-14 rounded-lg object-cover border bg-white" />
+                      <div>
+                        <p className="text-sm font-semibold">Use {selected.name}'s uploaded image</p>
+                        <p className="text-xs text-muted-foreground">Vidora sends this image as the direct reference for the replacement video.</p>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            )}
+            <Label>Correction / scene prompt</Label>
             <Textarea
               value={editPromptText}
               onChange={(e) => setEditPromptText(e.target.value)}
@@ -10626,7 +10767,7 @@ function VidoraApp() {
                 onClick={() => handleSaveScenePrompt(true)}
               >
                 {isSavingPrompt ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1.5" />}
-                Save &amp; Generate
+                {editPromptScene?.videoUrl ? "Save & Regenerate Scene" : "Save & Generate"}
               </Button>
               <Button
                 variant="outline"

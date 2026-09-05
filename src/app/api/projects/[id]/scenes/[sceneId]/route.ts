@@ -19,7 +19,8 @@ export async function PUT(
     const {
       prompt, enhancedPrompt, duration, transition, status, imageUrl,
       mood, cameraMove, lighting, narrationVoice, narrationLang,
-      title, visualNote, dialogue,
+      title, visualNote, dialogue, characterIds, referenceImageUrl,
+      videoUrl, previousVideoUrl,
       // Internal-state resets (scene prompt editor + retry flow): clear the
       // stale error/task so the scene is treated as a fresh pending scene.
       errorMessage, taskId,
@@ -54,11 +55,25 @@ export async function PUT(
         ...(title !== undefined && { title: title || null }),
         ...(visualNote !== undefined && { visualNote: visualNote || null }),
         ...(dialogue !== undefined && { dialogue: dialogue || null }),
+        ...(characterIds !== undefined && { characterIds: characterIds || null }),
+        ...(referenceImageUrl !== undefined && { referenceImageUrl: referenceImageUrl || null }),
+        ...(videoUrl !== undefined && { videoUrl: videoUrl || null }),
+        ...(previousVideoUrl !== undefined && { previousVideoUrl: previousVideoUrl || null }),
         // Prompt-editor / retry resets — null clears the stale state.
         ...(errorMessage !== undefined && { errorMessage: errorMessage || null }),
         ...(taskId !== undefined && { taskId: taskId || null }),
       },
     });
+
+    const invalidatesAssembly =
+      prompt !== undefined || enhancedPrompt !== undefined || characterIds !== undefined ||
+      referenceImageUrl !== undefined || videoUrl === null;
+    if (invalidatesAssembly) {
+      await db.videoProject.update({
+        where: { id },
+        data: { finalVideoUrl: null, ...(videoUrl === null ? { status: "draft" } : {}) },
+      });
+    }
 
     return NextResponse.json({ success: true, scene });
   } catch (error) {

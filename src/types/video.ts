@@ -52,6 +52,7 @@ export interface VideoScene {
   imageUrl?: string | null;
   imageBase64?: string | null;
   videoUrl?: string | null;
+  previousVideoUrl?: string | null;
   taskId?: string | null;
   duration: number;
   transition: string;

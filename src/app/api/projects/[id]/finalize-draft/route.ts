@@ -166,6 +166,10 @@ export async function POST(
       const charIdByName = new Map(
         finalCharacters.map((character) => [normalizedCharacterName(character.name), character.id]),
       );
+      const charById = new Map(finalCharacters.map((character) => [character.id, character]));
+      const picturedSubjects = finalCharacters.filter(
+        (character) => Boolean(character.imageUrl) && !/narrator/i.test(character.role || "") && !/narrator/i.test(character.name),
+      );
 
       // Drafts should not normally contain rows yet, but replacing them makes
       // a retry before generation deterministic and prevents duplicate scenes.
@@ -174,9 +178,21 @@ export async function POST(
       const duration = Math.max(1, Math.floor(existingProject.targetDuration / scenesToCreate.length));
       for (let index = 0; index < scenesToCreate.length; index++) {
         const scene = scenesToCreate[index];
-        const linkedIds = (scene.characterNames || [])
+        let linkedIds = (scene.characterNames || [])
           .map((name) => charIdByName.get(normalizedCharacterName(name)))
           .filter((characterId): characterId is string => !!characterId);
+
+        // Birthday/custom projects commonly have one uploaded subject photo,
+        // while an LLM scene parse may omit the subject name on atmospheric or
+        // closing scenes. In that narrow case, keep identity continuity by
+        // binding the one pictured subject instead of silently switching faces.
+        if (linkedIds.length === 0 && picturedSubjects.length === 1) {
+          linkedIds = [picturedSubjects[0].id];
+        }
+        const linkedWithImages = linkedIds
+          .map((characterId) => charById.get(characterId))
+          .filter((character): character is NonNullable<typeof character> => Boolean(character?.imageUrl));
+        const directReference = linkedWithImages.length === 1 ? linkedWithImages[0].imageUrl : null;
 
         await tx.videoScene.create({
           data: {
@@ -187,6 +203,7 @@ export async function POST(
             dialogue: scene.dialogue || null,
             visualNote: scene.visualNote || null,
             characterIds: linkedIds.length ? JSON.stringify(linkedIds) : null,
+            referenceImageUrl: directReference,
             duration,
             transition: "fade",
             musicTrackUrl: snapshot.parsedDefaultMusic?.url || null,
