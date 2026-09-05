@@ -78,6 +78,19 @@ export function resolveElevenLabsProfileVoice(
   );
 }
 
+/**
+ * ElevenLabs' `language_code` field is ISO 639-1. Most Vidora dubbing codes
+ * follow that convention, but `ga` is intentionally Vidora's Ghanaian Ga
+ * language code while ISO 639-1 `ga` means Irish. Never send that collision
+ * to the provider. Three-letter internal codes (for example `twi`/`dag`) are
+ * also left to text auto-detection rather than sending an invalid override.
+ */
+export function elevenLabsLanguageCode(language: string): string | null {
+  const normalized = language.trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "ga") return null;
+  return /^[a-z]{2}$/.test(normalized) ? normalized : null;
+}
+
 function combinedDirection(request: ProviderSpeechOptions, profile: VoiceProfile): string | null {
   if (request.direction?.trim()) return request.direction.trim();
   return styleDelivery(profile.style).direction;
@@ -102,9 +115,7 @@ async function elevenLabsProfileSpeech(
   const direction = combinedDirection(request, profile);
   const text = baseProvider.formatElevenLabsPerformanceText(request.input, direction, model);
   const delivery = styleDelivery(profile.style);
-  const languageCode = /^[a-z]{2}$/i.test(profile.language) && profile.language !== "auto"
-    ? profile.language.toLowerCase()
-    : null;
+  const languageCode = elevenLabsLanguageCode(profile.language);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
