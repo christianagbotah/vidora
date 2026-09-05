@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { resolveZaiTtsModel } from "@/lib/zai";
+import {
+  DEFAULT_ZAI_TTS_BASE_URL,
+  buildZaiTtsSpeechEndpoint,
+  resolveZaiTtsBaseUrl,
+  resolveZaiTtsModel,
+} from "@/lib/zai-tts-compat";
 
 describe("Z.AI TTS model resolution", () => {
   test("uses the explicit speech model when provided", () => {
@@ -13,5 +18,27 @@ describe("Z.AI TTS model resolution", () => {
   test("falls back to glm-tts instead of sending an empty model", () => {
     expect(resolveZaiTtsModel("", "")).toBe("glm-tts");
     expect(resolveZaiTtsModel(undefined, undefined)).toBe("glm-tts");
+  });
+});
+
+describe("Z.AI dedicated TTS endpoint resolution", () => {
+  test("defaults to the documented BigModel GLM-TTS base URL", () => {
+    expect(resolveZaiTtsBaseUrl()).toBe(DEFAULT_ZAI_TTS_BASE_URL);
+    expect(DEFAULT_ZAI_TTS_BASE_URL).toBe("https://open.bigmodel.cn/api/paas/v4");
+  });
+
+  test("normalizes trailing slashes", () => {
+    expect(resolveZaiTtsBaseUrl(" https://open.bigmodel.cn/api/paas/v4/// ")).toBe(
+      "https://open.bigmodel.cn/api/paas/v4",
+    );
+  });
+
+  test("builds the speech endpoint exactly once", () => {
+    expect(buildZaiTtsSpeechEndpoint("https://open.bigmodel.cn/api/paas/v4")).toBe(
+      "https://open.bigmodel.cn/api/paas/v4/audio/speech",
+    );
+    expect(buildZaiTtsSpeechEndpoint("https://open.bigmodel.cn/api/paas/v4/audio/speech")).toBe(
+      "https://open.bigmodel.cn/api/paas/v4/audio/speech",
+    );
   });
 });
