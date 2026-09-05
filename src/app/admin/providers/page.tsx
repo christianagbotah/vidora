@@ -52,6 +52,13 @@ function SecretBadge({ configs, configKey, env }: { configs: ConfigMap; configKe
   );
 }
 
+function providerLabel(provider: string): string {
+  if (provider === "xai") return "Grok / xAI";
+  if (provider === "compatible") return "OpenAI-compatible API";
+  if (provider === "none") return "None";
+  return "Z.ai";
+}
+
 export default function AIProviderAdminPage() {
   const [configs, setConfigs] = useState<ConfigMap>({});
   const [form, setForm] = useState<FormState>({});
@@ -132,12 +139,23 @@ export default function AIProviderAdminPage() {
   };
 
   const textProvider = form.ai_text_provider || "zai";
+  const fallbackProvider = form.ai_text_fallback_provider || "zai";
   const ttsProvider = form.ai_tts_provider || "zai";
+  const usesXai = textProvider === "xai" || fallbackProvider === "xai";
+  const usesCompatible = textProvider === "compatible" || fallbackProvider === "compatible";
+
   const effectiveTextLabel = useMemo(() => {
     if (textProvider === "xai") return form.ai_text_model || form.xai_text_model || "grok-4.6";
     if (textProvider === "compatible") return form.ai_text_model || form.compatible_text_model || "Not set";
     return form.ai_text_model || "Z.ai default";
   }, [form, textProvider]);
+
+  const fallbackModelLabel = useMemo(() => {
+    if (fallbackProvider === "none") return "Disabled";
+    if (fallbackProvider === "xai") return form.xai_text_model || "grok-4.6";
+    if (fallbackProvider === "compatible") return form.compatible_text_model || "Not set";
+    return "Z.ai default";
+  }, [fallbackProvider, form.compatible_text_model, form.xai_text_model]);
 
   if (loading) {
     return <div className="min-h-screen grid place-items-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
@@ -198,7 +216,7 @@ export default function AIProviderAdminPage() {
               </div>
               <div className="space-y-2">
                 <Label>Fallback text provider</Label>
-                <Select value={form.ai_text_fallback_provider || "zai"} onValueChange={(value) => setField("ai_text_fallback_provider", value)}>
+                <Select value={fallbackProvider} onValueChange={(value) => setField("ai_text_fallback_provider", value)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No automatic fallback</SelectItem>
@@ -208,33 +226,61 @@ export default function AIProviderAdminPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2 md:col-span-2">
-                <Label>Active-model override <span className="text-muted-foreground">(optional)</span></Label>
-                <Input value={form.ai_text_model || ""} onChange={(event) => setField("ai_text_model", event.target.value)} placeholder="Leave blank to use the provider default" />
-                <p className="text-xs text-muted-foreground">Current effective model: <strong>{effectiveTextLabel}</strong></p>
+
+              <div className="md:col-span-2 grid gap-3 rounded-xl border bg-muted/25 p-4 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Primary route</div>
+                  <div className="mt-1 font-semibold">{providerLabel(textProvider)}</div>
+                  <div className="text-sm text-muted-foreground">{effectiveTextLabel}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Fallback route</div>
+                  <div className="mt-1 font-semibold">{providerLabel(fallbackProvider)}</div>
+                  <div className="text-sm text-muted-foreground">{fallbackModelLabel}</div>
+                </div>
               </div>
 
-              {textProvider === "xai" && (
+              <div className="space-y-2 md:col-span-2">
+                <Label>Active-model override <span className="text-muted-foreground">(optional)</span></Label>
+                <Input value={form.ai_text_model || ""} onChange={(event) => setField("ai_text_model", event.target.value)} placeholder="Leave blank to use the active provider default" />
+                <p className="text-xs text-muted-foreground">
+                  This override applies only to the primary route. A different fallback always uses its own provider-specific model below.
+                </p>
+              </div>
+
+              {usesXai && (
                 <>
+                  <div className="md:col-span-2 flex items-center gap-2 pt-1">
+                    <Badge variant="outline">Grok / xAI</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {textProvider === "xai" && fallbackProvider === "xai" ? "Primary and fallback" : textProvider === "xai" ? "Primary provider" : "Fallback provider"}
+                    </span>
+                  </div>
                   <div className="space-y-2">
                     <Label>xAI base URL</Label>
                     <Input value={form.xai_base_url || ""} onChange={(event) => setField("xai_base_url", event.target.value)} />
                   </div>
                   <div className="space-y-2">
-                    <Label>xAI default model</Label>
+                    <Label>xAI provider model</Label>
                     <Input value={form.xai_text_model || ""} onChange={(event) => setField("xai_text_model", event.target.value)} placeholder="grok-4.6" />
                   </div>
                 </>
               )}
 
-              {textProvider === "compatible" && (
+              {usesCompatible && (
                 <>
+                  <div className="md:col-span-2 flex items-center gap-2 pt-1">
+                    <Badge variant="outline">OpenAI-compatible</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {textProvider === "compatible" && fallbackProvider === "compatible" ? "Primary and fallback" : textProvider === "compatible" ? "Primary provider" : "Fallback provider"}
+                    </span>
+                  </div>
                   <div className="space-y-2">
                     <Label>Compatible API base URL</Label>
                     <Input value={form.compatible_base_url || ""} onChange={(event) => setField("compatible_base_url", event.target.value)} placeholder="https://provider.example/v1" />
                   </div>
                   <div className="space-y-2">
-                    <Label>Compatible API model</Label>
+                    <Label>Compatible provider model</Label>
                     <Input value={form.compatible_text_model || ""} onChange={(event) => setField("compatible_text_model", event.target.value)} />
                   </div>
                 </>
