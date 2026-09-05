@@ -235,8 +235,7 @@ function buildAudioFilter(layers: AudioLayer[]): string {
   const filters: string[] = [];
   const labels: string[] = [];
   layers.forEach((layer, index) => {
-    const pieces = [
-      `[${layer.inputIndex}:a]`,
+    const operations = [
       layer.trimTo ? `atrim=0:${layer.trimTo.toFixed(3)}` : "",
       "asetpts=PTS-STARTPTS",
       `volume=${layer.volume.toFixed(4)}`,
@@ -244,10 +243,10 @@ function buildAudioFilter(layers: AudioLayer[]): string {
         ? `afade=t=out:st=${Math.max(0, layer.trimTo - Math.min(1.2, layer.trimTo / 3)).toFixed(3)}:d=${Math.min(1.2, layer.trimTo / 3).toFixed(3)}`
         : "",
       `adelay=${layer.startMs}|${layer.startMs}`,
-      `[a${index}]`,
-    ].filter(Boolean).join(",");
-    filters.push(pieces);
-    labels.push(`[a${index}]`);
+    ].filter(Boolean);
+    const output = `a${index}`;
+    filters.push(`[${layer.inputIndex}:a]${operations.join(",")}[${output}]`);
+    labels.push(`[${output}]`);
   });
   filters.push(`${labels.join("")}amix=inputs=${labels.length}:duration=longest:normalize=0[aout]`);
   return filters.join(";");
