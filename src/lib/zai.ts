@@ -217,7 +217,7 @@ export function classifyError(err: unknown): ZAIError {
 
 // ─── Retry / Timeout Primitives ─────────────────────────────────────────────
 
-interface RetryOptions {
+export interface RetryOptions {
   maxRetries?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
@@ -258,7 +258,7 @@ function backoffDelay(attempt: number, base: number, max: number): number {
 /**
  * Run an async operation with a timeout and retry-on-retryable-error semantics.
  */
-async function withRetry<T>(fn: (signal: AbortSignal) => Promise<T>, opts: RetryOptions = {}): Promise<T> {
+export async function withRetry<T>(fn: (signal: AbortSignal) => Promise<T>, opts: RetryOptions = {}): Promise<T> {
   const config = { ...DEFAULT_RETRY, ...opts };
   const { maxRetries, baseDelayMs, maxDelayMs, timeoutMs, label } = config;
 
@@ -292,7 +292,10 @@ async function withRetry<T>(fn: (signal: AbortSignal) => Promise<T>, opts: Retry
       console.warn(
         `[ZAI] ${label} attempt ${attempt}/${maxRetries} failed (${classified.kind}), retrying in ${delay}ms…`
       );
-      await sleep(delay, controller.signal);
+      // The attempt controller belongs only to the provider operation. A timeout
+      // means that signal is already aborted; reusing it for backoff would abort
+      // the retry delay immediately and prevent the next attempt from running.
+      await sleep(delay);
     }
   }
 
@@ -1135,7 +1138,7 @@ const DEFAULT_IMAGE_MODEL = "cogview-4-250304";
 
 interface ImageCompatBody {
   prompt: string;
-  size?: string;
+  size?: CreateImageGenerationBody["size"];
 }
 
 /** Download a generated image URL and return it as base64. */
