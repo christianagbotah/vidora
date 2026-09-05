@@ -27,6 +27,9 @@
       }
     ],
     "paths": {
+      "@/lib/zai": [
+        "./src/lib/zai-tts-compat.ts"
+      ],
       "@/*": [
         "./src/*"
       ]
