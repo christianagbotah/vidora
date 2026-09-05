@@ -10,5 +10,5 @@ export function withClientSceneVideoUrl<T extends { id: string; videoUrl: string
   return {
     ...scene,
     videoUrl: clientSceneVideoUrl(scene.id, scene.videoUrl),
-  };
+  } as T;
 }
