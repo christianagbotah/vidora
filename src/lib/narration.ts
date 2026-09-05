@@ -1,13 +1,12 @@
 /**
  * Vidora — shared scene narration (TTS) library.
  *
- * Every provider TTS call for scene narration passes through this module.
- * Billing is therefore enforced at the provider boundary rather than being
- * left to individual API routes or background callers.
+ * Every billable scene TTS call passes through this module. Dialogue is kept
+ * speaker-aware so character conversations are synthesized as intentional
+ * lines instead of being flattened into one generic narrator voice.
  */
 
 import crypto from "crypto";
-import { zai } from "@/lib/zai";
 import { db } from "@/lib/db";
 import { PRICING } from "@/lib/pricing";
 import { deductTokensForOperation } from "@/lib/tokens";
@@ -15,6 +14,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { copyFile, unlink, writeFile } from "fs/promises";
 import path from "path";
+import {
+  getAIProviderSettings,
+  synthesizeProviderSpeech,
+} from "@/lib/ai-provider-router";
 import {
   writeAudioFile,
   deleteAudioFile,
@@ -40,20 +43,58 @@ export const DEFAULT_TTS_VOICE = "tongtong";
 const ATTRIBUTION_PREFIX_RE =
   /^\s*(?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?\s*:\s*/;
 
+const ATTRIBUTION_CAPTURE_RE =
+  /^\s*((?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?)\s*:\s*(.*)$/;
+
+function cleanSpokenText(value: string): string {
+  return value
+    .trim()
+    .replace(/^["\u201C]+/, "")
+    .replace(/["\u201D]+$/, "")
+    .trim();
+}
+
 export function stripSpeakerAttributions(text: string): string {
   return text
     .split("\n")
-    .map((line) =>
-      line
-        .replace(ATTRIBUTION_PREFIX_RE, "")
-        .trim()
-        .replace(/^["\u201C]+/, "")
-        .replace(/["\u201D]+$/, "")
-        .trim()
-    )
+    .map((line) => cleanSpokenText(line.replace(ATTRIBUTION_PREFIX_RE, "")))
     .filter(Boolean)
     .join(" ")
     .trim();
+}
+
+export interface DialogueSegment {
+  speaker: string | null;
+  text: string;
+}
+
+/**
+ * Parse screenplay-style dialogue without losing speaker identity. Continuation
+ * lines are attached to the preceding speaker so multiline model output still
+ * becomes one coherent performance.
+ */
+export function parseDialogueSegments(text: string): DialogueSegment[] {
+  const segments: DialogueSegment[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const attributed = line.match(ATTRIBUTION_CAPTURE_RE);
+    if (attributed) {
+      const speaker = attributed[1]
+        .replace(/\s*\([^)]*\)\s*$/, "")
+        .trim();
+      const spoken = cleanSpokenText(attributed[2]);
+      if (spoken) segments.push({ speaker, text: spoken });
+      continue;
+    }
+
+    const spoken = cleanSpokenText(line);
+    if (!spoken) continue;
+    const previous = segments[segments.length - 1];
+    if (previous) previous.text = `${previous.text} ${spoken}`.trim();
+    else segments.push({ speaker: null, text: spoken });
+  }
+  return segments;
 }
 
 export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
@@ -73,8 +114,14 @@ export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
 }
 
+/**
+ * Normalize provider output (WAV or MP3) into one PCM WAV file. Re-encoding is
+ * deliberate: mixed provider chunks may not share codecs/containers, and a
+ * stream-copy concat can produce an invalid file with a .wav extension.
+ */
 export async function concatWavChunks(chunkPaths: string[], outputPath: string): Promise<boolean> {
-  if (chunkPaths.length === 1) {
+  if (chunkPaths.length === 0) return false;
+  if (chunkPaths.length === 1 && path.extname(chunkPaths[0]).toLowerCase() === ".wav") {
     try {
       await copyFile(chunkPaths[0], outputPath);
       return true;
@@ -95,13 +142,16 @@ export async function concatWavChunks(chunkPaths: string[], outputPath: string):
     await writeFile(listFile, listContent, "utf8");
     await execFileAsync(
       "ffmpeg",
-      ["-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath],
-      { timeout: 30_000 }
+      [
+        "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", listFile,
+        "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", outputPath,
+      ],
+      { timeout: 60_000 }
     );
     return true;
   } catch (err) {
     console.error(
-      "[narration] ffmpeg concat failed:",
+      "[narration] ffmpeg audio concat failed:",
       err instanceof Error ? err.message : "unknown error"
     );
     return false;
@@ -121,11 +171,30 @@ export interface NarrationResult {
   replayed?: boolean;
 }
 
-function narrationFingerprint(opts: {
-  sceneId: string;
+interface PlannedSpeechChunk {
+  speaker: string | null;
   text: string;
   voice: string;
+}
+
+function normalizeName(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+function speakerCandidates(speaker: string): string[] {
+  const clean = speaker
+    .replace(/\s+(?:and|&)\s+/gi, "|")
+    .replace(/\s*[,+]\s*/g, "|");
+  return clean.split("|").map(normalizeName).filter(Boolean);
+}
+
+function narrationFingerprint(opts: {
+  sceneId: string;
+  chunks: PlannedSpeechChunk[];
   speed: number;
+  provider: string;
+  providerModel: string;
+  providerVoiceConfig: unknown;
 }): string {
   return crypto
     .createHash("sha256")
@@ -139,11 +208,54 @@ function narrationFilename(sceneId: string, fingerprint: string): string {
   return `narration_${safeScene}_${fingerprint}.wav`;
 }
 
+async function buildSpeechPlan(opts: {
+  text: string;
+  defaultVoice: string;
+  characterIds: string | null;
+}): Promise<PlannedSpeechChunk[]> {
+  const segments = parseDialogueSegments(opts.text);
+  if (segments.length === 0) return [];
+
+  const characterVoice = new Map<string, string>();
+  try {
+    const ids: unknown = JSON.parse(opts.characterIds || "[]");
+    if (Array.isArray(ids) && ids.length > 0) {
+      const chars = await db.character.findMany({
+        where: { id: { in: ids.filter((id): id is string => typeof id === "string") } },
+        select: { name: true, voiceId: true },
+      });
+      for (const character of chars) {
+        characterVoice.set(normalizeName(character.name), character.voiceId || opts.defaultVoice);
+      }
+    }
+  } catch {
+    // Malformed legacy characterIds simply use the default logical voice.
+  }
+
+  const output: PlannedSpeechChunk[] = [];
+  for (const segment of segments) {
+    let voice = opts.defaultVoice;
+    if (segment.speaker) {
+      for (const candidate of speakerCandidates(segment.speaker)) {
+        const matched = characterVoice.get(candidate);
+        if (matched) {
+          voice = matched;
+          break;
+        }
+      }
+    }
+    for (const chunk of splitTextIntoChunks(segment.text, 700)) {
+      output.push({ speaker: segment.speaker, text: chunk, voice });
+    }
+  }
+  return output;
+}
+
 /**
- * Generate narration and charge the owning user exactly once for the logical
- * text/voice/speed operation. A failed/ambiguous provider call is NOT
- * automatically refunded: retrying the same intent reuses the same token
- * transaction instead of charging the user again.
+ * Generate a complete scene performance and charge the owning user exactly
+ * once for the logical performance. Each explicitly attributed character line
+ * may use that character's configured voice; group/narrator lines use the
+ * scene default voice.
  */
 export async function generateSceneNarration(opts: {
   sceneId: string;
@@ -156,6 +268,7 @@ export async function generateSceneNarration(opts: {
     select: {
       id: true,
       narrationUrl: true,
+      characterIds: true,
       project: { select: { userId: true } },
     },
   });
@@ -165,18 +278,35 @@ export async function generateSceneNarration(opts: {
     throw new Error("Guest/demo projects cannot use billable narration generation");
   }
 
-  const voice = (opts.voice || DEFAULT_TTS_VOICE).toLowerCase();
+  const defaultVoice = (opts.voice || DEFAULT_TTS_VOICE).trim().toLowerCase();
   const speed = Math.max(0.5, Math.min(2, Number(opts.speed) || 1));
-  const text = stripSpeakerAttributions(opts.text);
-  if (!text) {
-    throw new Error("No speakable text after stripping speaker attributions");
-  }
-  if (text.length > 12_000) {
-    throw new Error("Narration text is too long");
-  }
+  if (!opts.text.trim()) throw new Error("No speakable text");
+  if (opts.text.length > 12_000) throw new Error("Narration text is too long");
 
-  const chunks = splitTextIntoChunks(text);
-  const fingerprint = narrationFingerprint({ sceneId: scene.id, text, voice, speed });
+  const chunks = await buildSpeechPlan({
+    text: opts.text,
+    defaultVoice,
+    characterIds: scene.characterIds,
+  });
+  if (chunks.length === 0) throw new Error("No speakable dialogue was found");
+
+  const providerSettings = await getAIProviderSettings();
+  const providerModel = providerSettings.ttsProvider === "elevenlabs"
+    ? (providerSettings.ttsModel || "eleven_v3")
+    : (providerSettings.ttsModel || "zai-tts");
+  const fingerprint = narrationFingerprint({
+    sceneId: scene.id,
+    chunks,
+    speed,
+    provider: providerSettings.ttsProvider,
+    providerModel,
+    providerVoiceConfig: providerSettings.ttsProvider === "elevenlabs"
+      ? {
+          default: providerSettings.elevenLabsDefaultVoiceId,
+          map: providerSettings.elevenLabsVoiceMap,
+        }
+      : null,
+  });
   const finalFilename = narrationFilename(scene.id, fingerprint);
   const finalPath = getAudioPath(finalFilename);
   const finalUrl = `/api/audio/${finalFilename}`;
@@ -184,8 +314,6 @@ export async function generateSceneNarration(opts: {
   const tokensToCharge = chunks.length * PRICING.tts.tokens;
   const costUsd = chunks.length * PRICING.tts.costUsd;
 
-  // A matching persisted file is reusable only when the ledger also proves
-  // that this exact logical operation was charged previously.
   if (scene.narrationUrl === finalUrl && audioFileExists(finalFilename)) {
     const existingCharge = await db.tokenTransaction.findUnique({
       where: { idempotencyKey: operationKey },
@@ -212,7 +340,7 @@ export async function generateSceneNarration(opts: {
   const deduction = await deductTokensForOperation({
     userId,
     operation: "tts",
-    description: `Generate narration for scene ${scene.id} (${chunks.length} TTS call${chunks.length === 1 ? "" : "s"})`,
+    description: `Generate ${chunks.length}-part scene dialogue performance for scene ${scene.id}`,
     referenceId: scene.id,
     idempotencyKey: operationKey,
     customTokens: tokensToCharge,
@@ -222,12 +350,10 @@ export async function generateSceneNarration(opts: {
     throw new Error(deduction.error || "Insufficient tokens for narration generation");
   }
 
-  // If the file appeared between the pre-check and the atomic debit, reuse it.
-  // This covers concurrent retries without another provider call.
   if (audioFileExists(finalFilename)) {
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: finalUrl, narrationVoice: voice },
+      data: { narrationUrl: finalUrl, narrationVoice: defaultVoice },
     });
     return {
       url: finalUrl,
@@ -245,19 +371,13 @@ export async function generateSceneNarration(opts: {
   const tempChunkPaths: string[] = [];
   try {
     for (let i = 0; i < chunks.length; i++) {
-      const arrayBuffer = await zai.tts({
-        input: chunks[i],
-        voice,
+      const speech = await synthesizeProviderSpeech({
+        input: chunks[i].text,
+        voice: chunks[i].voice,
         speed,
-        retry: {
-          label: `TTS chunk ${i + 1}/${chunks.length}`,
-          timeoutMs: 120_000,
-          maxRetries: 4,
-        },
       });
-      const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-      const tempFilename = `chunk_${scene.id}_${fingerprint}_${i}_${crypto.randomUUID()}.wav`;
-      tempChunkPaths.push(writeAudioFile(tempFilename, buffer));
+      const tempFilename = `chunk_${scene.id}_${fingerprint}_${i}_${crypto.randomUUID()}.${speech.extension}`;
+      tempChunkPaths.push(writeAudioFile(tempFilename, speech.buffer));
     }
 
     const concatenated = await concatWavChunks(tempChunkPaths, finalPath);
@@ -267,15 +387,15 @@ export async function generateSceneNarration(opts: {
     if (concatenated) {
       for (const p of tempChunkPaths) deleteAudioFile(path.basename(p));
     } else {
-      // Provider work was already consumed, so keep the successful first chunk
-      // as a recoverable result rather than refunding an ambiguous operation.
+      // Provider work has already been consumed. Preserve the first successful
+      // chunk as a recoverable result instead of discarding paid audio.
       url = `/api/audio/${path.basename(tempChunkPaths[0])}`;
       resolvedPath = tempChunkPaths[0];
     }
 
     await db.videoScene.update({
       where: { id: scene.id },
-      data: { narrationUrl: url, narrationVoice: voice },
+      data: { narrationUrl: url, narrationVoice: defaultVoice },
     });
 
     return {
@@ -292,8 +412,8 @@ export async function generateSceneNarration(opts: {
     for (const p of tempChunkPaths) {
       await unlink(p).catch(() => undefined);
     }
-    // Do not auto-refund. A provider timeout/failure can be ambiguous, and
-    // retrying this exact fingerprint will reuse the existing charge.
+    // Do not auto-refund an ambiguous provider request. Retrying the exact
+    // performance fingerprint reuses the existing token transaction.
     throw err;
   }
 }
@@ -330,8 +450,8 @@ export interface AutoNarrateResult {
 }
 
 /**
- * Non-fatal automatic narration. The shared generator performs authorization
- * of billable ownership and token charging before any TTS provider request.
+ * Non-fatal automatic dialogue performance. The shared generator performs
+ * billable ownership and token charging before any TTS provider request.
  */
 export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResult> {
   try {
