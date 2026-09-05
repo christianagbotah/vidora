@@ -9,6 +9,7 @@ import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
 import { persistProviderVideo } from "@/lib/provider-video-storage";
+import { zai } from "@/lib/zai";
 
 const execFileAsync = promisify(execFile);
 const AMBIENCE_VOLUME = 0.6;
@@ -45,6 +46,7 @@ interface PreviewScene {
   id: string;
   sceneNumber: number;
   videoUrl: string | null;
+  taskId: string | null;
   dialogue: string | null;
   narrationUrl: string | null;
   narrationVoice: string | null;
@@ -80,15 +82,47 @@ async function materializeVideo(scene: PreviewScene): Promise<string> {
   }
 
   // Legacy projects may still contain a provider-hosted URL. Archive it into
-  // Vidora's persistent generated store before ffmpeg touches it, then repair
-  // the scene row so future playback/preview no longer depends on provider
-  // cache semantics or signed URL lifetime.
-  const localUrl = await persistProviderVideo(scene.id, scene.videoUrl);
+  // Vidora's persistent generated store before ffmpeg touches it. If the old
+  // provider URL has expired but we still have the provider task id, refresh
+  // that task once to obtain a fresh media URL before giving up.
+  let providerUrl = scene.videoUrl;
+  let firstError: unknown = null;
+  let localUrl: string | null = null;
+  try {
+    localUrl = await persistProviderVideo(scene.id, providerUrl);
+  } catch (error) {
+    firstError = error;
+  }
+
+  if (!localUrl && scene.taskId) {
+    try {
+      const refreshed = await zai.pollVideoTask({
+        taskId: scene.taskId,
+        maxAttempts: 2,
+        intervalMs: 1_500,
+      });
+      if (refreshed.status === "success" && refreshed.videoUrl) {
+        providerUrl = refreshed.videoUrl;
+        localUrl = await persistProviderVideo(scene.id, providerUrl);
+      }
+    } catch (refreshError) {
+      console.warn(
+        `[full-preview] scene=${scene.id} provider task refresh failed:`,
+        refreshError instanceof Error ? refreshError.message : "unknown error",
+      );
+    }
+  }
+
+  if (!localUrl) {
+    const detail = firstError instanceof Error ? firstError.message : "provider media unavailable";
+    throw new Error(`Scene ${scene.sceneNumber} provider video could not be recovered: ${detail}`);
+  }
+
   const localPath = resolvePublicAssetPath(localUrl);
   if (!existsSync(localPath)) throw new Error(`Scene ${scene.sceneNumber} media copy produced no local file`);
   await db.videoScene.update({
     where: { id: scene.id },
-    data: { videoUrl: localUrl },
+    data: { videoUrl: localUrl, errorMessage: null },
   });
   scene.videoUrl = localUrl;
   return localPath;
@@ -129,11 +163,21 @@ async function hasAudioStream(filePath: string): Promise<boolean> {
   }
 }
 
-function normalizeInput(index: number, size: { w: number; h: number }): string {
-  return (
-    `[${index}:v]scale=${size.w}:${size.h}:force_original_aspect_ratio=decrease,` +
-    `pad=${size.w}:${size.h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[n${index}]`
-  );
+function even(value: number): number {
+  const rounded = Math.max(2, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function targetCanvas(sizes: Array<{ w: number; h: number }>): { w: number; h: number } {
+  const first = sizes[0];
+  const maxH = 1080;
+  let w = first.w;
+  let h = first.h;
+  if (h > maxH) {
+    w *= maxH / h;
+    h = maxH;
+  }
+  return { w: even(w), h: even(h) };
 }
 
 function transitionFilter(
@@ -141,65 +185,71 @@ function transitionFilter(
   transition: FullPreviewTransition,
   size: { w: number; h: number },
 ): string {
-  if (durations.length <= 1) return "";
+  const normalize = durations.map((_, index) =>
+    `[${index}:v]setpts=PTS-STARTPTS,scale=${size.w}:${size.h}:force_original_aspect_ratio=decrease,` +
+    `pad=${size.w}:${size.h}:(ow-iw)/2:(oh-ih)/2:black,fps=24,format=yuv420p[v${index}]`
+  );
+  if (durations.length === 1) return `${normalize[0]};[v0]null[outv]`;
+
   const definition = TRANSITIONS[transition];
-  const normalized = durations.map((_, index) => normalizeInput(index, size));
-  if (definition.duration === 0) {
-    const inputs = durations.map((_, index) => `[n${index}]`).join("");
-    return [...normalized, `${inputs}concat=n=${durations.length}:v=1:a=0[outv]`].join(";");
+  if (definition.duration <= 0) {
+    return `${normalize.join(";")};${durations.map((_, index) => `[v${index}]`).join("")}concat=n=${durations.length}:v=1:a=0[outv]`;
   }
 
-  const parts = [...normalized];
-  let previous = "n0";
-  let offset = durations[0] - definition.duration;
+  const chains: string[] = [];
+  let previous = "v0";
+  let elapsed = durations[0];
   for (let index = 1; index < durations.length; index++) {
-    const output = index === durations.length - 1 ? "outv" : `v${index}`;
-    parts.push(
-      `[${previous}][n${index}]xfade=transition=${definition.ffmpegName}:duration=${definition.duration}:offset=${Math.max(0, offset).toFixed(3)}[${output}]`,
-    );
+    const overlap = Math.min(definition.duration, durations[index - 1] / 3, durations[index] / 3);
+    const offset = Math.max(0, elapsed - overlap);
+    const output = index === durations.length - 1 ? "outv" : `x${index}`;
+    chains.push(`[${previous}][v${index}]xfade=transition=${definition.ffmpegName}:duration=${overlap.toFixed(3)}:offset=${offset.toFixed(3)}[${output}]`);
+    elapsed += durations[index] - overlap;
     previous = output;
-    offset += durations[index] - definition.duration;
   }
-  return parts.join(";");
+  return `${normalize.join(";")};${chains.join(";")}`;
 }
 
 function sceneStarts(durations: number[], transitionDuration: number): number[] {
-  const starts: number[] = [];
-  let cumulative = 0;
-  for (let index = 0; index < durations.length; index++) {
-    starts.push(index === 0 ? 0 : Math.max(0, cumulative - index * transitionDuration));
-    cumulative += durations[index];
+  const starts: number[] = [0];
+  for (let index = 1; index < durations.length; index++) {
+    const overlap = transitionDuration <= 0
+      ? 0
+      : Math.min(transitionDuration, durations[index - 1] / 3, durations[index] / 3);
+    starts.push(starts[index - 1] + durations[index - 1] - overlap);
   }
   return starts;
 }
 
 function sceneSpan(durations: number[], index: number, transitionDuration: number): number {
-  const isLast = index === durations.length - 1;
-  return Math.max(0.5, isLast ? durations[index] : durations[index] - transitionDuration);
+  const overlapIn = index > 0 && transitionDuration > 0
+    ? Math.min(transitionDuration, durations[index - 1] / 3, durations[index] / 3)
+    : 0;
+  const overlapOut = index < durations.length - 1 && transitionDuration > 0
+    ? Math.min(transitionDuration, durations[index] / 3, durations[index + 1] / 3)
+    : 0;
+  return Math.max(0.1, durations[index] - overlapIn / 2 - overlapOut / 2);
 }
 
 function buildAudioFilter(layers: AudioLayer[]): string {
-  const chains: string[] = [];
+  const filters: string[] = [];
   const labels: string[] = [];
   layers.forEach((layer, index) => {
-    const label = `a${index}`;
-    const filters = [
-      "aresample=44100",
-      "aformat=sample_fmts=fltp:channel_layouts=stereo",
-      `volume=${layer.volume.toFixed(3)}`,
-    ];
-    if (layer.trimTo) {
-      filters.push(`atrim=duration=${layer.trimTo.toFixed(3)}`, "asetpts=PTS-STARTPTS");
-      if (layer.fadeOut) {
-        filters.push(`afade=t=out:st=${Math.max(0, layer.trimTo - 0.6).toFixed(2)}:d=0.6`);
-      }
-    }
-    if (layer.startMs > 0) filters.push(`adelay=${Math.round(layer.startMs)}:all=1`);
-    chains.push(`[${layer.inputIndex}:a]${filters.join(",")}[${label}]`);
-    labels.push(`[${label}]`);
+    const operations = [
+      layer.trimTo ? `atrim=0:${layer.trimTo.toFixed(3)}` : "",
+      "asetpts=PTS-STARTPTS",
+      `volume=${layer.volume.toFixed(4)}`,
+      layer.fadeOut && layer.trimTo
+        ? `afade=t=out:st=${Math.max(0, layer.trimTo - Math.min(1.2, layer.trimTo / 3)).toFixed(3)}:d=${Math.min(1.2, layer.trimTo / 3).toFixed(3)}`
+        : "",
+      `adelay=${layer.startMs}|${layer.startMs}`,
+    ].filter(Boolean);
+    const output = `a${index}`;
+    filters.push(`[${layer.inputIndex}:a]${operations.join(",")}[${output}]`);
+    labels.push(`[${output}]`);
   });
-  chains.push(`${labels.join("")}amix=inputs=${layers.length}:duration=longest:normalize=0[aout]`);
-  return chains.join(";");
+  filters.push(`${labels.join("")}amix=inputs=${labels.length}:duration=longest:normalize=0[aout]`);
+  return filters.join(";");
 }
 
 function escapeFilterPath(value: string): string {
@@ -288,7 +338,8 @@ function runFfmpeg(command: string, timeoutMs: number): Promise<void> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      error ? reject(error) : resolve();
+      if (error) reject(error);
+      else resolve();
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already exited */ }
@@ -336,27 +387,16 @@ export async function renderFullProjectPreview(
     for (let index = 0; index < scenes.length; index++) {
       scenePaths.push(await materializeVideo(scenes[index]));
     }
-    const targetSize = await videoSize(scenePaths[0]);
-    const sceneDurations = await Promise.all(scenePaths.map(videoDuration));
-    const sceneAmbience = includeAudio
-      ? await Promise.all(scenePaths.map(hasAudioStream))
-      : scenePaths.map(() => false);
-
-    const sceneAudio: SceneAudio[] = [];
-    if (includeAudio) {
-      for (const scene of scenes) {
-        // Dialogue is mandatory content once present. Do not approve a preview
-        // whose current voice failed to synthesize.
-        sceneAudio.push(await currentSceneAudio(scene));
-      }
-    } else {
-      sceneAudio.push(...scenes.map(() => ({ narrationPath: null, musicPath: null, musicVolume: 0 })));
-    }
-
+    const sizes = await Promise.all(scenePaths.map(videoSize));
+    const targetSize = targetCanvas(sizes);
+    const sceneAudio = includeAudio
+      ? await Promise.all(scenes.map(currentSceneAudio))
+      : scenes.map(() => ({ narrationPath: null, musicPath: null, musicVolume: 0 }));
     let videoPaths = [...scenePaths];
-    let durations = [...sceneDurations];
-    let ambience = [...sceneAmbience];
-    if (withTitleCard && project.title) {
+    let durations = await Promise.all(scenePaths.map(videoDuration));
+    let ambience = await Promise.all(scenePaths.map(hasAudioStream));
+
+    if (withTitleCard) {
       const card = await titleCard(workDir, project.title, targetSize);
       videoPaths = [card, ...videoPaths];
       durations = [await videoDuration(card), ...durations];

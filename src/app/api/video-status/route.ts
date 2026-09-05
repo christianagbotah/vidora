@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireSceneAccess } from "@/lib/project-auth";
+import { clientSceneVideoUrl } from "@/lib/client-video-url";
 
 /**
  * DB-only scene status check.
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       status: scene.videoUrl ? "completed" : scene.status,
-      videoUrl: scene.videoUrl,
+      videoUrl: clientSceneVideoUrl(scene.id, scene.videoUrl),
       imageUrl: scene.imageUrl,
       taskId: scene.taskId,
       errorMessage: scene.errorMessage,
