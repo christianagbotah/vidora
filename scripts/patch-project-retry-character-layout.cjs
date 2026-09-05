@@ -228,7 +228,7 @@ replaceOnce(
                               size="sm" variant="ghost" className="h-7 w-7 p-0"
                               onClick={() => { setCharUploadTargetId(char.id); charFileInputRef.current?.click(); }}
                               title="Upload Image"
-                              aria-label={`Upload image for ${char.name}`}
+                              aria-label="Upload character image"
                             >
                               <UploadCloud className="h-3.5 w-3.5" />
                             </Button>
@@ -236,7 +236,7 @@ replaceOnce(
                               size="sm" variant="ghost" className="h-7 w-7 p-0"
                               onClick={() => handleGenerateCharPortrait(char.id)}
                               title="Generate AI Portrait"
-                              aria-label={`Generate AI portrait for ${char.name}`}
+                              aria-label="Generate AI character portrait"
                             >
                               <Wand2 className="h-3.5 w-3.5" />
                             </Button>
@@ -244,7 +244,7 @@ replaceOnce(
                               size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-400 hover:text-red-600 hover:bg-red-50"
                               onClick={() => handleDeleteClick("character", char.id)}
                               title="Delete Character"
-                              aria-label={`Delete ${char.name}`}
+                              aria-label="Delete character"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
