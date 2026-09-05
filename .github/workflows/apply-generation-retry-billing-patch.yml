@@ -1,0 +1,33 @@
+name: Apply generation retry repair
+
+on:
+  push:
+    branches:
+      - fix/generation-retry-billing-ux
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply guarded source patch
+        run: node scripts/patch-generation-retry-billing.cjs
+      - name: Validate patch
+        run: git diff --check
+      - name: Commit source changes
+        run: |
+          if git diff --quiet; then
+            echo "No source changes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app/api/generate-video/route.ts scripts/generation-worker.ts src/app/page.tsx
+          git commit -m "fix(generation): make retry durable and billing-aware"
+          git push origin HEAD:fix/generation-retry-billing-ux
