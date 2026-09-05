@@ -61,6 +61,15 @@ const MAX_IMAGE_PROMPT = 1800;
 /** HARD limit for the video API prompt (server rejects > 512). */
 const MAX_VIDEO_PROMPT = 500;
 
+/**
+ * Vidora owns exact spoken dialogue in post-production. Video models are still
+ * allowed to create useful ambience and sound effects, but they must not invent
+ * speech that can compete with or contradict the directed character voices.
+ * Keep this compact because the public video API has a strict prompt limit.
+ */
+export const VIDEO_AUDIO_DIRECTIVE =
+  " | Audio: ambience/SFX only; no spoken words, dialogue, singing, or voice-over. Vidora adds exact dialogue in post.";
+
 /** Rendering keywords per project style — steers the whole frame. */
 const STYLE_IMAGE_KEYWORDS: Record<string, string> = {
   cinematic:
@@ -208,37 +217,40 @@ export function buildSceneImagePrompt(opts: {
 /**
  * Compact, character-aware prompt for the VIDEO API (hard 512-char limit).
  *
- * Strategy: keep the scene prompt, then append a short character digest
- * with as many characters as fit.
+ * Strategy: reserve room for the audio policy first, keep as much of the
+ * scene/character visual prompt as fits, then append the directive verbatim.
  */
 export function buildSceneVideoPrompt(opts: {
   scenePrompt: string;
   characters: CharacterLike[];
   linkedCharacterIds?: string | null;
 }): string {
-  const base = (opts.scenePrompt || "").trim();
-  const relevant = detectSceneCharacters(base, opts.characters, opts.linkedCharacterIds);
+  const rawBase = (opts.scenePrompt || "").trim();
+  const relevant = detectSceneCharacters(rawBase, opts.characters, opts.linkedCharacterIds);
+  const contentBudget = Math.max(0, MAX_VIDEO_PROMPT - VIDEO_AUDIO_DIRECTIVE.length);
+  const base = rawBase.slice(0, contentBudget);
 
-  if (relevant.length === 0) {
-    return base.slice(0, MAX_VIDEO_PROMPT);
+  let content = base;
+  if (relevant.length > 0) {
+    const budget = contentBudget - base.length;
+    if (budget >= 40) {
+      const digestParts: string[] = [];
+      let used = " | Chars: ".length;
+      for (const c of relevant.slice(0, 3)) {
+        const desc = (c.description || c.stylePrompt || "").trim();
+        const compact = desc ? `${c.name}: ${desc}` : c.name;
+        const piece = digestParts.length > 0 ? `; ${compact}` : compact;
+        if (used + piece.length > budget) break;
+        digestParts.push(compact);
+        used += piece.length;
+      }
+      if (digestParts.length > 0) {
+        content = `${base} | Chars: ${digestParts.join("; ")}`;
+      }
+    }
   }
 
-  const budget = MAX_VIDEO_PROMPT - base.length;
-  if (budget < 40) return base.slice(0, MAX_VIDEO_PROMPT); // no room for characters
-
-  const digestParts: string[] = [];
-  let used = " | Chars: ".length;
-  for (const c of relevant.slice(0, 3)) {
-    const desc = (c.description || c.stylePrompt || "").trim();
-    const compact = desc ? `${c.name}: ${desc}` : c.name;
-    const piece = digestParts.length > 0 ? `; ${compact}` : compact;
-    if (used + piece.length > budget) break;
-    digestParts.push(compact);
-    used += piece.length;
-  }
-
-  if (digestParts.length === 0) return base.slice(0, MAX_VIDEO_PROMPT);
-  return `${base} | Chars: ${digestParts.join("; ")}`.slice(0, MAX_VIDEO_PROMPT);
+  return `${content.slice(0, contentBudget)}${VIDEO_AUDIO_DIRECTIVE}`.slice(0, MAX_VIDEO_PROMPT);
 }
 
 /**
