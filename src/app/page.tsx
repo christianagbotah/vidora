@@ -827,6 +827,62 @@ function SortableSceneCard({
   const [narrationLanguage, setNarrationLanguage] = useState(scene.narrationLang || "en");
   const [narrationAccent, setNarrationAccent] = useState(scene.narrationAccent || "auto");
   const [narrationStyle, setNarrationStyle] = useState(scene.narrationStyle || "natural");
+  const [isSavingNarrationProfile, setIsSavingNarrationProfile] = useState(false);
+  const { toast } = useToast();
+
+  const persistNarrationProfile = async (patch: {
+    language?: string;
+    accent?: string;
+    style?: string;
+    voice?: string;
+  }): Promise<boolean> => {
+    setIsSavingNarrationProfile(true);
+    try {
+      const response = await fetch(`/api/scenes/${scene.id}/narration-profile`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to save narration settings");
+      }
+      return true;
+    } catch (error) {
+      toast({
+        title: "Could not save voice settings",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+      return false;
+    } finally {
+      setIsSavingNarrationProfile(false);
+    }
+  };
+
+  const handleNarrationLanguageChange = async (value: string) => {
+    const previous = narrationLanguage;
+    setNarrationLanguage(value);
+    if (!(await persistNarrationProfile({ language: value }))) setNarrationLanguage(previous);
+  };
+
+  const handleNarrationAccentChange = async (value: string) => {
+    const previous = narrationAccent;
+    setNarrationAccent(value);
+    if (!(await persistNarrationProfile({ accent: value }))) setNarrationAccent(previous);
+  };
+
+  const handleNarrationStyleChange = async (value: string) => {
+    const previous = narrationStyle;
+    setNarrationStyle(value);
+    if (!(await persistNarrationProfile({ style: value }))) setNarrationStyle(previous);
+  };
+
+  const handleNarrationVoiceChange = async (value: string) => {
+    const previous = narrationVoice;
+    setNarrationVoice(value);
+    if (!(await persistNarrationProfile({ voice: value }))) setNarrationVoice(previous);
+  };
 
   // ── Scene voice ↔ video sync ──
   // Generated scenes carry an AI voice (narrationUrl). The studio player
@@ -1128,11 +1184,11 @@ function SortableSceneCard({
                               style={narrationStyle}
                               voice={narrationVoice}
                               voices={TTS_VOICES}
-                              onLanguageChange={setNarrationLanguage}
-                              onAccentChange={setNarrationAccent}
-                              onStyleChange={setNarrationStyle}
-                              onVoiceChange={setNarrationVoice}
-                              disabled={isGeneratingNarration}
+                              onLanguageChange={(value) => { void handleNarrationLanguageChange(value); }}
+                              onAccentChange={(value) => { void handleNarrationAccentChange(value); }}
+                              onStyleChange={(value) => { void handleNarrationStyleChange(value); }}
+                              onVoiceChange={(value) => { void handleNarrationVoiceChange(value); }}
+                              disabled={isGeneratingNarration || isSavingNarrationProfile}
                             />
                             <div className="flex items-center justify-between gap-2">
                               <p className="text-[10px] leading-snug text-muted-foreground">
