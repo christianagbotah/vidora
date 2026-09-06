@@ -7097,6 +7097,21 @@ function VidoraApp() {
                       className="overflow-hidden"
                     >
                       <CardContent className="space-y-5">
+                        <div className="flex flex-col gap-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-start gap-2.5">
+                            <Volume2 className="mt-0.5 h-4 w-4 shrink-0 text-violet-600" />
+                            <div>
+                              <p className="text-sm font-semibold text-violet-800">Voice provider</p>
+                              <p className="text-xs text-violet-700/80">
+                                Narration providers are optional and separate from the Z.AI video engine. Add or change a speech API key whenever you are ready.
+                              </p>
+                            </div>
+                          </div>
+                          <Button variant="outline" size="sm" asChild className="shrink-0 border-violet-200 bg-white text-violet-700 hover:bg-violet-100">
+                            <a href="/admin/providers">Voice provider settings</a>
+                          </Button>
+                        </div>
+
                         {/* Style */}
                         <div className="space-y-2">
                           <Label className="text-sm font-medium flex items-center gap-1.5">

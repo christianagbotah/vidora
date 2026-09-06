@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/admin";
 import { resetZaiClient } from "@/lib/zai";
 import { SECRET_CONFIG_KEYS, setConfigValue } from "@/lib/secure-config";
+import { normalizeWebProviderSecret } from "@/lib/provider-secret-policy";
 
 const CONFIG_SCHEMA: Record<string, string> = {
   payment_gateway: "Active payment gateway (paystack, hubtel, stripe)",
@@ -126,13 +127,14 @@ export async function GET(req: NextRequest) {
       if (SECRET_CONFIG_KEYS.has(key)) {
         const envName = SECRET_ENV[key];
         const fromEnv = Boolean(envName && process.env[envName]?.trim());
-        const legacyDbConfigured = Boolean(rowMap.get(key)?.value);
+        const dbConfigured = Boolean(rowMap.get(key)?.value);
         result[key] = {
-          value: fromEnv || legacyDbConfigured ? "********" : "",
+          value: fromEnv || dbConfigured ? "********" : "",
           description,
-          configured: fromEnv || legacyDbConfigured,
+          configured: fromEnv || dbConfigured,
           secret: true,
-          source: fromEnv ? "environment" : legacyDbConfigured ? "legacy-db" : "none",
+          // getConfigValue() resolves encrypted DB values before env fallback.
+          source: dbConfigured ? "encrypted-database" : fromEnv ? "environment" : "none",
         };
         continue;
       }
@@ -155,7 +157,7 @@ export async function GET(req: NextRequest) {
         video: ["zai"],
         tts: ["zai", "elevenlabs"],
       },
-      secretPolicy: "Provider secrets are write-disabled in the web admin and must be managed through server environment variables.",
+      secretPolicy: "Optional TTS provider keys may be entered by admins and are encrypted at rest. Other provider/payment secrets remain environment-managed.",
     });
   } catch (error) {
     console.error("Admin get config error:", error);
@@ -170,11 +172,16 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
     const updates = body.configs || body;
+    const secretUpdates = body.secretConfigs;
     if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
       return NextResponse.json({ success: false, error: "Invalid configuration payload" }, { status: 400 });
     }
+    if (secretUpdates !== undefined && (typeof secretUpdates !== "object" || secretUpdates === null || Array.isArray(secretUpdates))) {
+      return NextResponse.json({ success: false, error: "Invalid secret configuration payload" }, { status: 400 });
+    }
 
     const updatedKeys: string[] = [];
+    const updatedSecretKeys: string[] = [];
     const blockedSecretKeys: string[] = [];
 
     for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
@@ -189,14 +196,29 @@ export async function PUT(req: NextRequest) {
       updatedKeys.push(key);
     }
 
+    if (secretUpdates) {
+      for (const [key, rawValue] of Object.entries(secretUpdates as Record<string, unknown>)) {
+        if (!(key in CONFIG_SCHEMA) || !SECRET_CONFIG_KEYS.has(key)) {
+          blockedSecretKeys.push(key);
+          continue;
+        }
+        const normalized = normalizeWebProviderSecret(key, rawValue);
+        // Blank input intentionally means "keep the currently configured key".
+        if (!normalized) continue;
+        await setConfigValue(key, normalized, CONFIG_SCHEMA[key]);
+        updatedSecretKeys.push(key);
+      }
+    }
+
     if (updatedKeys.includes("zai_base_url")) resetZaiClient();
 
     return NextResponse.json({
       success: true,
       updatedKeys,
+      updatedSecretKeys,
       blockedSecretKeys,
       ...(blockedSecretKeys.length
-        ? { warning: "Provider secrets were not changed. Update them in the VPS environment and restart the application." }
+        ? { warning: "Some protected secrets were not changed. Only optional TTS provider keys can be saved from this page." }
         : {}),
     });
   } catch (error) {
