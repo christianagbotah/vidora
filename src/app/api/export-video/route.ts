@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
+import { resolveSceneLanguageText } from "@/lib/scene-language";
+import { materializeSceneVideo } from "@/lib/scene-video-materializer";
 import { getAudioPath, audioFileExists } from "@/lib/audio-storage";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync, statSync } from "fs";
@@ -88,9 +90,14 @@ const TRANSITIONS: Record<string, TransitionDef> = {
 /** The scene fields needed for audio collection. */
 interface AudioScene {
   id: string;
+  sceneNumber?: number | null;
+  taskId?: string | null;
   dialogue?: string | null;
   narrationUrl?: string | null;
   narrationVoice?: string | null;
+  narrationLang?: string | null;
+  narrationAccent?: string | null;
+  narrationStyle?: string | null;
   characterIds?: string | null;
   musicTrackUrl?: string | null;
   musicVolume?: number | null;
@@ -169,20 +176,36 @@ async function collectSceneAudio(
 
     if (!narrationPath && scene.dialogue && scene.dialogue.trim().length > 0) {
       const voice = await pickSceneNarrationVoice(scene);
+      const language = scene.narrationLang || "en";
       try {
-        console.log(`[Export] Auto-generating voice for scene ${scene.id} (voice=${voice})…`);
+        console.log(`[Export] Auto-generating voice for scene ${scene.id} (voice=${voice}, language=${language})…`);
         onSceneProgress?.({ index: i + 1, total: scenes.length, phase: "voice" });
+        const narrationText = language === "en"
+          ? scene.dialogue.trim()
+          : (await resolveSceneLanguageText(scene.id, language)).text;
         const result = await generateSceneNarration({
           sceneId: scene.id,
-          text: scene.dialogue,
+          text: narrationText,
           voice,
+          language,
+          accent: scene.narrationAccent || undefined,
+          style: scene.narrationStyle || undefined,
         });
         narrationPath = result.path;
         audio[i].narrationGenerated = true;
         summary.voicesGenerated++;
         // Persist so the studio player & future exports reuse it
         await db.videoScene
-          .update({ where: { id: scene.id }, data: { narrationUrl: result.url, narrationVoice: voice } })
+          .update({
+            where: { id: scene.id },
+            data: {
+              narrationUrl: result.url,
+              narrationVoice: voice,
+              narrationLang: result.profile.language,
+              narrationAccent: result.profile.accent,
+              narrationStyle: result.profile.style,
+            },
+          })
           .catch(() => { /* non-fatal */ });
       } catch (ttsErr) {
         summary.voiceFailures++;
@@ -763,19 +786,17 @@ async function runSingleSceneExport(
   try {
     await onProgress(5, "Fetching your scene clip…");
     const localPath = path.join(workDir, "scene_001.mp4");
-    // Local-first for app-relative URLs (/generated/...): node fetch can't
-    // fetch a relative path, so probe the file store directly instead of
-    // burning 3 retry cycles on unparseable URLs.
-    let sceneVideoPath = localPath;
-    if (scene.videoUrl!.startsWith("/")) {
-      const storeFile = resolvePublicAssetPath(scene.videoUrl!);
-      if (existsSync(storeFile)) {
-        sceneVideoPath = storeFile;
-        console.log("[Export] Using local file for scene 1");
-      }
-    }
-    if (sceneVideoPath === localPath) {
+    let sceneVideoPath: string;
+    try {
+      sceneVideoPath = await materializeSceneVideo(scene);
+      console.log("[Export] Materialized scene 1 into Vidora's local media store");
+    } catch (materializeError) {
+      // Preserve support for non-provider legacy absolute URLs, but let the
+      // resilient provider materializer handle Z.AI cache/range/task refresh.
+      if (scene.videoUrl!.startsWith("/")) throw materializeError;
+      console.warn("[Export] Scene 1 resilient materialization failed; trying legacy direct fetch:", materializeError);
       await downloadWithRetry(scene.videoUrl!, localPath);
+      sceneVideoPath = localPath;
     }
 
     const ext = format === "webm" ? "webm" : "mp4";
@@ -924,33 +945,29 @@ async function runMultiSceneExport(
         `Fetching scene clip ${i + 1} of ${completedScenes.length}…`
       );
 
-      // Local-first for app-relative URLs (/generated/...): node fetch can't
-      // fetch a relative path, so probe the file store directly instead of
-      // burning 3 retry cycles on unparseable URLs.
-      const isRelativeUrl = scene.videoUrl!.startsWith("/");
-      if (isRelativeUrl) {
-        const storeFile = resolvePublicAssetPath(scene.videoUrl!);
-        if (existsSync(storeFile)) {
-          localPaths.push(storeFile);
-          console.log(`[Export] Using local file for scene ${i + 1}`);
-          continue;
+      try {
+        const materialized = await materializeSceneVideo(scene);
+        localPaths.push(materialized);
+        console.log(`[Export] Materialized scene ${i + 1}/${completedScenes.length}`);
+        continue;
+      } catch (materializeError) {
+        if (scene.videoUrl!.startsWith("/")) {
+          console.error(`[Export] Local scene ${i + 1} is unavailable:`, materializeError);
+          throw materializeError;
         }
+        console.warn(
+          `[Export] Scene ${i + 1} resilient materialization failed; trying legacy direct fetch:`,
+          materializeError,
+        );
       }
 
       try {
         await downloadWithRetry(scene.videoUrl!, localPath);
         localPaths.push(localPath);
-        console.log(`[Export] Downloaded scene ${i + 1}/${completedScenes.length}`);
+        console.log(`[Export] Downloaded scene ${i + 1}/${completedScenes.length} using legacy fallback`);
       } catch (dlErr) {
-        // Fallback: check for local file
-        const localFile = resolvePublicAssetPath(scene.videoUrl!);
-        if (existsSync(localFile)) {
-          localPaths.push(localFile);
-          console.log(`[Export] Using local file for scene ${i + 1}`);
-        } else {
-          console.error(`[Export] Failed to download scene ${i + 1}:`, dlErr);
-          throw new Error(`Could not download scene ${i + 1} video after retries`);
-        }
+        console.error(`[Export] Failed to download scene ${i + 1}:`, dlErr);
+        throw new Error(`Could not download scene ${i + 1} video after retries`);
       }
 
       // Brief pause between downloads to reduce rate limiting
