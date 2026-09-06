@@ -4,6 +4,7 @@ import { requireSceneAccess } from "@/lib/project-auth";
 import { generateSceneNarration, TTS_VOICES } from "@/lib/narration";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { getDubbingLanguage } from "@/lib/dubbing-languages";
+import { resolveSceneLanguageText } from "@/lib/scene-language";
 import {
   NARRATION_ACCENTS,
   NARRATION_STYLES,
@@ -57,28 +58,46 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const voice = typeof body.voice === "string" ? body.voice.toLowerCase() : "tongtong";
+    const speed = Number(body.speed ?? 1);
+    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) {
+      return NextResponse.json(
+        { success: false, error: "Invalid narration speed" },
+        { status: 400 }
+      );
+    }
+
+    // Applying a new language/voice/performance profile is a real scene edit,
+    // even if the downstream TTS provider is temporarily unavailable. Persist
+    // it first and invalidate the old WAV so preview/export can never reuse an
+    // English (or otherwise stale) narration under a newly selected language.
+    const profileChanged =
+      (scene.narrationLang || "en") !== profile.language ||
+      (scene.narrationAccent || "auto") !== profile.accent ||
+      (scene.narrationStyle || "natural") !== profile.style ||
+      (scene.narrationVoice || "tongtong") !== voice;
+
+    await db.videoScene.update({
+      where: { id: sceneId },
+      data: {
+        narrationLang: profile.language,
+        narrationAccent: profile.accent,
+        narrationStyle: profile.style,
+        narrationVoice: voice,
+        ...(profileChanged ? { narrationUrl: null } : {}),
+      },
+    });
+
     const explicitText = typeof body.text === "string" && body.text.trim()
       ? body.text.trim()
       : "";
 
     let narrationText = explicitText;
     if (!narrationText && profile.language !== "en") {
-      const translation = await db.sceneTranslation.findUnique({
-        where: { sceneId_lang: { sceneId, lang: profile.language } },
-        select: { translatedText: true, status: true },
-      });
-      narrationText = translation?.translatedText?.trim() || "";
-      if (!narrationText) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `No ${languageMeta.name} translation exists for this scene yet. Generate the translation/dubbing first or provide translated narration text.`,
-            code: "TRANSLATION_REQUIRED",
-            language: profile.language,
-          },
-          { status: 409 }
-        );
-      }
+      // The scene-card Language control is the only language workflow now.
+      // Generate/reuse SceneTranslation automatically instead of forcing the
+      // user through the removed legacy Dub selector first.
+      narrationText = (await resolveSceneLanguageText(sceneId, profile.language)).text;
     }
 
     if (!narrationText) {
@@ -94,15 +113,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Narration text is too long" },
         { status: 413 }
-      );
-    }
-
-    const voice = typeof body.voice === "string" ? body.voice.toLowerCase() : "tongtong";
-    const speed = Number(body.speed ?? 1);
-    if (!Number.isFinite(speed) || speed < 0.5 || speed > 2) {
-      return NextResponse.json(
-        { success: false, error: "Invalid narration speed" },
-        { status: 400 }
       );
     }
 

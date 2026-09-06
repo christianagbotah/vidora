@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { db } from "@/lib/db";
 import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
+import { resolveSceneLanguageText } from "@/lib/scene-language";
 import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
 import { persistProviderVideo } from "@/lib/provider-video-storage";
 import { zai } from "@/lib/zai";
@@ -285,33 +286,34 @@ async function titleCard(
 async function currentSceneAudio(scene: PreviewScene): Promise<SceneAudio> {
   let narrationPath: string | null = null;
   if (scene.dialogue?.trim()) {
-    const voice = await pickSceneNarrationVoice(scene);
-    const language = scene.narrationLang || "en";
-    let narrationText = scene.dialogue.trim();
-    if (language !== "en") {
-      const translated = scene.translations.find(
-        (translation) => translation.lang === language && translation.translatedText?.trim(),
-      );
-      narrationText = translated?.translatedText?.trim() || "";
-      if (!narrationText) {
-        throw new Error(
-          `Scene ${scene.sceneNumber} is set to ${language} but has no translated dialogue. Apply the video language again before previewing.`,
-        );
-      }
-    }
+    try {
+      const voice = await pickSceneNarrationVoice(scene);
+      const language = scene.narrationLang || "en";
+      const narrationText = language === "en"
+        ? scene.dialogue.trim()
+        : (await resolveSceneLanguageText(scene.id, language)).text;
 
-    // Always resolve through the deterministic narration generator. It replays
-    // an existing matching fingerprint without charging again, while a stale
-    // provider/voice/dialogue/profile artifact receives a new fingerprint.
-    const narration = await generateSceneNarration({
-      sceneId: scene.id,
-      text: narrationText,
-      voice,
-      language,
-      accent: scene.narrationAccent || undefined,
-      style: scene.narrationStyle || undefined,
-    });
-    narrationPath = narration.path;
+      // Always resolve through the deterministic narration generator. It replays
+      // an existing matching fingerprint without charging again, while a stale
+      // provider/voice/dialogue/profile artifact receives a new fingerprint.
+      const narration = await generateSceneNarration({
+        sceneId: scene.id,
+        text: narrationText,
+        voice,
+        language,
+        accent: scene.narrationAccent || undefined,
+        style: scene.narrationStyle || undefined,
+      });
+      narrationPath = narration.path;
+    } catch (voiceError) {
+      // Voice providers are optional. A missing/unfunded/unavailable TTS service
+      // must not turn valid scene clips into a 502 or block the review gate.
+      console.warn(
+        `[full-preview] scene=${scene.id} voice generation skipped:`,
+        voiceError instanceof Error ? voiceError.message : "unknown voice error",
+      );
+      narrationPath = null;
+    }
   } else if (scene.narrationUrl) {
     const filename = scene.narrationUrl.split("?")[0].split("/").pop();
     if (filename && audioFileExists(filename)) narrationPath = getAudioPath(filename);
