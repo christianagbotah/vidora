@@ -67,6 +67,7 @@ export default function AIProviderAdminPage() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testingVoice, setTestingVoice] = useState(false);
+  const [secretForm, setSecretForm] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string>("");
   const [error, setError] = useState<string>("");
 
@@ -97,6 +98,12 @@ export default function AIProviderAdminPage() {
     setError("");
   };
 
+  const setSecretField = (key: string, value: string) => {
+    setSecretForm((current) => ({ ...current, [key]: value }));
+    setMessage("");
+    setError("");
+  };
+
   const save = async () => {
     setSaving(true);
     setMessage("");
@@ -104,13 +111,19 @@ export default function AIProviderAdminPage() {
     try {
       const payload: Record<string, string> = {};
       for (const key of EDITABLE_KEYS) payload[key] = form[key] || "";
+      const secretConfigs: Record<string, string> = {};
+      for (const key of ["zai_tts_api_key", "elevenlabs_api_key"]) {
+        const value = (secretForm[key] || "").trim();
+        if (value) secretConfigs[key] = value;
+      }
       const response = await fetch("/api/admin/config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configs: payload }),
+        body: JSON.stringify({ configs: payload, secretConfigs }),
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || "Failed to save provider settings");
+      setSecretForm({});
       setMessage("AI provider routing saved. New story and voice jobs will use these settings.");
       await load();
     } catch (cause) {
@@ -344,7 +357,7 @@ export default function AIProviderAdminPage() {
                 <Select value={ttsProvider} onValueChange={(value) => setField("ai_tts_provider", value)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="zai">Z.ai TTS</SelectItem>
+                    <SelectItem value="zai">BigModel GLM-TTS (optional)</SelectItem>
                     <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
                   </SelectContent>
                 </Select>
@@ -354,23 +367,56 @@ export default function AIProviderAdminPage() {
                 <Input value={form.ai_tts_model || ""} onChange={(event) => setField("ai_tts_model", event.target.value)} placeholder={ttsProvider === "elevenlabs" ? "eleven_v3" : "glm-tts"} />
               </div>
               {ttsProvider === "zai" && (
-                <div className="space-y-2 md:col-span-2">
-                  <Label>GLM-TTS base URL</Label>
-                  <Input
-                    value={form.zai_tts_base_url || ""}
-                    onChange={(event) => setField("zai_tts_base_url", event.target.value)}
-                    placeholder="https://open.bigmodel.cn/api/paas/v4"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Voice synthesis uses BigModel/Open Platform independently from the global api.z.ai video/chat endpoint.
-                  </p>
-                </div>
+                <>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>BigModel GLM-TTS base URL</Label>
+                    <Input
+                      value={form.zai_tts_base_url || ""}
+                      onChange={(event) => setField("zai_tts_base_url", event.target.value)}
+                      placeholder="https://open.bigmodel.cn/api/paas/v4"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Optional speech provider. Your existing global api.z.ai video/chat subscription remains separate and unchanged.
+                    </p>
+                  </div>
+                  <div className="space-y-2 md:col-span-2 rounded-xl border bg-muted/25 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label>BigModel GLM-TTS API key</Label>
+                      <Badge variant={configs.zai_tts_api_key?.configured ? "default" : "outline"}>
+                        {configs.zai_tts_api_key?.configured ? "Configured" : "Not configured"}
+                      </Badge>
+                    </div>
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      value={secretForm.zai_tts_api_key || ""}
+                      onChange={(event) => setSecretField("zai_tts_api_key", event.target.value)}
+                      placeholder={configs.zai_tts_api_key?.configured ? "Enter a new key only to replace the current one" : "Paste the API key when you are ready"}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Write-only field. Vidora encrypts the key server-side and never returns it to this page. Leave blank to keep the current key.
+                    </p>
+                  </div>
+                </>
               )}
               {ttsProvider === "elevenlabs" && (
                 <>
                   <div className="space-y-2">
                     <Label>ElevenLabs base URL</Label>
                     <Input value={form.elevenlabs_base_url || ""} onChange={(event) => setField("elevenlabs_base_url", event.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>ElevenLabs API key</Label>
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      value={secretForm.elevenlabs_api_key || ""}
+                      onChange={(event) => setSecretField("elevenlabs_api_key", event.target.value)}
+                      placeholder={configs.elevenlabs_api_key?.configured ? "Enter a new key only to replace the current one" : "Paste the API key when you are ready"}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {configs.elevenlabs_api_key?.configured ? "Configured · leave blank to keep it" : "Not configured"}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>Default ElevenLabs voice ID</Label>
@@ -406,7 +452,7 @@ export default function AIProviderAdminPage() {
               <SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" />
               <SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" />
               <p className="pt-2 text-xs text-muted-foreground">
-                Add or rotate these values in the VPS environment, then restart Vidora. The web admin only changes routing and non-secret model settings.
+                BigModel and ElevenLabs TTS keys can be added above when needed. They are stored encrypted and are never displayed again. Other infrastructure/provider secrets remain environment-managed.
               </p>
             </CardContent>
           </Card>
