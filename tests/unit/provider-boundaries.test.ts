@@ -24,6 +24,8 @@ const REVIEWED_BOUNDARIES: Record<string, string> = {
   "src/app/api/transcribe/route.ts": "authenticated_metered",
   "src/lib/ai-provider-router.ts": "central_capability_router_for_text_and_tts",
   "src/lib/full-preview-render.ts": "project_authorized_legacy_media_recovery_poll_only_no_generation",
+  "src/lib/scene-language.ts": "scene_owner_metered_idempotent_translation_shared_by_narration_preview_export",
+  "src/lib/scene-video-materializer.ts": "existing_provider_task_poll_only_for_durable_media_recovery_no_generation",
   "src/lib/zai.ts": "provider_sdk_transport_internal",
 };
 
