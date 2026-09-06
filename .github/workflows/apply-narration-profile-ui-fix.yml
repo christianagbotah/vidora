@@ -1,0 +1,31 @@
+name: Apply narration profile UI fix
+
+on:
+  push:
+    branches:
+      - fix/persist-scene-language-profile-20260906
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[narration-profile-ui-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact narration profile UI patch
+        run: python3 scripts/apply-narration-profile-ui-fix.py
+      - name: Commit patched production file
+        run: |
+          if git diff --quiet; then
+            echo "No changes produced"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app/page.tsx
+          git commit -m "fix: persist scene narration profile immediately [narration-profile-ui-applied]"
+          git push
