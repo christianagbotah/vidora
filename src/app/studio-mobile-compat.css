@@ -1,0 +1,15 @@
+/*
+ * Studio mobile compatibility
+ *
+ * The current Studio header still lives inside the legacy monolithic page.tsx.
+ * Its editable project-title button is an inline-block flex child whose intrinsic
+ * width can exceed the remaining header space on phones, so Tailwind's `truncate`
+ * cannot clamp it by itself. Keep this selector intentionally exact until the
+ * Studio header is extracted into its own component.
+ */
+@media (max-width: 639px) {
+  button.text-lg.font-bold.truncate.hover\:text-violet-600 {
+    min-width: 0;
+    max-width: 50vw;
+  }
+}
