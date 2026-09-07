@@ -35,6 +35,10 @@ export interface ProviderSpeechOptions {
   input: string;
   voice?: string;
   speed?: number;
+  /** Provider-neutral ISO/internal Vidora language code for voice routing. */
+  language?: string | null;
+  /** Provider-neutral Vidora accent id for accent-trained voice routing. */
+  accent?: string | null;
   /** Optional screenplay delivery cue, e.g. excited, whispering, warmly. */
   direction?: string | null;
 }
@@ -345,18 +349,70 @@ export async function generateProviderText(request: ProviderTextOptions): Promis
   }
 }
 
-function resolveElevenLabsVoice(
+function normalizedRoutingPart(value: string | null | undefined, fallback: string): string {
+  const normalized = (value || "").trim().toLowerCase();
+  return normalized || fallback;
+}
+
+/**
+ * Candidate keys for ElevenLabs voice maps, ordered from most specific to
+ * broadest. This lets operators bind an accent/language-trained provider voice
+ * without changing the logical Vidora character voice stored on a project.
+ *
+ * Example keys:
+ * - profile:fr:ghanaian:jam
+ * - profile:fr:ghanaian
+ * - accent:fr:ghanaian
+ * - accent:ghanaian
+ * - language:fr
+ * - jam
+ */
+export function elevenLabsVoiceCandidates(
   requested: string | undefined,
-  settings: AIProviderSettings,
+  profile: { language?: string | null; accent?: string | null } = {},
+): string[] {
+  const voice = (requested || "").trim().toLowerCase();
+  const language = normalizedRoutingPart(profile.language, "en");
+  const accent = normalizedRoutingPart(profile.accent, "auto");
+  const candidates = [
+    voice ? `profile:${language}:${accent}:${voice}` : "",
+    `profile:${language}:${accent}`,
+    `accent:${language}:${accent}`,
+    `accent:${accent}`,
+    `language:${language}`,
+    voice,
+  ];
+  return candidates.filter((value, index, all) => value && all.indexOf(value) === index);
+}
+
+export function resolveElevenLabsVoice(
+  requested: string | undefined,
+  settings: Pick<AIProviderSettings, "elevenLabsVoiceMap" | "elevenLabsDefaultVoiceId">,
+  profile: { language?: string | null; accent?: string | null } = {},
 ): string {
-  const logical = (requested || "").trim().toLowerCase();
-  const mapped = logical ? settings.elevenLabsVoiceMap[logical] : "";
-  if (mapped) return mapped;
-  if (requested && !ZAI_LOGICAL_VOICES.has(logical)) return requested.trim();
+  for (const candidate of elevenLabsVoiceCandidates(requested, profile)) {
+    const mapped = settings.elevenLabsVoiceMap[candidate.toLowerCase()];
+    if (mapped) return mapped;
+  }
+
+  const requestedRaw = requested?.trim() || "";
+  const logical = requestedRaw.toLowerCase();
+  if (requestedRaw && !ZAI_LOGICAL_VOICES.has(logical)) return requestedRaw;
   if (settings.elevenLabsDefaultVoiceId) return settings.elevenLabsDefaultVoiceId;
   throw new Error(
-    "ElevenLabs is selected but no default voice ID is configured. Set elevenlabs_default_voice_id or add the logical voice to elevenlabs_voice_map.",
+    "ElevenLabs is selected but no matching/default voice is configured. Add a profile/accent/language mapping, set elevenlabs_default_voice_id, or add the logical voice to elevenlabs_voice_map.",
   );
+}
+
+/**
+ * ElevenLabs language_code accepts ISO 639-1 values. Vidora also has internal
+ * language identifiers that are not safe to send directly. In particular,
+ * `ga` is Vidora's Ghanaian Ga language code while ISO 639-1 `ga` means Irish.
+ */
+export function elevenLabsLanguageCode(language?: string | null): string | null {
+  const normalized = (language || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto" || normalized === "ga") return null;
+  return /^[a-z]{2}$/.test(normalized) ? normalized : null;
 }
 
 async function elevenLabsSpeech(
@@ -365,10 +421,14 @@ async function elevenLabsSpeech(
 ): Promise<ProviderSpeechResult> {
   const apiKey = await getConfigValue("elevenlabs_api_key", "ELEVENLABS_API_KEY");
   if (!apiKey) throw new Error("ElevenLabs API key is not configured");
-  const voice = resolveElevenLabsVoice(request.voice, settings);
+  const voice = resolveElevenLabsVoice(request.voice, settings, {
+    language: request.language,
+    accent: request.accent,
+  });
   const model = settings.ttsModel || "eleven_v3";
   const isV3 = ELEVEN_V3_RE.test(model);
   const text = formatElevenLabsPerformanceText(request.input, request.direction, model);
+  const languageCode = elevenLabsLanguageCode(request.language);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -384,6 +444,12 @@ async function elevenLabsSpeech(
         body: JSON.stringify({
           text,
           model_id: model,
+          // ElevenLabs accepts an ISO 639-1 language hint on supported models.
+          // multilingual_v2 explicitly does not accept this override, and
+          // unsafe Vidora-internal codes are filtered by elevenLabsLanguageCode.
+          ...(!/multilingual_v2/i.test(model) && languageCode
+            ? { language_code: languageCode }
+            : {}),
           voice_settings: {
             // v3 expression is primarily directed through audio tags. Keep the
             // voice settings stable so emotional delivery does not become noisy.
