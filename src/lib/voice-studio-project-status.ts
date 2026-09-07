@@ -4,6 +4,22 @@ export interface VoiceStudioProjectSaveResult {
   changedSceneCount?: number;
 }
 
+export interface VoiceStudioProjectDefaultSource {
+  narrationLang?: string | null;
+  narrationAccent?: string | null;
+  narrationStyle?: string | null;
+  narrationVoice?: string | null;
+}
+
+export function voiceStudioProjectHasPersistedDefault(project: VoiceStudioProjectDefaultSource): boolean {
+  return Boolean(
+    project.narrationLang?.trim() &&
+    project.narrationAccent?.trim() &&
+    project.narrationStyle?.trim() &&
+    project.narrationVoice?.trim(),
+  );
+}
+
 export function voiceStudioProjectSaveMessage(result: VoiceStudioProjectSaveResult): string {
   const changedSceneCount = Number.isFinite(result.changedSceneCount)
     ? Math.max(0, Number(result.changedSceneCount))

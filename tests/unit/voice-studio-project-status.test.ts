@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   voiceStudioBulkProfileStatus,
+  voiceStudioProjectHasPersistedDefault,
   voiceStudioProjectSaveMessage,
 } from "@/lib/voice-studio-project-status";
 
@@ -25,6 +26,22 @@ describe("Voice Studio whole-video project status", () => {
   test("reports an already-saved matching default", () => {
     expect(voiceStudioProjectSaveMessage({ changed: false, defaultsChanged: false, changedSceneCount: 0 }))
       .toContain("already saved");
+  });
+
+  test("detects a durable project default only when every profile dimension is persisted", () => {
+    expect(voiceStudioProjectHasPersistedDefault({
+      narrationLang: "en",
+      narrationAccent: "ghanaian",
+      narrationStyle: "warm",
+      narrationVoice: "tongtong",
+    })).toBe(true);
+    expect(voiceStudioProjectHasPersistedDefault({
+      narrationLang: "en",
+      narrationAccent: "ghanaian",
+      narrationStyle: null,
+      narrationVoice: "tongtong",
+    })).toBe(false);
+    expect(voiceStudioProjectHasPersistedDefault({})).toBe(false);
   });
 
   test("explains persisted versus legacy scene-derived bulk profiles", () => {
