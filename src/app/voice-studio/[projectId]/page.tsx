@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { AudioLines, CheckCircle2, Film, Info, Mic2, RefreshCw, Users } from "lucide-react";
+import { AudioLines, CheckCircle2, Film, Info, Loader2, Mic2, RefreshCw, Users, Volume2 } from "lucide-react";
 import { NarrationProfileControls } from "@/components/NarrationProfileControls";
 import {
   Select,
@@ -12,6 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  buildVoiceStudioNarrationRequest,
+  voiceStudioNarrationSuccessMessage,
+} from "@/lib/voice-studio-audition";
 
 type Profile = {
   language: string;
@@ -137,6 +141,34 @@ export default function VoiceStudioProjectPage() {
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save character voice");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const generateNarration = async (sceneId: string, profile: Profile) => {
+    const key = `narration:${sceneId}`;
+    setBusyKey(key);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/generate-narration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildVoiceStudioNarrationRequest({
+          projectId,
+          sceneId,
+          profile,
+        })),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) {
+        throw new Error(body.error || "Unable to generate scene narration");
+      }
+      setMessage(voiceStudioNarrationSuccessMessage(body));
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to generate scene narration");
     } finally {
       setBusyKey("");
     }
@@ -285,32 +317,48 @@ export default function VoiceStudioProjectPage() {
         </section>
 
         <section className="mt-10 pb-12">
-          <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Scene overrides</h2></div>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Fine-tune a scene without changing the visual clip. Saving clears only its derived narration track; the generated video remains intact.</p>
+          <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Scene overrides &amp; auditions</h2></div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Fine-tune a scene without changing the visual clip. Save clears stale narration; Generate &amp; listen uses the selected profile through Vidora's normal narration pipeline and may use narration tokens.</p>
           <div className="mt-4 space-y-4">
             {data.scenes.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">This project does not have scenes yet.</div>
             ) : data.scenes.map((scene) => {
               const profile = sceneProfiles[scene.id] || scene.profile;
               const key = `scene:${scene.id}`;
+              const narrationKey = `narration:${scene.id}`;
+              const sceneBusy = busyKey === key || busyKey === narrationKey;
               return (
                 <article key={scene.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold">Scene {scene.sceneNumber}{scene.title ? ` — ${scene.title}` : ""}</h3>
                       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        {scene.narrationUrl ? "Narration exists — changing this profile will invalidate it." : "Narration will be generated from this profile during narration/preview."}
+                        {scene.narrationUrl ? "Narration exists — changing this profile will invalidate it." : "Narration can be generated and auditioned from this profile."}
                         {scene.burnSubtitles && scene.subtitleLang ? ` Burned subtitles: ${scene.subtitleLang}.` : ""}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => saveProfile("scene", profile, scene.id)}
-                      disabled={disabled || busyKey === key}
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
-                    >
-                      {busyKey === key ? "Saving…" : "Save scene"}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => saveProfile("scene", profile, scene.id)}
+                        disabled={disabled || sceneBusy}
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                      >
+                        {busyKey === key ? "Saving…" : "Save scene"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => generateNarration(scene.id, profile)}
+                        disabled={disabled || sceneBusy}
+                        className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {busyKey === narrationKey ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" />Generating…</>
+                        ) : (
+                          <><Volume2 className="h-4 w-4" />{scene.narrationUrl ? "Regenerate & listen" : "Generate & listen"}</>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-5">
                     <NarrationProfileControls
@@ -323,9 +371,23 @@ export default function VoiceStudioProjectPage() {
                       onAccentChange={(accent) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, accent } }))}
                       onStyleChange={(style) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, style } }))}
                       onVoiceChange={(voice) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, voice } }))}
-                      disabled={disabled || busyKey === key}
+                      disabled={disabled || sceneBusy}
                     />
                   </div>
+                  {scene.narrationUrl ? (
+                    <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/60 p-4 dark:border-violet-900 dark:bg-violet-950/30">
+                      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-violet-800 dark:text-violet-200">
+                        <Volume2 className="h-4 w-4" />Current narration audition
+                      </div>
+                      <audio
+                        controls
+                        preload="metadata"
+                        src={scene.narrationUrl}
+                        className="w-full"
+                        aria-label={`Narration for scene ${scene.sceneNumber}`}
+                      />
+                    </div>
+                  ) : null}
                 </article>
               );
             })}
