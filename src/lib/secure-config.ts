@@ -13,6 +13,7 @@ export const SECRET_CONFIG_KEYS = new Set([
   "stripe_webhook_secret",
   "zai_api_key",
   "zai_tts_api_key",
+  "qwen_tts_api_key",
   "xai_api_key",
   "elevenlabs_api_key",
   "compatible_api_key",

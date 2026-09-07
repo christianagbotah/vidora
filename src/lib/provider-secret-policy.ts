@@ -1,5 +1,6 @@
 export const WEB_WRITABLE_PROVIDER_SECRET_KEYS = new Set([
   "zai_tts_api_key",
+  "qwen_tts_api_key",
   "elevenlabs_api_key",
 ]);
 

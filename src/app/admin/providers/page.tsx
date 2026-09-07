@@ -41,6 +41,9 @@ const EDITABLE_KEYS = [
   "ai_tts_provider",
   "ai_tts_model",
   "zai_tts_base_url",
+  "qwen_tts_base_url",
+  "qwen_tts_default_voice",
+  "qwen_tts_voice_map",
   "xai_base_url",
   "xai_text_model",
   "elevenlabs_base_url",
@@ -56,6 +59,12 @@ const ELEVENLABS_EXAMPLE = JSON.stringify({
   "accent:ghanaian": "ELEVENLABS_GH_GENERIC_ID",
   "language:fr": "ELEVENLABS_FR_GENERIC_ID",
   jam: "ELEVENLABS_JAM_FALLBACK_ID",
+}, null, 2);
+
+const QWEN_TTS_EXAMPLE = JSON.stringify({
+  tongtong: "Cherry",
+  jam: "Ryan",
+  "language:fr": "Cherry",
 }, null, 2);
 
 function SecretBadge({ configs, configKey, env }: { configs: ConfigMap; configKey: string; env: string }) {
@@ -168,7 +177,7 @@ export default function AIProviderAdminPage() {
       const payload: Record<string, string> = {};
       for (const key of EDITABLE_KEYS) payload[key] = form[key] || "";
       const secretConfigs: Record<string, string> = {};
-      for (const key of ["zai_tts_api_key", "elevenlabs_api_key"]) {
+      for (const key of ["zai_tts_api_key", "qwen_tts_api_key", "elevenlabs_api_key"]) {
         const value = (secretForm[key] || "").trim();
         if (value) secretConfigs[key] = value;
       }
@@ -266,8 +275,15 @@ export default function AIProviderAdminPage() {
           <Card className="lg:col-span-2">
             <CardHeader><CardTitle className="flex items-center gap-2"><Mic2 className="h-5 w-5" />Character voice & dialogue</CardTitle><CardDescription>Voice Studio language, accent and logical voice settings resolve through this provider layer.</CardDescription></CardHeader>
             <CardContent className="grid gap-5 md:grid-cols-2">
-              <div className="space-y-2"><Label>Active TTS provider</Label><Select value={ttsProvider} onValueChange={(value) => setField("ai_tts_provider", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="zai">BigModel GLM-TTS (optional)</SelectItem><SelectItem value="elevenlabs">ElevenLabs</SelectItem></SelectContent></Select></div>
-              <div className="space-y-2"><Label>TTS model</Label><Input value={form.ai_tts_model || ""} onChange={(event) => setField("ai_tts_model", event.target.value)} placeholder={ttsProvider === "elevenlabs" ? "eleven_v3" : "glm-tts"} /></div>
+              <div className="space-y-2"><Label>Active TTS provider</Label><Select value={ttsProvider} onValueChange={(value) => setField("ai_tts_provider", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="qwen">Qwen3-TTS / DashScope</SelectItem><SelectItem value="zai">BigModel GLM-TTS (optional)</SelectItem><SelectItem value="elevenlabs">ElevenLabs</SelectItem></SelectContent></Select></div>
+              <div className="space-y-2"><Label>TTS model</Label><Input value={form.ai_tts_model || ""} onChange={(event) => setField("ai_tts_model", event.target.value)} placeholder={ttsProvider === "qwen" ? "qwen3-tts-flash" : ttsProvider === "elevenlabs" ? "eleven_v3" : "glm-tts"} /></div>
+
+              {ttsProvider === "qwen" && <>
+                <div className="space-y-2 md:col-span-2"><Label>Qwen3-TTS DashScope base URL</Label><Input value={form.qwen_tts_base_url || ""} onChange={(event) => setField("qwen_tts_base_url", event.target.value)} placeholder="https://dashscope-intl.aliyuncs.com/api/v1" /><p className="text-xs text-muted-foreground">Use the Singapore/international Model Studio endpoint for an international DashScope API key.</p></div>
+                <div className="space-y-2 md:col-span-2 rounded-xl border bg-muted/25 p-4"><div className="flex items-center justify-between gap-3"><Label>DashScope API key</Label><Badge variant={configs.qwen_tts_api_key?.configured ? "default" : "outline"}>{configs.qwen_tts_api_key?.configured ? "Configured" : "Not configured"}</Badge></div><Input type="password" autoComplete="new-password" value={secretForm.qwen_tts_api_key || ""} onChange={(event) => setSecretField("qwen_tts_api_key", event.target.value)} placeholder={configs.qwen_tts_api_key?.configured ? "Enter a new key only to replace the current one" : "Paste your Model Studio API key"} /><p className="text-xs text-muted-foreground">Write-only field. Leave blank to keep the current encrypted key. Environment fallback: DASHSCOPE_API_KEY.</p></div>
+                <div className="space-y-2 md:col-span-2"><Label>Default Qwen voice</Label><Input value={form.qwen_tts_default_voice || ""} onChange={(event) => setField("qwen_tts_default_voice", event.target.value)} placeholder="Cherry" /><p className="text-xs text-muted-foreground">Used when a character/logical voice does not have an explicit Qwen mapping.</p></div>
+                <div className="space-y-3 md:col-span-2 rounded-xl border p-4"><div><Label>Qwen logical voice map (JSON)</Label><p className="mt-1 text-xs text-muted-foreground">Map Vidora logical voices or profile keys to Qwen system voice names.</p></div><Textarea value={form.qwen_tts_voice_map || ""} onChange={(event) => setField("qwen_tts_voice_map", event.target.value)} rows={7} className="font-mono text-xs" placeholder={QWEN_TTS_EXAMPLE} /><details className="rounded-lg border px-3 py-2 text-xs"><summary className="cursor-pointer font-medium">Show example map</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-muted-foreground">{QWEN_TTS_EXAMPLE}</pre></details><p className="text-xs text-muted-foreground">Language hints currently map English, French, German, Italian, Portuguese, Spanish, Japanese, Korean, Russian and Chinese; unsupported/internal languages fall back to Qwen Auto detection.</p></div>
+              </>}
 
               {ttsProvider === "zai" && <><div className="space-y-2 md:col-span-2"><Label>BigModel GLM-TTS base URL</Label><Input value={form.zai_tts_base_url || ""} onChange={(event) => setField("zai_tts_base_url", event.target.value)} placeholder="https://open.bigmodel.cn/api/paas/v4" /><p className="text-xs text-muted-foreground">Optional speech provider. The global api.z.ai video/chat subscription remains separate.</p></div><div className="space-y-2 md:col-span-2 rounded-xl border bg-muted/25 p-4"><div className="flex items-center justify-between gap-3"><Label>BigModel GLM-TTS API key</Label><Badge variant={configs.zai_tts_api_key?.configured ? "default" : "outline"}>{configs.zai_tts_api_key?.configured ? "Configured" : "Not configured"}</Badge></div><Input type="password" autoComplete="new-password" value={secretForm.zai_tts_api_key || ""} onChange={(event) => setSecretField("zai_tts_api_key", event.target.value)} placeholder={configs.zai_tts_api_key?.configured ? "Enter a new key only to replace the current one" : "Paste the API key when you are ready"} /><p className="text-xs text-muted-foreground">Write-only field. Leave blank to keep the current encrypted key.</p></div></>}
 
@@ -288,10 +304,10 @@ export default function AIProviderAdminPage() {
             </CardContent>
           </Card>
 
-          <Card><CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" />Server secrets</CardTitle><CardDescription>Keys never leave the server.</CardDescription></CardHeader><CardContent className="space-y-3"><SecretBadge configs={configs} configKey="zai_api_key" env="ZAI_API_KEY" /><SecretBadge configs={configs} configKey="zai_tts_api_key" env="ZAI_TTS_API_KEY" /><SecretBadge configs={configs} configKey="xai_api_key" env="XAI_API_KEY" /><SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" /><SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" /><p className="pt-2 text-xs text-muted-foreground">BigModel and ElevenLabs TTS keys can be added above. They are stored encrypted and are never displayed again.</p></CardContent></Card>
+          <Card><CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" />Server secrets</CardTitle><CardDescription>Keys never leave the server.</CardDescription></CardHeader><CardContent className="space-y-3"><SecretBadge configs={configs} configKey="zai_api_key" env="ZAI_API_KEY" /><SecretBadge configs={configs} configKey="zai_tts_api_key" env="ZAI_TTS_API_KEY" /><SecretBadge configs={configs} configKey="qwen_tts_api_key" env="DASHSCOPE_API_KEY" /><SecretBadge configs={configs} configKey="xai_api_key" env="XAI_API_KEY" /><SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" /><SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" /><p className="pt-2 text-xs text-muted-foreground">Qwen3-TTS, BigModel and ElevenLabs speech keys can be added above. They are stored encrypted and are never displayed again.</p></CardContent></Card>
         </div>
 
-        <Card className="mt-5"><CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><Cpu className="mt-0.5 h-5 w-5" /><div><div className="font-semibold">Recommended premium mix</div><p className="text-sm text-muted-foreground">Grok/xAI for story intelligence + Z.ai for video + ElevenLabs for character speech.</p></div></div><Badge variant="outline" className="w-fit">Capability routing</Badge></CardContent></Card>
+        <Card className="mt-5"><CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><Cpu className="mt-0.5 h-5 w-5" /><div><div className="font-semibold">Recommended cost-conscious mix</div><p className="text-sm text-muted-foreground">Z.ai for story/video + Qwen3-TTS for character speech, with provider routing kept independent.</p></div></div><Badge variant="outline" className="w-fit">Capability routing</Badge></CardContent></Card>
       </div>
     </main>
   );
