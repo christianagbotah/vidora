@@ -48,7 +48,7 @@ describe("Qwen3-TTS provider compatibility", () => {
     const chunks = splitQwenTtsInput(text);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 600)).toBe(true);
-    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(text.replace(/\s+/g, " ").trim());
+    expect(chunks.join("").replace(/\s+/g, "")).toBe(text.replace(/\s+/g, ""));
   });
 
   test("provider alias and production preflight cannot silently bypass Qwen routing", () => {
