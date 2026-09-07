@@ -1,1 +1,1 @@
-await import("./generation-worker");
+import "./generation-worker";
