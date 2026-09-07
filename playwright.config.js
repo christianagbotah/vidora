@@ -1,3 +1,6 @@
+// CommonJS is intentional here: CI installs Playwright under /tmp and exposes it
+// through NODE_PATH so browser tooling cannot mutate Vidora's Bun dependency tree.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { defineConfig } = require("@playwright/test");
 
 module.exports = defineConfig({
