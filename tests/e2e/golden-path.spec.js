@@ -148,6 +148,17 @@ test.describe("Vidora zero-cost browser golden path", () => {
       `Mobile horizontal overflow detected (${mobileOverflow}px). Offenders: ${JSON.stringify(overflowOffenders)}`,
     ).toBeLessThanOrEqual(2);
 
+    // Regression: a lost view-ready signal must not trap the whole UI forever.
+    // Dispatch only view-loading and require the production overlay to release
+    // itself via its hard cap.
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("vidora:view-loading", {
+        detail: { label: "Hard-cap regression check" },
+      }));
+    });
+    await expect(page.getByText("Hard-cap regression check", { exact: true })).toBeVisible();
+    await expect(page.locator(".preloader-root")).toHaveCount(0, { timeout: 6_000 });
+
     expect(
       blockedGenerativeRequests,
       `Unexpected generative requests were attempted: ${blockedGenerativeRequests.join(", ")}`,
