@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  elevenLabsVoiceCandidates,
+  resolveElevenLabsVoice,
+} from "@/lib/ai-provider-router";
+import {
   elevenLabsVoiceCandidatesForPreview,
   previewElevenLabsVoiceResolution,
   validateElevenLabsVoiceMap,
@@ -26,8 +30,13 @@ describe("ElevenLabs voice-map admin helpers", () => {
     expect(validateElevenLabsVoiceMap('{"jam":""}').error).toContain("non-empty ElevenLabs voice ID");
   });
 
-  test("uses the same specific-to-broad routing order as provider runtime", () => {
-    expect(elevenLabsVoiceCandidatesForPreview("Jam", { language: "fr", accent: "ghanaian" })).toEqual([
+  test("uses the exact specific-to-broad candidate order from provider runtime", () => {
+    const profile = { language: "fr", accent: "ghanaian" };
+    const previewCandidates = elevenLabsVoiceCandidatesForPreview("Jam", profile);
+    const runtimeCandidates = elevenLabsVoiceCandidates("Jam", profile);
+
+    expect(previewCandidates).toEqual(runtimeCandidates);
+    expect(previewCandidates).toEqual([
       "profile:fr:ghanaian:jam",
       "profile:fr:ghanaian",
       "accent:fr:ghanaian",
@@ -38,11 +47,12 @@ describe("ElevenLabs voice-map admin helpers", () => {
   });
 
   test("previews exact matched key before default fallback", () => {
+    const rawMap = JSON.stringify({
+      "accent:ghanaian": "voice-gh",
+      "language:fr": "voice-fr",
+    });
     const resolved = previewElevenLabsVoiceResolution({
-      rawMap: JSON.stringify({
-        "accent:ghanaian": "voice-gh",
-        "language:fr": "voice-fr",
-      }),
+      rawMap,
       defaultVoiceId: "voice-default",
       requestedVoice: "jam",
       language: "fr",
@@ -51,6 +61,11 @@ describe("ElevenLabs voice-map admin helpers", () => {
     expect(resolved.matchedKey).toBe("accent:ghanaian");
     expect(resolved.resolvedVoiceId).toBe("voice-gh");
     expect(resolved.usedDefault).toBe(false);
+    expect(resolved.usedDirectProviderVoice).toBe(false);
+    expect(resolved.resolvedVoiceId).toBe(resolveElevenLabsVoice("jam", {
+      elevenLabsVoiceMap: validateElevenLabsVoiceMap(rawMap).map,
+      elevenLabsDefaultVoiceId: "voice-default",
+    }, { language: "fr", accent: "ghanaian" }));
 
     const fallback = previewElevenLabsVoiceResolution({
       rawMap: "{}",
@@ -62,5 +77,25 @@ describe("ElevenLabs voice-map admin helpers", () => {
     expect(fallback.matchedKey).toBeNull();
     expect(fallback.resolvedVoiceId).toBe("voice-default");
     expect(fallback.usedDefault).toBe(true);
+    expect(fallback.usedDirectProviderVoice).toBe(false);
+  });
+
+  test("mirrors provider runtime when an explicit ElevenLabs voice ID is supplied", () => {
+    const preview = previewElevenLabsVoiceResolution({
+      rawMap: "{}",
+      defaultVoiceId: "voice-default",
+      requestedVoice: "NativeVoiceABC",
+      language: "en",
+      accent: "ghanaian",
+    });
+    const runtime = resolveElevenLabsVoice("NativeVoiceABC", {
+      elevenLabsVoiceMap: {},
+      elevenLabsDefaultVoiceId: "voice-default",
+    }, { language: "en", accent: "ghanaian" });
+
+    expect(preview.resolvedVoiceId).toBe(runtime);
+    expect(preview.resolvedVoiceId).toBe("NativeVoiceABC");
+    expect(preview.usedDefault).toBe(false);
+    expect(preview.usedDirectProviderVoice).toBe(true);
   });
 });
