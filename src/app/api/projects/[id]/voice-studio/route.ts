@@ -127,7 +127,12 @@ export async function PUT(
 
       const nextVoiceId = requestedVoice === "inherit" || requestedVoice === "auto" ? null : requestedVoice;
       if (character.voiceId === nextVoiceId) {
-        return NextResponse.json({ success: true, changed: false, voiceId: nextVoiceId });
+        return NextResponse.json({
+          success: true,
+          changed: false,
+          voiceId: nextVoiceId,
+          affectedSceneIds: [] as string[],
+        });
       }
 
       const sceneRefs = await db.videoScene.findMany({
@@ -152,6 +157,7 @@ export async function PUT(
         success: true,
         changed: true,
         voiceId: nextVoiceId,
+        affectedSceneIds,
         narrationInvalidatedScenes: affectedSceneIds.length,
       });
     }
