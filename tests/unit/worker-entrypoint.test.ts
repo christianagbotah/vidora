@@ -16,6 +16,7 @@ describe("durable worker executable compatibility", () => {
     expect(wrapper).toContain('import("./generation-worker-runner")');
     expect(runner).toContain('[generation-worker] started');
     expect(entry.trim()).toBe('import "./generation-worker";');
+    expect(entry).not.toContain("await import");
   });
 
   test("historical export worker path is now the supervised executable", () => {
@@ -28,5 +29,6 @@ describe("durable worker executable compatibility", () => {
     expect(wrapper).toContain('import("./export-worker-runner")');
     expect(runner).toContain('[export-worker] started');
     expect(entry.trim()).toBe('import "./export-worker";');
+    expect(entry).not.toContain("await import");
   });
 });
