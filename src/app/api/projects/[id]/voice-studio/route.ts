@@ -323,7 +323,9 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
-      changed: true,
+      // `changed` describes the CURRENT render cut. Persisting only a future
+      // scene default must not make the UI claim the reviewed cut changed.
+      changed: changedScenes.length > 0,
       defaultsChanged,
       profile,
       sceneCount: scenes.length,
