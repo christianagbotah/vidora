@@ -7,7 +7,7 @@ const PROVIDER_CALL_RE = /zai\.(chat|vision|generateImage|generateVideo|tts|asr|
 const REVIEWED_BOUNDARIES: Record<string, string> = {
   "scripts/check-ai-provider-routing-live.ts": "production_deploy_active_route_live_probe",
   "scripts/check-zai-live.ts": "production_deploy_free_live_probe",
-  "scripts/generation-worker.ts": "durable_worker_paid_generation",
+  "scripts/generation-worker-runner.ts": "durable_worker_paid_generation",
   "src/app/api/ai/health/route.ts": "admin_only_cached_live_probe",
   "src/app/api/analyze-video/route.ts": "authenticated_metered",
   "src/app/api/assistant/chat/route.ts": "authenticated_bounded_free_preview",
