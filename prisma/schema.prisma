@@ -43,6 +43,10 @@ model VideoProject {
   targetDuration     Int        @default(60)
   projectType        String     @default("custom")
   videoModel         String?
+  narrationLang      String?
+  narrationAccent    String?
+  narrationStyle     String?
+  narrationVoice     String?
   draftData          String?    @db.Text
   lastAutosavedAt    DateTime?
   finalVideoUrl      String?    @db.Text
