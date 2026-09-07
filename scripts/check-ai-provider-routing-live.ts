@@ -1,4 +1,9 @@
-import { getAIProviderSettings, type AIProviderSettings, type TextProviderId } from "../src/lib/ai-provider-router";
+import {
+  getAIProviderSettings,
+  synthesizeProviderSpeech,
+  type AIProviderSettings,
+  type TextProviderId,
+} from "../src/lib/ai-provider-router-qwen";
 import { getConfigValue } from "../src/lib/secure-config";
 import { zai } from "../src/lib/zai";
 import { getZaiTtsSettings, ttsWithRequiredModel } from "../src/lib/zai-tts-compat";
@@ -202,6 +207,20 @@ async function probeZaiTts(): Promise<void> {
   console.log(`[provider-preflight] TTS zai/${settings.model}: OK`);
 }
 
+async function probeQwenTts(): Promise<void> {
+  const result = await synthesizeProviderSpeech({
+    input: "Vidora OK.",
+    voice: "tongtong",
+    language: "en",
+    speed: 1,
+  });
+  if (result.provider !== "qwen") {
+    throw new Error(`Qwen3-TTS preflight resolved unexpected provider ${result.provider}`);
+  }
+  if (result.buffer.length <= 0) throw new Error("Qwen3-TTS preflight returned empty audio");
+  console.log(`[provider-preflight] TTS qwen/${result.model}/${result.voice}: OK`);
+}
+
 async function main(): Promise<void> {
   try {
     const settings = await getAIProviderSettings();
@@ -215,6 +234,12 @@ async function main(): Promise<void> {
 
     if (settings.ttsProvider === "elevenlabs") {
       await probeElevenLabs(settings);
+    } else if (settings.ttsProvider === "qwen") {
+      // Exercise the exact non-realtime Qwen3-TTS path, including the temporary
+      // audio URL download. This catches wrong-region keys, unavailable voices,
+      // model mistakes, and expired/misconfigured DashScope credentials before
+      // a production release is marked healthy.
+      await probeQwenTts();
     } else {
       // GLM-TTS lives on a dedicated BigModel speech endpoint and can use a
       // distinct credential from the api.z.ai chat/image/video client. Probe
