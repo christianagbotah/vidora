@@ -213,12 +213,28 @@ async function probeQwenTts(): Promise<void> {
     voice: "tongtong",
     language: "en",
     speed: 1,
+    direction: "warmly and clearly",
   });
   if (result.provider !== "qwen") {
     throw new Error(`Qwen3-TTS preflight resolved unexpected provider ${result.provider}`);
   }
   if (result.buffer.length <= 0) throw new Error("Qwen3-TTS preflight returned empty audio");
   console.log(`[provider-preflight] TTS qwen/${result.model}/${result.voice}: OK`);
+}
+
+async function probeGrokTts(): Promise<void> {
+  const result = await synthesizeProviderSpeech({
+    input: "Vidora Grok voice OK.",
+    voice: "tongtong",
+    language: "en",
+    speed: 1,
+    direction: "warmly and clearly",
+  });
+  if (result.provider !== "grok") {
+    throw new Error(`Grok TTS preflight resolved unexpected provider ${result.provider}`);
+  }
+  if (result.buffer.length <= 0) throw new Error("Grok TTS preflight returned empty audio");
+  console.log(`[provider-preflight] TTS grok/${result.model}/${result.voice}: OK`);
 }
 
 async function main(): Promise<void> {
@@ -235,11 +251,15 @@ async function main(): Promise<void> {
     if (settings.ttsProvider === "elevenlabs") {
       await probeElevenLabs(settings);
     } else if (settings.ttsProvider === "qwen") {
-      // Exercise the exact non-realtime Qwen3-TTS path, including the temporary
-      // audio URL download. This catches wrong-region keys, unavailable voices,
-      // model mistakes, and expired/misconfigured DashScope credentials before
-      // a production release is marked healthy.
+      // Exercise the exact instruction-capable Qwen HTTP path, including the
+      // temporary audio URL download. This catches wrong-region keys,
+      // unavailable voices/model mistakes, and credential issues before a
+      // production release is marked healthy.
       await probeQwenTts();
+    } else if (settings.ttsProvider === "grok") {
+      // Exercise Grok voice discovery plus real synthesis. This validates the
+      // configured/default narrator voice and the exact production audio path.
+      await probeGrokTts();
     } else {
       // GLM-TTS lives on a dedicated BigModel speech endpoint and can use a
       // distinct credential from the api.z.ai chat/image/video client. Probe
