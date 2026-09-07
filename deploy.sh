@@ -5,10 +5,6 @@ set -euo pipefail
 PROJECT_DIR="/home/lightworld/webapps/vidora"
 cd "$PROJECT_DIR"
 
-# Capture the code that is currently on disk before this deploy advances main.
-# The recovery manifest ties the pre-migration backups to this exact commit.
-PREVIOUS_SHA="$(git rev-parse HEAD)"
-
 NO_PULL=false
 if [[ "${1:-}" == "--no-pull" ]]; then
   NO_PULL=true
@@ -74,6 +70,23 @@ if [[ "$BACKUP_DIR" != /* || "$BACKUP_DIR" == "/" ]]; then
   exit 1
 fi
 
+# Prefer the last release that actually passed production health over whatever
+# commit happens to be checked out on disk. This prevents an out-of-band git
+# pull/checkout from silently changing the recovery target. On the first deploy
+# after this feature ships there is no marker yet, so the clean on-disk commit is
+# the migration-compatible fallback.
+ON_DISK_SHA="$(git rev-parse HEAD)"
+DEPLOYED_SHA_FILE="$BACKUP_DIR/vidora_deployed_release.sha"
+PREVIOUS_SHA="$ON_DISK_SHA"
+if [[ -f "$DEPLOYED_SHA_FILE" ]]; then
+  CANDIDATE_PREVIOUS_SHA="$(tr -d '\r\n' < "$DEPLOYED_SHA_FILE")"
+  if [[ ! "$CANDIDATE_PREVIOUS_SHA" =~ ^[A-Fa-f0-9]{40}$ ]] || ! git cat-file -e "${CANDIDATE_PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+    echo "FATAL: deployed release marker is invalid: $DEPLOYED_SHA_FILE"
+    exit 1
+  fi
+  PREVIOUS_SHA="${CANDIDATE_PREVIOUS_SHA,,}"
+fi
+
 if [[ "$NO_PULL" == false ]]; then
   if [[ -n "$(git status --porcelain)" ]]; then
     echo "FATAL: production working tree is dirty; refusing to overwrite local changes"
@@ -85,7 +98,7 @@ if [[ "$NO_PULL" == false ]]; then
 fi
 
 RELEASE_SHA="$(git rev-parse HEAD)"
-echo "Deploying Vidora commit $RELEASE_SHA (previous on-disk commit: $PREVIOUS_SHA)"
+echo "Deploying Vidora commit $RELEASE_SHA (last deployed commit: $PREVIOUS_SHA; on-disk before pull: $ON_DISK_SHA)"
 
 if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
   echo "FATAL: canonical Prisma schema is not PostgreSQL"
@@ -229,11 +242,16 @@ if [[ "$HEALTH" != *'"status":"ok"'* ]]; then
 fi
 
 # Only a release that passed every post-restart gate becomes the latest healthy
-# recovery point. The timestamped manifest remains immutable in the backup set;
-# the well-known file is a convenience copy for operators.
+# recovery point. The timestamped manifest remains in the backup set; the
+# well-known manifest and deployed-SHA marker make current recovery state explicit.
 bun scripts/deployment-manifest.ts mark "$MANIFEST_FILE" healthy
 cp "$MANIFEST_FILE" "$LAST_SUCCESSFUL_MANIFEST"
 chmod 600 "$LAST_SUCCESSFUL_MANIFEST"
+DEPLOYED_SHA_TMP="${DEPLOYED_SHA_FILE}.tmp"
+printf '%s\n' "$RELEASE_SHA" > "$DEPLOYED_SHA_TMP"
+chmod 600 "$DEPLOYED_SHA_TMP"
+mv "$DEPLOYED_SHA_TMP" "$DEPLOYED_SHA_FILE"
+chmod 600 "$DEPLOYED_SHA_FILE"
 
 echo "Deploy complete"
 echo "Commit: $RELEASE_SHA"
@@ -241,5 +259,6 @@ echo "Database backup: $BACKUP_FILE"
 echo "Media backup: $MEDIA_BACKUP_FILE"
 echo "Recovery manifest: $MANIFEST_FILE"
 echo "Latest healthy manifest: $LAST_SUCCESSFUL_MANIFEST"
+echo "Deployed release marker: $DEPLOYED_SHA_FILE"
 echo "Web: HTTP $HTTP_CODE"
 echo "AI health: $HEALTH"
