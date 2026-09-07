@@ -2,6 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Clapperboard } from "lucide-react";
+import {
+  resolveViewTransitionTiming,
+  VIEW_TRANSITION_MAX_MS,
+  VIEW_TRANSITION_MIN_MS,
+} from "@/lib/view-transition-timing";
 
 /**
  * Vidora Preloader
@@ -205,8 +210,8 @@ export function Preloader() {
    Dispatched by page.tsx whenever currentView changes.
    ════════════════════════════════════════════════════════════════ */
 
-const VIEW_TRANS_MIN = 800;  // ms — minimum visible time
-const VIEW_TRANS_MAX = 4000; // ms — hard cap
+const VIEW_TRANS_MIN = VIEW_TRANSITION_MIN_MS;  // ms — minimum visible time
+const VIEW_TRANS_MAX = VIEW_TRANSITION_MAX_MS; // ms — hard cap from view-loading
 
 export function ViewTransitionOverlay() {
   const [visible, setVisible] = useState(false);
@@ -215,6 +220,9 @@ export function ViewTransitionOverlay() {
   const [label, setLabel] = useState("Loading");
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const rafRef = useRef(0);
+  const transitionStartedAtRef = useRef<number | null>(null);
+  const transitionGenerationRef = useRef(0);
+  const completionStartedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -222,57 +230,104 @@ export function ViewTransitionOverlay() {
     const clearTimers = () => {
       timers.current.forEach(clearTimeout);
       timers.current = [];
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+    };
+
+    const completeTransition = (generation: number) => {
+      if (
+        generation !== transitionGenerationRef.current ||
+        completionStartedRef.current
+      ) {
+        return;
+      }
+
+      completionStartedRef.current = true;
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+      setProgress(100);
+
+      // Let 100% register visually, then fade and release the overlay.
+      timers.current.push(
+        setTimeout(() => {
+          if (generation !== transitionGenerationRef.current) return;
+          setFading(true);
+          timers.current.push(
+            setTimeout(() => {
+              if (generation !== transitionGenerationRef.current) return;
+              setVisible(false);
+              setFading(false);
+            }, 600),
+          );
+        }, 260),
+      );
     };
 
     const onLoading = ((e: Event) => {
       const ce = e as CustomEvent;
+      const generation = transitionGenerationRef.current + 1;
+      transitionGenerationRef.current = generation;
+      completionStartedRef.current = false;
+      clearTimers();
+
+      const startedAt = performance.now();
+      transitionStartedAtRef.current = startedAt;
+
       if (ce.detail?.label) setLabel(ce.detail.label);
       else setLabel("Loading");
-      clearTimers();
       setProgress(0);
       setFading(false);
       setVisible(true);
 
-      // Start progress animation
-      const start = performance.now();
+      // Start progress animation. Generation checks prevent an older transition's
+      // RAF from mutating a newer view after rapid navigation.
       const tick = (now: number) => {
-        const elapsed = now - start;
+        if (
+          generation !== transitionGenerationRef.current ||
+          completionStartedRef.current
+        ) {
+          return;
+        }
+        const elapsed = now - startedAt;
         const t = Math.min(1, elapsed / 1000);
         const eased = 1 - Math.pow(1 - t, 3);
         setProgress(Math.round(eased * 75));
         rafRef.current = requestAnimationFrame(tick);
       };
       rafRef.current = requestAnimationFrame(tick);
+
+      // Real hard cap: start it from view-loading, not from view-ready. If the
+      // ready event is lost, the overlay still releases instead of trapping UI.
+      const { hardCapDelayMs } = resolveViewTransitionTiming(
+        startedAt,
+        startedAt,
+        VIEW_TRANS_MIN,
+        VIEW_TRANS_MAX,
+      );
+      timers.current.push(
+        setTimeout(() => completeTransition(generation), hardCapDelayMs),
+      );
     }) as EventListener;
 
     const onReady = () => {
-      clearTimers();
-      // Jump to 100, then fade
-      setProgress(100);
-      timers.current.push(
-        setTimeout(() => {
-          setFading(true);
-          timers.current.push(
-            setTimeout(() => {
-              setVisible(false);
-              setFading(false);
-            }, 600)
-          );
-        }, 260)
-      );
+      const startedAt = transitionStartedAtRef.current;
+      const generation = transitionGenerationRef.current;
+      if (startedAt === null || completionStartedRef.current) return;
 
-      // Safety cap
+      // Preserve the intended minimum display without cancelling the hard-cap
+      // timer that was armed by view-loading.
+      const { readyDelayMs } = resolveViewTransitionTiming(
+        startedAt,
+        performance.now(),
+        VIEW_TRANS_MIN,
+        VIEW_TRANS_MAX,
+      );
       timers.current.push(
-        setTimeout(() => {
-          if (visible) {
-            setFading(true);
-            setTimeout(() => {
-              setVisible(false);
-              setFading(false);
-            }, 600);
-          }
-        }, VIEW_TRANS_MAX)
+        setTimeout(() => completeTransition(generation), readyDelayMs),
       );
     };
 
@@ -282,6 +337,7 @@ export function ViewTransitionOverlay() {
     return () => {
       window.removeEventListener("vidora:view-loading", onLoading);
       window.removeEventListener("vidora:view-ready", onReady);
+      transitionGenerationRef.current += 1;
       clearTimers();
     };
   }, []);
