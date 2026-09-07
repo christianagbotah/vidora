@@ -1,1 +1,1 @@
-await import("./export-worker");
+import "./export-worker";
