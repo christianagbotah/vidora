@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { deductTokensForOperation } from "@/lib/tokens";
 import { getDubbingLanguage } from "@/lib/dubbing-languages";
+import { parseDialogueSegments } from "@/lib/narration";
 
 export interface SceneLanguageResolution {
   text: string;
@@ -12,6 +13,97 @@ export interface SceneLanguageResolution {
 
 function cleanTranslatedText(value: string): string {
   return value.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+}
+
+function normalizeSpeaker(value: string | null): string {
+  return (value || "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+export function hasMatchingSpeakerAttributions(sourceText: string, translatedText: string): boolean {
+  const source = parseDialogueSegments(sourceText);
+  const attributed = source.filter((segment) => Boolean(segment.speaker));
+  if (attributed.length === 0) return true;
+
+  const translated = parseDialogueSegments(translatedText);
+  if (translated.length !== source.length) return false;
+  return source.every((segment, index) => {
+    if (!segment.speaker) return true;
+    return normalizeSpeaker(translated[index]?.speaker || null) === normalizeSpeaker(segment.speaker);
+  });
+}
+
+function parseTranslatedLineArray(raw: string, expected: number): string[] | null {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length !== expected) return null;
+  const lines = parsed.map((value) => typeof value === "string" ? cleanTranslatedText(value) : "");
+  return lines.every(Boolean) ? lines : null;
+}
+
+export function rebuildSpeakerAwareTranslation(
+  sourceText: string,
+  translatedLines: string[],
+): string | null {
+  const segments = parseDialogueSegments(sourceText);
+  if (segments.length === 0 || translatedLines.length !== segments.length) return null;
+  const output = segments.map((segment, index) => {
+    const spoken = cleanTranslatedText(translatedLines[index] || "");
+    if (!spoken) return "";
+    return segment.speaker ? `${segment.speaker}: ${spoken}` : spoken;
+  });
+  return output.every(Boolean) ? output.join("\n") : null;
+}
+
+async function translatePreservingSpeakers(opts: {
+  sourceText: string;
+  languageName: string;
+  sceneId: string;
+  language: string;
+}): Promise<string> {
+  const segments = parseDialogueSegments(opts.sourceText);
+  const hasAttributedSpeaker = segments.some((segment) => Boolean(segment.speaker));
+
+  if (!hasAttributedSpeaker) {
+    const translated = await zai.chat({
+      systemPrompt:
+        `You are a professional dubbing translator. Translate the user's narration text into ${opts.languageName}. ` +
+        "Preserve the original tone, emotion, pacing, names, facts, and character intent. " +
+        "Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.",
+      userPrompt: opts.sourceText,
+      retry: {
+        label: `translate scene ${opts.sceneId} to ${opts.language}`,
+        timeoutMs: 30_000,
+        maxRetries: 2,
+      },
+    });
+    return cleanTranslatedText(translated);
+  }
+
+  const payload = segments.map((segment) => segment.text);
+  const translated = await zai.chat({
+    systemPrompt:
+      `You are a professional dubbing translator. Translate each item in the user's JSON array into ${opts.languageName}. ` +
+      "Preserve tone, emotion, pacing, names, facts, and character intent. " +
+      `Return ONLY a valid JSON array of exactly ${segments.length} translated strings in the same order. ` +
+      "Do not add speaker names, explanations, markdown, notes, or extra items.",
+    userPrompt: JSON.stringify(payload),
+    retry: {
+      label: `translate speaker-aware scene ${opts.sceneId} to ${opts.language}`,
+      timeoutMs: 30_000,
+      maxRetries: 2,
+    },
+  });
+
+  const translatedLines = parseTranslatedLineArray(translated, segments.length);
+  if (!translatedLines) throw new Error("Speaker-aware translation returned an invalid line array");
+  const rebuilt = rebuildSpeakerAwareTranslation(opts.sourceText, translatedLines);
+  if (!rebuilt) throw new Error("Speaker-aware translation could not be rebuilt");
+  return rebuilt;
 }
 
 /**
@@ -56,7 +148,7 @@ export async function resolveSceneLanguageText(
   });
 
   const existingText = translation?.translatedText?.trim() || "";
-  if (existingText) {
+  if (existingText && hasMatchingSpeakerAttributions(sourceText, existingText)) {
     return {
       text: existingText,
       language: normalizedLanguage,
@@ -99,19 +191,12 @@ export async function resolveSceneLanguageText(
   }
 
   try {
-    const translated = await zai.chat({
-      systemPrompt:
-        `You are a professional dubbing translator. Translate the user's narration text into ${languageMeta.name}. ` +
-        "Preserve the original tone, emotion, pacing, speaker labels, names, facts, and character intent. " +
-        "Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.",
-      userPrompt: sourceText,
-      retry: {
-        label: `translate scene ${sceneId} to ${normalizedLanguage}`,
-        timeoutMs: 30_000,
-        maxRetries: 2,
-      },
+    const clean = await translatePreservingSpeakers({
+      sourceText,
+      languageName: languageMeta.name,
+      sceneId,
+      language: normalizedLanguage,
     });
-    const clean = cleanTranslatedText(translated);
     if (!clean) throw new Error("Translation came back empty");
 
     const updated = await db.sceneTranslation.update({
