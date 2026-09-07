@@ -10,10 +10,11 @@ import {
 } from "./ai-provider-router";
 import { getConfigValue } from "@/lib/secure-config";
 import { synthesizeQwenTts } from "@/lib/qwen-tts";
+import { synthesizeGrokTts } from "@/lib/grok-tts";
 
 export * from "./ai-provider-router";
 
-export type TtsProviderId = BaseTtsProviderId | "qwen";
+export type TtsProviderId = BaseTtsProviderId | "qwen" | "grok";
 export type AIProviderSettings = Omit<BaseAIProviderSettings, "ttsProvider"> & {
   ttsProvider: TtsProviderId;
 };
@@ -26,7 +27,9 @@ export async function getAIProviderSettings(): Promise<AIProviderSettings> {
   const configured = (await getConfigValue("ai_tts_provider")).trim().toLowerCase();
   return {
     ...base,
-    ttsProvider: configured === "qwen" ? "qwen" : base.ttsProvider,
+    ttsProvider: configured === "qwen" || configured === "grok"
+      ? configured
+      : base.ttsProvider,
   };
 }
 
@@ -34,19 +37,29 @@ export async function synthesizeProviderSpeech(
   request: ProviderSpeechOptions,
 ): Promise<ProviderSpeechResult> {
   const settings = await getAIProviderSettings();
-  if (settings.ttsProvider !== "qwen") {
-    return synthesizeBaseProviderSpeech(request);
+  if (settings.ttsProvider === "qwen") {
+    return synthesizeQwenTts({
+      input: request.input,
+      voice: request.voice,
+      speed: request.speed,
+      language: request.language,
+      accent: request.accent,
+      direction: request.direction,
+      model: settings.ttsModel,
+    });
   }
-
-  return synthesizeQwenTts({
-    input: request.input,
-    voice: request.voice,
-    speed: request.speed,
-    language: request.language,
-    accent: request.accent,
-    direction: request.direction,
-    model: settings.ttsModel,
-  });
+  if (settings.ttsProvider === "grok") {
+    return synthesizeGrokTts({
+      input: request.input,
+      voice: request.voice,
+      speed: request.speed,
+      language: request.language,
+      accent: request.accent,
+      direction: request.direction,
+      model: settings.ttsModel,
+    });
+  }
+  return synthesizeBaseProviderSpeech(request);
 }
 
 export { generateProviderText };
