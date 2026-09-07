@@ -3,7 +3,16 @@ import {
   voiceStudioBulkProfileStatus,
   voiceStudioProjectHasPersistedDefault,
   voiceStudioProjectSaveMessage,
+  voiceStudioProfilesEqual,
+  voiceStudioSceneProfileStatus,
 } from "@/lib/voice-studio-project-status";
+
+const projectProfile = {
+  language: "en",
+  accent: "ghanaian",
+  style: "warm",
+  voice: "tongtong",
+};
 
 describe("Voice Studio whole-video project status", () => {
   test("requires a fresh preview only when current scenes changed", () => {
@@ -42,6 +51,26 @@ describe("Voice Studio whole-video project status", () => {
       narrationVoice: "tongtong",
     })).toBe(false);
     expect(voiceStudioProjectHasPersistedDefault({})).toBe(false);
+  });
+
+  test("classifies scene profiles relative to the persisted project default", () => {
+    expect(voiceStudioProfilesEqual(projectProfile, { ...projectProfile })).toBe(true);
+    expect(voiceStudioProfilesEqual(projectProfile, { ...projectProfile, voice: "jam" })).toBe(false);
+    expect(voiceStudioSceneProfileStatus({
+      sceneProfile: projectProfile,
+      projectProfile,
+      hasPersistedProjectDefault: true,
+    })).toEqual({ isOverride: false, label: "Uses project default" });
+    expect(voiceStudioSceneProfileStatus({
+      sceneProfile: { ...projectProfile, language: "fr" },
+      projectProfile,
+      hasPersistedProjectDefault: true,
+    })).toEqual({ isOverride: true, label: "Scene override" });
+    expect(voiceStudioSceneProfileStatus({
+      sceneProfile: { ...projectProfile, language: "fr" },
+      projectProfile,
+      hasPersistedProjectDefault: false,
+    })).toEqual({ isOverride: false, label: "No saved project default" });
   });
 
   test("explains persisted versus legacy scene-derived bulk profiles", () => {

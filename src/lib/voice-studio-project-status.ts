@@ -11,6 +11,13 @@ export interface VoiceStudioProjectDefaultSource {
   narrationVoice?: string | null;
 }
 
+export interface VoiceStudioComparableProfile {
+  language: string;
+  accent: string;
+  style: string;
+  voice: string;
+}
+
 export function voiceStudioProjectHasPersistedDefault(project: VoiceStudioProjectDefaultSource): boolean {
   return Boolean(
     project.narrationLang?.trim() &&
@@ -18,6 +25,34 @@ export function voiceStudioProjectHasPersistedDefault(project: VoiceStudioProjec
     project.narrationStyle?.trim() &&
     project.narrationVoice?.trim(),
   );
+}
+
+export function voiceStudioProfilesEqual(
+  left: VoiceStudioComparableProfile,
+  right: VoiceStudioComparableProfile,
+): boolean {
+  return left.language === right.language &&
+    left.accent === right.accent &&
+    left.style === right.style &&
+    left.voice === right.voice;
+}
+
+export function voiceStudioSceneProfileStatus(opts: {
+  sceneProfile: VoiceStudioComparableProfile;
+  projectProfile: VoiceStudioComparableProfile;
+  hasPersistedProjectDefault: boolean;
+}): {
+  isOverride: boolean;
+  label: string;
+} {
+  if (!opts.hasPersistedProjectDefault) {
+    return { isOverride: false, label: "No saved project default" };
+  }
+  const isOverride = !voiceStudioProfilesEqual(opts.sceneProfile, opts.projectProfile);
+  return {
+    isOverride,
+    label: isOverride ? "Scene override" : "Uses project default",
+  };
 }
 
 export function voiceStudioProjectSaveMessage(result: VoiceStudioProjectSaveResult): string {
