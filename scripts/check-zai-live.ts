@@ -1,5 +1,8 @@
 import { zai, ZAIError } from "../src/lib/zai";
 
+const PREFLIGHT_ATTEMPTS = 3;
+const PREFLIGHT_TIMEOUT_MS = 60_000;
+
 /**
  * Production deployment preflight for the configured Z.ai credential.
  *
@@ -8,6 +11,10 @@ import { zai, ZAIError } from "../src/lib/zai";
  * credential must authenticate against the live provider before the running
  * production release is touched. This uses the same free-model probe as the
  * admin-only deep health endpoint and never prints credentials.
+ *
+ * Keep transient-failure tolerance aligned with Vidora's runtime Z.ai client:
+ * timeouts/network/5xx failures may retry, while auth/validation failures remain
+ * fail-fast. `maxRetries` in the shared wrapper is the total attempt count.
  */
 async function main(): Promise<void> {
   if (process.env.NODE_ENV !== "production") {
@@ -28,8 +35,8 @@ async function main(): Promise<void> {
       thinking: "disabled",
       retry: {
         label: "Production Z.ai deployment preflight",
-        maxRetries: 1,
-        timeoutMs: 15_000,
+        maxRetries: PREFLIGHT_ATTEMPTS,
+        timeoutMs: PREFLIGHT_TIMEOUT_MS,
       },
     });
 
