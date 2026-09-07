@@ -1,9 +1,16 @@
+import { execFile } from "child_process";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import path from "path";
+import { promisify } from "util";
 import { getConfigValue } from "@/lib/secure-config";
 
 export const DEFAULT_QWEN_TTS_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1";
 export const DEFAULT_QWEN_TTS_MODEL = "qwen3-tts-flash";
 export const DEFAULT_QWEN_TTS_VOICE = "Cherry";
 const QWEN_TTS_MAX_CHARS = 600;
+const QWEN_TTS_SAFE_CHARS = 560;
+const execFileAsync = promisify(execFile);
 
 export interface QwenTtsRequest {
   input: string;
@@ -28,6 +35,11 @@ interface QwenTtsSettings {
   apiKey: string;
   defaultVoice: string;
   voiceMap: Record<string, string>;
+}
+
+interface DownloadedAudio {
+  buffer: Buffer;
+  extension: "wav" | "mp3";
 }
 
 function parseVoiceMap(raw: string): Record<string, string> {
@@ -80,6 +92,43 @@ export function qwenLanguageType(language?: string | null): string {
     russian: "Russian",
   };
   return map[normalized] || "Auto";
+}
+
+/**
+ * Keep each provider request comfortably below Qwen3-TTS' 600-character
+ * non-realtime limit. Prefer sentence/word boundaries, but hard-split when a
+ * legacy scene contains one unusually long token or sentence.
+ */
+export function splitQwenTtsInput(text: string, maxLen = QWEN_TTS_SAFE_CHARS): string[] {
+  const normalized = text.trim();
+  if (!normalized) return [];
+  const limit = Math.max(1, Math.min(QWEN_TTS_MAX_CHARS, Math.floor(maxLen)));
+  if (normalized.length <= limit) return [normalized];
+
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit + 1);
+    const candidates = [
+      window.lastIndexOf("。"),
+      window.lastIndexOf("！"),
+      window.lastIndexOf("？"),
+      window.lastIndexOf("."),
+      window.lastIndexOf("!"),
+      window.lastIndexOf("?"),
+      window.lastIndexOf(";"),
+      window.lastIndexOf(","),
+      window.lastIndexOf(" "),
+      window.lastIndexOf("\n"),
+    ];
+    const boundary = Math.max(...candidates);
+    const cut = boundary >= Math.floor(limit * 0.45) ? boundary + 1 : limit;
+    const chunk = remaining.slice(0, cut).trim();
+    if (chunk) chunks.push(chunk);
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.trim()) chunks.push(remaining.trim());
+  return chunks;
 }
 
 function voiceCandidates(
@@ -161,7 +210,7 @@ function providerError(body: unknown, status: number): Error {
   return new Error(`Qwen3-TTS request failed with HTTP ${status}`);
 }
 
-async function downloadAudio(url: string): Promise<{ buffer: Buffer; extension: "wav" | "mp3" }> {
+async function downloadAudio(url: string): Promise<DownloadedAudio> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
   try {
@@ -182,41 +231,35 @@ async function downloadAudio(url: string): Promise<{ buffer: Buffer; extension: 
   }
 }
 
-export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTtsResult> {
-  const text = request.input.trim();
-  if (!text) throw new Error("Qwen3-TTS requires non-empty text");
-  if (text.length > QWEN_TTS_MAX_CHARS) {
-    throw new Error(`Qwen3-TTS input exceeds the ${QWEN_TTS_MAX_CHARS}-character API limit`);
+async function synthesizeOne(opts: {
+  text: string;
+  settings: QwenTtsSettings;
+  model: string;
+  voice: string;
+  languageType: string;
+  instruction: string | null;
+}): Promise<DownloadedAudio> {
+  if (opts.text.length > QWEN_TTS_MAX_CHARS) {
+    throw new Error(`Qwen3-TTS internal chunk exceeds the ${QWEN_TTS_MAX_CHARS}-character API limit`);
   }
-
-  const settings = await getSettings();
-  const model = resolveQwenTtsModel(request.model);
-  const voice = resolveQwenVoice(request.voice, settings, {
-    language: request.language,
-    accent: request.accent,
-  });
-  const languageType = qwenLanguageType(request.language);
-  const instruction = /qwen3-tts-instruct-flash/i.test(model)
-    ? performanceInstruction(request)
-    : null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
-    const response = await fetch(buildEndpoint(settings.baseUrl), {
+    const response = await fetch(buildEndpoint(opts.settings.baseUrl), {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
+        Authorization: `Bearer ${opts.settings.apiKey}`,
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       body: JSON.stringify({
-        model,
+        model: opts.model,
         input: {
-          text,
-          voice,
-          language_type: languageType,
-          ...(instruction ? { instructions: instruction, optimize_instructions: true } : {}),
+          text: opts.text,
+          voice: opts.voice,
+          language_type: opts.languageType,
+          ...(opts.instruction ? { instructions: opts.instruction, optimize_instructions: true } : {}),
         },
       }),
       signal: controller.signal,
@@ -237,14 +280,7 @@ export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTt
       : null;
     const audioUrl = typeof audio?.url === "string" ? audio.url : "";
     if (!audioUrl) throw new Error("Qwen3-TTS returned no complete audio URL");
-
-    const downloaded = await downloadAudio(audioUrl);
-    return {
-      ...downloaded,
-      provider: "qwen",
-      model,
-      voice,
-    };
+    return downloadAudio(audioUrl);
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Qwen3-TTS synthesis timed out");
@@ -253,4 +289,87 @@ export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTt
   } finally {
     clearTimeout(timer);
   }
+}
+
+function ffmpegPathLiteral(value: string): string {
+  return value.replace(/'/g, "'\\''");
+}
+
+async function concatenateQwenAudio(parts: DownloadedAudio[]): Promise<Buffer> {
+  if (parts.length === 1) return parts[0].buffer;
+
+  const workDir = await mkdtemp(path.join(tmpdir(), "vidora-qwen-tts-"));
+  const listPath = path.join(workDir, "concat.txt");
+  const outputPath = path.join(workDir, "combined.wav");
+  try {
+    const partPaths: string[] = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const partPath = path.join(workDir, `part-${String(index).padStart(3, "0")}.${parts[index].extension}`);
+      await writeFile(partPath, parts[index].buffer);
+      partPaths.push(partPath);
+    }
+    await writeFile(
+      listPath,
+      partPaths.map((partPath) => `file '${ffmpegPathLiteral(partPath)}'`).join("\n"),
+      "utf8",
+    );
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", listPath,
+        "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", outputPath,
+      ],
+      { timeout: 90_000 },
+    );
+    const combined = await readFile(outputPath);
+    if (!combined.length) throw new Error("Qwen3-TTS audio concatenation returned an empty file");
+    return combined;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTtsResult> {
+  const text = request.input.trim();
+  if (!text) throw new Error("Qwen3-TTS requires non-empty text");
+
+  const settings = await getSettings();
+  const model = resolveQwenTtsModel(request.model);
+  const voice = resolveQwenVoice(request.voice, settings, {
+    language: request.language,
+    accent: request.accent,
+  });
+  const languageType = qwenLanguageType(request.language);
+  const instruction = /qwen3-tts-instruct-flash/i.test(model)
+    ? performanceInstruction(request)
+    : null;
+  const textParts = splitQwenTtsInput(text);
+  const audioParts: DownloadedAudio[] = [];
+  for (const part of textParts) {
+    audioParts.push(await synthesizeOne({
+      text: part,
+      settings,
+      model,
+      voice,
+      languageType,
+      instruction,
+    }));
+  }
+
+  if (audioParts.length === 1) {
+    return {
+      ...audioParts[0],
+      provider: "qwen",
+      model,
+      voice,
+    };
+  }
+
+  return {
+    buffer: await concatenateQwenAudio(audioParts),
+    extension: "wav",
+    provider: "qwen",
+    model,
+    voice,
+  };
 }
