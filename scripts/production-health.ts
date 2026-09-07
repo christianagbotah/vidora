@@ -231,11 +231,11 @@ export async function collectProductionHealthSnapshot(now = new Date()): Promise
       db.generationRun.count({
         where: {
           activeKey: { not: null },
-          status: { in: ["running", "processing", "waiting_provider"] },
+          status: { in: ["queued", "running", "processing", "waiting_provider"] },
           updatedAt: { lt: generationCutoff },
         },
       }),
-      db.generationRun.count({ where: { status: "needs_reconciliation" } }),
+      db.generationRun.count({ where: { status: "needs_reconciliation", activeKey: { not: null } } }),
       db.exportJob.count({
         where: {
           activeKey: { not: null },
@@ -248,7 +248,7 @@ export async function collectProductionHealthSnapshot(now = new Date()): Promise
     databaseOk = false;
   }
 
-  let pm2Missing = [...EXPECTED_VIDORA_PM2_APPS];
+  let pm2Missing: string[] = [...EXPECTED_VIDORA_PM2_APPS];
   let pm2Unhealthy: Array<{ name: string; status: string }> = [];
   let heartbeatUnhealthy: Array<{ name: string; status: string }> = [];
   try {
