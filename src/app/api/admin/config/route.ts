@@ -18,7 +18,7 @@ const CONFIG_SCHEMA: Record<string, string> = {
   hubtel_api_key: "Hubtel API key",
   hubtel_currency: "Hubtel payment currency",
   stripe_secret_key: "Stripe API secret key",
-  stripe_publishable_key: "Stripe API publishable key",
+  stripe_publishable_key: "Stripe API public key",
   stripe_webhook_secret: "Stripe webhook signing secret",
   download_token_cost: "Number of tokens required per video download",
   site_name: "Site name displayed to users",
@@ -29,13 +29,18 @@ const CONFIG_SCHEMA: Record<string, string> = {
   ai_text_provider: "Text/story provider: zai, xai, or compatible",
   ai_text_model: "Optional text model override for the active provider",
   ai_text_fallback_provider: "Text fallback provider: none, zai, xai, or compatible",
-  ai_tts_provider: "Voice/TTS provider: zai or elevenlabs",
+  ai_tts_provider: "Voice/TTS provider: zai, qwen, or elevenlabs",
   ai_tts_model: "Optional TTS model override for the active provider",
 
   zai_base_url: "Z.ai API base URL for chat/image/video (e.g. https://api.z.ai/api/paas/v4)",
   zai_api_key: "Z.ai API key for chat/image/video (from your z.ai dashboard)",
   zai_tts_base_url: "Dedicated GLM-TTS base URL (default https://open.bigmodel.cn/api/paas/v4)",
   zai_tts_api_key: "Dedicated BigModel/Open Platform API key for GLM-TTS",
+
+  qwen_tts_base_url: "Qwen3-TTS DashScope base URL (default Singapore international API)",
+  qwen_tts_api_key: "Alibaba Cloud Model Studio / DashScope API key for Qwen3-TTS",
+  qwen_tts_default_voice: "Default Qwen3-TTS system voice",
+  qwen_tts_voice_map: "JSON map from Vidora logical voice/profile keys to Qwen3-TTS voice names",
 
   xai_base_url: "xAI API base URL (default https://api.x.ai/v1)",
   xai_api_key: "xAI API key",
@@ -62,6 +67,7 @@ const SECRET_ENV: Record<string, string> = {
   stripe_webhook_secret: "STRIPE_WEBHOOK_SECRET",
   zai_api_key: "ZAI_API_KEY",
   zai_tts_api_key: "ZAI_TTS_API_KEY",
+  qwen_tts_api_key: "DASHSCOPE_API_KEY",
   xai_api_key: "XAI_API_KEY",
   elevenlabs_api_key: "ELEVENLABS_API_KEY",
   compatible_api_key: "AI_COMPATIBLE_API_KEY",
@@ -74,6 +80,9 @@ const DEFAULT_VALUES: Record<string, string> = {
   ai_tts_provider: "zai",
   ai_tts_model: "",
   zai_tts_base_url: "https://open.bigmodel.cn/api/paas/v4",
+  qwen_tts_base_url: "https://dashscope-intl.aliyuncs.com/api/v1",
+  qwen_tts_default_voice: "Cherry",
+  qwen_tts_voice_map: "",
   xai_base_url: "https://api.x.ai/v1",
   xai_text_model: "grok-4.6",
   elevenlabs_base_url: "https://api.elevenlabs.io/v1",
@@ -83,8 +92,26 @@ const DEFAULT_VALUES: Record<string, string> = {
 const ENUM_VALUES: Record<string, Set<string>> = {
   ai_text_provider: new Set(["zai", "xai", "compatible"]),
   ai_text_fallback_provider: new Set(["none", "zai", "xai", "compatible"]),
-  ai_tts_provider: new Set(["zai", "elevenlabs"]),
+  ai_tts_provider: new Set(["zai", "qwen", "elevenlabs"]),
 };
+
+function validateVoiceMap(key: string, value: string): void {
+  if (!value) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`${key} must be valid JSON`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${key} must be a JSON object`);
+  }
+  for (const [logical, voiceId] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!logical.trim() || typeof voiceId !== "string" || !voiceId.trim()) {
+      throw new Error(`${key} entries must map non-empty names to non-empty voice IDs/names`);
+    }
+  }
+}
 
 function validateConfigValue(key: string, raw: string): string {
   const value = raw.trim();
@@ -95,21 +122,8 @@ function validateConfigValue(key: string, raw: string): string {
   if (key.endsWith("_base_url") && value && !/^https:\/\//i.test(value)) {
     throw new Error(`${key} must use HTTPS`);
   }
-  if (key === "elevenlabs_voice_map" && value) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(value);
-    } catch {
-      throw new Error("elevenlabs_voice_map must be valid JSON");
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("elevenlabs_voice_map must be a JSON object");
-    }
-    for (const [logical, voiceId] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!logical.trim() || typeof voiceId !== "string" || !voiceId.trim()) {
-        throw new Error("elevenlabs_voice_map entries must map non-empty names to non-empty voice IDs");
-      }
-    }
+  if (key === "elevenlabs_voice_map" || key === "qwen_tts_voice_map") {
+    validateVoiceMap(key, value);
   }
   return value;
 }
@@ -155,7 +169,7 @@ export async function GET(req: NextRequest) {
       providerCapabilities: {
         text: ["zai", "xai", "compatible"],
         video: ["zai"],
-        tts: ["zai", "elevenlabs"],
+        tts: ["zai", "qwen", "elevenlabs"],
       },
       secretPolicy: "Optional TTS provider keys may be entered by admins and are encrypted at rest. Other provider/payment secrets remain environment-managed.",
     });
