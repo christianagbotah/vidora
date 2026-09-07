@@ -15,7 +15,7 @@ describe("durable worker executable compatibility", () => {
     expect(wrapper).toContain('"vidora-generation-worker"');
     expect(wrapper).toContain('import("./generation-worker-runner")');
     expect(runner).toContain('[generation-worker] started');
-    expect(entry.trim()).toBe('await import("./generation-worker");');
+    expect(entry.trim()).toBe('import "./generation-worker";');
   });
 
   test("historical export worker path is now the supervised executable", () => {
@@ -27,6 +27,6 @@ describe("durable worker executable compatibility", () => {
     expect(wrapper).toContain('"vidora-export-worker"');
     expect(wrapper).toContain('import("./export-worker-runner")');
     expect(runner).toContain('[export-worker] started');
-    expect(entry.trim()).toBe('await import("./export-worker");');
+    expect(entry.trim()).toBe('import "./export-worker";');
   });
 });
