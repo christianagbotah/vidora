@@ -27,6 +27,16 @@ function isGenerativeRequest(url) {
   return /^\/api\/scenes\/[^/]+\/dubbing$/.test(pathname);
 }
 
+async function waitForVidoraOverlays(page) {
+  await expect.poll(
+    async () => page.locator(".preloader-root").count(),
+    {
+      timeout: 20_000,
+      message: "Vidora preloader/view-transition overlay should release pointer input",
+    },
+  ).toBe(0);
+}
+
 test.describe("Vidora zero-cost browser golden path", () => {
   test("login, open completed project, persist Voice Studio defaults, and remain responsive", async ({ page }) => {
     const blockedGenerativeRequests = [];
@@ -48,11 +58,14 @@ test.describe("Vidora zero-cost browser golden path", () => {
 
     const statsButton = page.getByRole("button", { name: "Stats", exact: true });
     await expect(statsButton).toBeVisible({ timeout: 20_000 });
+    await waitForVidoraOverlays(page);
     await statsButton.click();
+    await waitForVidoraOverlays(page);
 
     const projectTitle = page.getByText(E2E_PROJECT_TITLE, { exact: true }).first();
     await expect(projectTitle).toBeVisible();
     await projectTitle.click();
+    await waitForVidoraOverlays(page);
 
     const voiceStudioLauncher = page.getByRole("link", {
       name: "Open Voice Studio for the current project",
@@ -83,6 +96,7 @@ test.describe("Vidora zero-cost browser golden path", () => {
 
     await page.getByRole("link", { name: "Back to Vidora Studio" }).click();
     await expect(voiceStudioLauncher).toBeVisible();
+    await waitForVidoraOverlays(page);
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(voiceStudioLauncher).toBeVisible();
@@ -92,6 +106,7 @@ test.describe("Vidora zero-cost browser golden path", () => {
     expect(desktopOverflow).toBeLessThanOrEqual(2);
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(voiceStudioLauncher).toBeVisible();
     const mobileOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
