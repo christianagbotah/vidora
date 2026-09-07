@@ -30,6 +30,9 @@
       "@/lib/zai": [
         "./src/lib/zai-tts-compat.ts"
       ],
+      "@/lib/ai-provider-router": [
+        "./src/lib/ai-provider-router-qwen.ts"
+      ],
       "@/*": [
         "./src/*"
       ]
