@@ -25,6 +25,8 @@ export interface VoiceStudioSceneProfileSource {
   narrationVoice?: string | null;
 }
 
+export type VoiceStudioProjectProfileSource = VoiceStudioSceneProfileSource;
+
 const LOGICAL_VOICE_IDS = new Set(TTS_VOICES.map((voice) => voice.id));
 
 export const DEFAULT_VOICE_STUDIO_PROFILE: VoiceStudioProfile = {
@@ -82,6 +84,44 @@ export function summarizeVoiceStudioScenes(scenes: VoiceStudioSceneProfileSource
       style: profiles.some((profile) => profile.style !== first.style),
       voice: profiles.some((profile) => profile.voice !== first.voice),
     },
+  };
+}
+
+export function hasVoiceStudioProjectDefaults(project: VoiceStudioProjectProfileSource): boolean {
+  return Boolean(
+    project.narrationLang ||
+    project.narrationAccent ||
+    project.narrationStyle ||
+    project.narrationVoice
+  );
+}
+
+/**
+ * Resolve the whole-video profile independently from scene overrides. Legacy
+ * projects without persisted project defaults keep their current first-scene
+ * behavior until the user explicitly applies a whole-video Voice Studio
+ * profile, at which point all four defaults are stored together.
+ */
+export function voiceStudioProfileForProject(
+  project: VoiceStudioProjectProfileSource,
+  scenes: VoiceStudioSceneProfileSource[] = [],
+): VoiceStudioProfile {
+  const sceneFallback = summarizeVoiceStudioScenes(scenes).profile;
+  if (!hasVoiceStudioProjectDefaults(project)) return sceneFallback;
+  return normalizeVoiceStudioProfile({
+    language: project.narrationLang || sceneFallback.language,
+    accent: project.narrationAccent || sceneFallback.accent,
+    style: project.narrationStyle || sceneFallback.style,
+    voice: project.narrationVoice || sceneFallback.voice,
+  });
+}
+
+export function voiceStudioProjectDefaultsData(profile: VoiceStudioProfile) {
+  return {
+    narrationLang: profile.language,
+    narrationAccent: profile.accent,
+    narrationStyle: profile.style,
+    narrationVoice: profile.voice,
   };
 }
 
