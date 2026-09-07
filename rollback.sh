@@ -179,12 +179,14 @@ ROLLBACK_RECORD="$BACKUP_DIR_REAL/vidora_rollback_${STAMP}_${RELEASE_SHA:0:12}_t
 SERVICES_STOPPED=false
 DESTRUCTIVE_STARTED=false
 stop_vidora_services() {
+  # Set this before the first stop command. If PM2 fails halfway through the
+  # list, the error handler knows it must restart the untouched current release.
+  SERVICES_STOPPED=true
   for app in vidora vidora-generation-worker vidora-export-worker; do
     if pm2 describe "$app" >/dev/null 2>&1; then
       pm2 stop "$app"
     fi
   done
-  SERVICES_STOPPED=true
 }
 restart_current_release() {
   echo "Attempting to restart the current release because destructive restore has not begun..."
