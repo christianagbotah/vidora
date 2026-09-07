@@ -29,4 +29,12 @@ describe("language and export pipeline regression guards", () => {
     expect(route).toContain("style: scene.narrationStyle || undefined");
     expect(route).toContain("materializeSceneVideo(scene)");
   });
+
+  test("production provider preflight exercises the dedicated Z.AI GLM-TTS route", () => {
+    const preflight = source("scripts/check-ai-provider-routing-live.ts");
+    expect(preflight).toContain("getZaiTtsSettings");
+    expect(preflight).toContain("ttsWithRequiredModel");
+    expect(preflight).toContain("await probeZaiTts()");
+    expect(preflight).not.toContain("TTS zai: credential covered by Z.ai live preflight");
+  });
 });
