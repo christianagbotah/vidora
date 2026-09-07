@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
 import {
-  renderFullProjectPreview,
-  type FullPreviewTransition,
-} from "@/lib/full-preview-render";
+  generatedStoreDir,
+  generatedFilePath,
+  resolvePublicAssetPath,
+} from "@/lib/generated-store";
+import type { FullPreviewTransition } from "@/lib/full-preview-render";
 import { writeFile, mkdir, rm, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -13,7 +15,16 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
-const PREVIEW_TRANSITIONS = new Set<FullPreviewTransition>(["fade", "dissolve", "wipe", "slide", "cut"]);
+const PREVIEW_TRANSITIONS = new Set<FullPreviewTransition>([
+  "fade",
+  "dissolve",
+  "wipe",
+  "slide",
+  "cut",
+]);
+const PREVIEW_STREAM_HEARTBEAT_MS = 10_000;
+const PREVIEW_STREAM_POLL_MS = 1_000;
+const PREVIEW_STREAM_MAX_MS = 20 * 60_000;
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
@@ -25,25 +36,130 @@ async function checkFfmpeg(): Promise<boolean> {
   }
 }
 
-/**
- * Persist review only if the project render inputs are still exactly the ones
- * that were loaded before preview rendering began. PostgreSQL increments
- * cutVersion for visual changes plus dialogue/voice/music source changes.
- */
-async function markCurrentCutReviewed(projectId: string, expectedCutVersion: number): Promise<void> {
-  const result = await db.videoProject.updateMany({
-    where: { id: projectId, cutVersion: expectedCutVersion },
-    data: { reviewedCutVersion: expectedCutVersion, reviewedAt: new Date() },
-  });
-  if (result.count !== 1) {
-    throw new Error("Project changed while the full preview was being built");
+function jobMode(params: string | null): string {
+  if (!params) return "final";
+  try {
+    const parsed = JSON.parse(params) as { mode?: unknown };
+    return typeof parsed.mode === "string" ? parsed.mode : "final";
+  } catch {
+    return "final";
   }
 }
 
-function previewFailureStatus(error: unknown): number {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/changed while|changed before|requires every scene/i.test(message)) return 409;
-  return 502;
+function streamFullPreviewJob(jobId: string): Response {
+  const encoder = new TextEncoder();
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  const cleanup = () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (pollTimer) clearTimeout(pollTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    heartbeatTimer = null;
+    pollTimer = null;
+    timeoutTimer = null;
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const safeEnqueue = (value: string): boolean => {
+        if (closed) return false;
+        try {
+          controller.enqueue(encoder.encode(value));
+          return true;
+        } catch {
+          closed = true;
+          cleanup();
+          return false;
+        }
+      };
+
+      const finish = (payload: Record<string, unknown>) => {
+        if (closed) return;
+        const wrote = safeEnqueue(JSON.stringify(payload));
+        closed = true;
+        cleanup();
+        if (wrote) {
+          try {
+            controller.close();
+          } catch {
+            // Client already disconnected; the durable preview job still runs.
+          }
+        }
+      };
+
+      // Commit headers/body immediately, then keep traffic flowing through
+      // Cloudflare/Nginx while the durable worker performs TTS/media/FFmpeg.
+      safeEnqueue("\n");
+      heartbeatTimer = setInterval(() => {
+        safeEnqueue("\n"); // legal leading JSON whitespace
+      }, PREVIEW_STREAM_HEARTBEAT_MS);
+
+      timeoutTimer = setTimeout(() => {
+        finish({
+          success: false,
+          error: "Full preview is still processing in the background. Retry Full Preview to reconnect to the same job.",
+          code: "VIDORA_PREVIEW_STILL_RUNNING",
+          jobId,
+        });
+      }, PREVIEW_STREAM_MAX_MS);
+
+      const poll = async () => {
+        if (closed) return;
+        try {
+          const job = await db.exportJob.findUnique({ where: { id: jobId } });
+          if (!job) {
+            finish({ success: false, error: "Full preview job could not be found." });
+            return;
+          }
+
+          if (job.status === "done") {
+            try {
+              const result = job.result ? JSON.parse(job.result) as Record<string, unknown> : null;
+              if (!result) throw new Error("missing preview result");
+              finish({ ...result, jobId });
+            } catch {
+              finish({ success: false, error: "Full preview finished without a readable result." });
+            }
+            return;
+          }
+
+          if (job.status === "failed") {
+            finish({
+              success: false,
+              error: job.error || "Could not build the full project preview.",
+              jobId,
+            });
+            return;
+          }
+
+          pollTimer = setTimeout(() => void poll(), PREVIEW_STREAM_POLL_MS);
+        } catch {
+          // A transient DB read failure should not kill a live worker job.
+          pollTimer = setTimeout(() => void poll(), 1_500);
+        }
+      };
+
+      void poll();
+    },
+    cancel() {
+      closed = true;
+      cleanup();
+      // Do not cancel the database job: browser disconnects must not destroy
+      // already-started provider/FFmpeg work. A retry resumes the active job.
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-cache, no-store, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -56,12 +172,17 @@ export async function POST(req: NextRequest) {
       includeAudio = true,
     } = body;
     const transitionRaw = typeof body.transition === "string" ? body.transition : "fade";
-    const transition: FullPreviewTransition = PREVIEW_TRANSITIONS.has(transitionRaw as FullPreviewTransition)
+    const transition: FullPreviewTransition = PREVIEW_TRANSITIONS.has(
+      transitionRaw as FullPreviewTransition,
+    )
       ? transitionRaw as FullPreviewTransition
       : "fade";
 
     if (!projectId) {
-      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "Project ID is required" },
+        { status: 400 },
+      );
     }
 
     const authResult = await requireProjectAccess(projectId, true);
@@ -80,70 +201,97 @@ export async function POST(req: NextRequest) {
       include: { scenes: { orderBy: { sceneNumber: "asc" } } },
     });
     if (!project) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: "Project not found" },
+        { status: 404 },
+      );
     }
 
     const completedScenes = project.scenes.filter((scene) => scene.videoUrl);
     if (completedScenes.length === 0) {
-      return NextResponse.json({ success: false, error: "No completed video scenes to concatenate" }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: "No completed video scenes to concatenate" },
+        { status: 400 },
+      );
     }
 
     if (previewOnly) {
       if (completedScenes.length !== project.scenes.length) {
-        return NextResponse.json({
-          success: false,
-          error: `Full preview requires every scene to be complete (${completedScenes.length}/${project.scenes.length} ready).`,
-        }, { status: 409 });
-      }
-
-      const activeExport = await db.exportJob.findUnique({ where: { activeKey: `project:${projectId}` } });
-      if (activeExport) {
-        return NextResponse.json({
-          success: false,
-          error: "A final export is already queued or running. Review can be refreshed after it finishes.",
-          code: "VIDORA_EXPORT_ACTIVE",
-        }, { status: 409 });
-      }
-
-      const expectedCutVersion = project.cutVersion;
-      try {
-        const preview = await renderFullProjectPreview(projectId, expectedCutVersion, {
-          transition,
-          withTitleCard: withTitleCard === true,
-          includeAudio: includeAudio !== false,
-        });
-        await markCurrentCutReviewed(projectId, expectedCutVersion);
-        const min = Math.floor(preview.durationSeconds / 60);
-        const sec = Math.round(preview.durationSeconds % 60);
-        const duration = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
-        return NextResponse.json({
-          success: true,
-          previewVideoUrl: preview.previewVideoUrl,
-          sceneCount: preview.sceneCount,
-          reviewedCutVersion: expectedCutVersion,
-          estimatedDuration: duration,
-          render: {
-            transition: preview.transition,
-            withTitleCard: preview.withTitleCard,
-            includeAudio: preview.includeAudio,
-            voices: preview.voices,
-            musicScenes: preview.musicScenes,
-            ambienceScenes: preview.ambienceScenes,
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Full preview requires every scene to be complete (${completedScenes.length}/${project.scenes.length} ready).`,
           },
-          message: "Full project preview ready with current dialogue, music, ambience, and transitions.",
+          { status: 409 },
+        );
+      }
+
+      // Preview and final export share one active project lock. This preserves
+      // review/export invariants and closes double-click/concurrent races.
+      const activeKey = `project:${projectId}`;
+      const activeJob = await db.exportJob.findUnique({ where: { activeKey } });
+      if (activeJob) {
+        if (jobMode(activeJob.params) === "preview") {
+          return streamFullPreviewJob(activeJob.id);
+        }
+        return NextResponse.json(
+          {
+            success: false,
+            error: "A final export is already queued or running. Review can be refreshed after it finishes.",
+            code: "VIDORA_EXPORT_ACTIVE",
+          },
+          { status: 409 },
+        );
+      }
+
+      let job;
+      try {
+        job = await db.exportJob.create({
+          data: {
+            projectId,
+            userId:
+              authResult.session.userId && authResult.session.userId !== "guest"
+                ? authResult.session.userId
+                : null,
+            activeKey,
+            status: "queued",
+            progress: 0,
+            step: "Queued full preview",
+            params: JSON.stringify({
+              mode: "preview",
+              expectedCutVersion: project.cutVersion,
+              transition,
+              withTitleCard: withTitleCard === true,
+              includeAudio: includeAudio !== false,
+            }),
+          },
         });
       } catch (error) {
-        console.error("Full preview render failed:", error);
-        return NextResponse.json({
-          success: false,
-          error: "Could not build the current full preview. Dialogue/audio generation or video assembly failed; nothing was approved.",
-        }, { status: previewFailureStatus(error) });
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
+          if (concurrent && jobMode(concurrent.params) === "preview") {
+            return streamFullPreviewJob(concurrent.id);
+          }
+          if (concurrent) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: "A final export is already queued or running.",
+                code: "VIDORA_EXPORT_ACTIVE",
+              },
+              { status: 409 },
+            );
+          }
+        }
+        throw error;
       }
+
+      return streamFullPreviewJob(job.id);
     }
 
     // ── Legacy direct concatenate path ────────────────────────────────────
-    // Kept for backward compatibility. Production export uses /api/export-video
-    // and remains protected by the database review trigger.
+    // Kept for backward compatibility. Production final export uses
+    // /api/export-video and the durable export worker.
     if (completedScenes.length === 1) {
       await db.videoProject.update({
         where: { id: projectId },
@@ -157,40 +305,63 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
-    const workDir = path.join(generatedStoreDir(), "concat_" + projectId);
+    await db.videoProject.update({
+      where: { id: projectId },
+      data: { status: "generating" },
+    });
+    const workDir = path.join(generatedStoreDir(), `concat_${projectId}`);
     await mkdir(workDir, { recursive: true });
 
     try {
       const localPaths: string[] = [];
       for (let index = 0; index < completedScenes.length; index++) {
         const scene = completedScenes[index];
-        const localPath = path.join(workDir, "scene_" + String(index + 1).padStart(3, "0") + ".mp4");
+        const localPath = path.join(
+          workDir,
+          `scene_${String(index + 1).padStart(3, "0")}.mp4`,
+        );
         try {
           const response = await fetch(scene.videoUrl!);
-          if (!response.ok) throw new Error("Failed to download: HTTP " + response.status);
+          if (!response.ok) throw new Error(`Failed to download: HTTP ${response.status}`);
           await writeFile(localPath, Buffer.from(await response.arrayBuffer()));
           localPaths.push(localPath);
         } catch (downloadError) {
-          console.error("Failed to download scene " + (index + 1) + ":", downloadError);
+          console.error(`Failed to download scene ${index + 1}:`, downloadError);
           const localFile = resolvePublicAssetPath(scene.videoUrl!);
           if (existsSync(localFile)) localPaths.push(localFile);
         }
       }
 
       if (localPaths.length < 2) {
-        throw new Error("Only " + localPaths.length + " clips could be downloaded. Need at least 2 to concatenate.");
+        throw new Error(
+          `Only ${localPaths.length} clips could be downloaded. Need at least 2 to concatenate.`,
+        );
       }
 
       const concatListPath = path.join(workDir, "concat.txt");
-      await writeFile(concatListPath, localPaths.map((item) => "file '" + item + "'").join("\n"));
+      await writeFile(
+        concatListPath,
+        localPaths.map((item) => `file '${item}'`).join("\n"),
+      );
       const outputPath = path.join(workDir, "final.mp4");
 
       let concatSucceeded = false;
       try {
         await execFileAsync(
           "ffmpeg",
-          ["-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", outputPath],
+          [
+            "-nostdin",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concatListPath,
+            "-c",
+            "copy",
+            outputPath,
+          ],
           { timeout: 120_000 },
         );
         concatSucceeded = existsSync(outputPath);
@@ -202,20 +373,40 @@ export async function POST(req: NextRequest) {
         await execFileAsync(
           "ffmpeg",
           [
-            "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", concatListPath,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24",
-            "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", outputPath,
+            "-nostdin",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concatListPath,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-r",
+            "24",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            outputPath,
           ],
           { timeout: 600_000 },
         );
         if (!existsSync(outputPath)) throw new Error("ffmpeg concat failed");
       }
 
-      const resultFileName = "final_" + projectId + ".mp4";
+      const resultFileName = `final_${projectId}.mp4`;
       const resultPath = generatedFilePath(resultFileName);
       await mkdir(path.dirname(resultPath), { recursive: true });
       await writeFile(resultPath, await readFile(outputPath));
-      const resultVideoUrl = "/generated/" + resultFileName;
+      const resultVideoUrl = `/generated/${resultFileName}`;
 
       await db.videoProject.update({
         where: { id: projectId },
@@ -231,12 +422,20 @@ export async function POST(req: NextRequest) {
       });
     } catch (error) {
       await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-      await db.videoProject.update({ where: { id: projectId }, data: { status: "failed" } }).catch(() => undefined);
+      await db.videoProject
+        .update({ where: { id: projectId }, data: { status: "failed" } })
+        .catch(() => undefined);
       console.error("Legacy concatenate failed:", error);
-      return NextResponse.json({ success: false, error: "Failed to concatenate videos" }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: "Failed to concatenate videos" },
+        { status: 500 },
+      );
     }
   } catch (error) {
     console.error("Concatenate error:", error);
-    return NextResponse.json({ success: false, error: "Failed to concatenate videos" }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: "Failed to concatenate videos" },
+      { status: 500 },
+    );
   }
 }

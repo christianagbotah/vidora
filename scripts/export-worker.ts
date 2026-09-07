@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { runExportJob } from "@/app/api/export-video/route";
+import { runQueuedMediaJob } from "@/lib/export-job-dispatch";
 
 const IDLE_MS = Math.max(1_000, Number(process.env.EXPORT_WORKER_IDLE_MS || 3_000));
 const STALE_MINUTES = Math.max(1, Number(process.env.EXPORT_WORKER_STALE_MINUTES || 3));
@@ -34,7 +34,7 @@ async function claimJob(): Promise<string | null> {
       where: { id: row.id },
       data: {
         status: "running",
-        step: row.status === "running" ? "Recovering interrupted export…" : "Preparing export…",
+        step: row.status === "running" ? "Recovering interrupted media job…" : "Preparing media job…",
         error: null,
         updatedAt: new Date(),
       },
@@ -55,15 +55,15 @@ async function runForever(): Promise<void> {
         await sleep(IDLE_MS);
         continue;
       }
-      await runExportJob(jobId);
+      await runQueuedMediaJob(jobId);
     } catch (error) {
       console.error(
         `[export-worker] ${jobId ? `job=${jobId} ` : ""}error`,
         error instanceof Error ? error.message : "unknown error"
       );
-      // runExportJob records normal pipeline failures itself. An uncaught worker
-      // failure leaves activeKey intact; after the stale lease expires another
-      // worker iteration can safely recover the persisted job.
+      // Normal preview/final pipeline failures are persisted by their job
+      // handlers. An uncaught worker failure leaves activeKey intact; after the
+      // stale lease expires another worker iteration can safely recover it.
       await sleep(IDLE_MS);
     }
   }
