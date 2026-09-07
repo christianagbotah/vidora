@@ -9,9 +9,10 @@ import {
 export * from "./zai";
 
 export const DEFAULT_ZAI_TTS_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+export const DEFAULT_ZAI_TTS_MODEL = "glm-tts";
 
 export interface ModelAwareTTSOptions extends TTSOptions {
-  /** Explicit GLM speech model. Falls back to configured ai_tts_model/ZAI_TTS_MODEL/glm-tts. */
+  /** Explicit GLM speech model. Falls back to the documented glm-tts model. */
   model?: string;
 }
 
@@ -21,8 +22,22 @@ export interface ZaiTtsSettings {
   model: string;
 }
 
+/**
+ * Z.AI/BigModel currently documents glm-tts as the speech model for this
+ * endpoint. `ai_tts_model` is shared with other TTS providers, so a stale value
+ * such as `eleven_v3` or the legacy Vidora label `zai-tts` must never leak into
+ * a GLM-TTS request after switching providers. An explicit model supplied by a
+ * reviewed caller is still honored so future model rollouts can be tested
+ * deliberately without changing the global configuration first.
+ */
 export function resolveZaiTtsModel(explicitModel?: string, configuredModel?: string): string {
-  return explicitModel?.trim() || configuredModel?.trim() || "glm-tts";
+  const explicit = explicitModel?.trim();
+  if (explicit) return explicit;
+
+  const configured = configuredModel?.trim().toLowerCase();
+  return configured === DEFAULT_ZAI_TTS_MODEL
+    ? DEFAULT_ZAI_TTS_MODEL
+    : DEFAULT_ZAI_TTS_MODEL;
 }
 
 export function resolveZaiTtsBaseUrl(configuredBaseUrl?: string): string {
@@ -44,15 +59,27 @@ export async function getZaiTtsSettings(explicitModel?: string): Promise<ZaiTtsS
 
   if (!apiKey) {
     throw new ZAIError(
-      "Dedicated Z.AI/BigModel TTS credentials are not configured. Set ZAI_TTS_API_KEY for the GLM-TTS endpoint.",
+      "Dedicated Z.AI/BigModel TTS credentials are not configured. Set zai_tts_api_key in Admin Providers or ZAI_TTS_API_KEY for the GLM-TTS endpoint.",
       "auth",
+    );
+  }
+
+  const model = resolveZaiTtsModel(explicitModel, configuredModel);
+  const configured = configuredModel?.trim();
+  if (
+    !explicitModel?.trim() &&
+    configured &&
+    configured.toLowerCase() !== DEFAULT_ZAI_TTS_MODEL
+  ) {
+    console.warn(
+      `[ZAI] Ignoring stale ai_tts_model "${configured}" for Z.AI speech; using ${DEFAULT_ZAI_TTS_MODEL}`,
     );
   }
 
   return {
     baseUrl: resolveZaiTtsBaseUrl(configuredBaseUrl),
     apiKey,
-    model: resolveZaiTtsModel(explicitModel, configuredModel),
+    model,
   };
 }
 
