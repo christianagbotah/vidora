@@ -50,6 +50,10 @@ dev.log
 dev.out.log
 server.log
 
+# Runtime operational state
+/logs/worker-heartbeats/
+/logs/production-monitor-state.json
+
 # Skills directory
 /skills/
 
