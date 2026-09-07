@@ -419,6 +419,8 @@ export async function generateSceneNarration(opts: {
       const speech = await synthesizeProviderSpeech({
         input: chunks[i].text,
         voice: chunks[i].voice,
+        language: profile.language,
+        accent: profile.accent,
         direction: chunks[i].direction,
         speed,
       });
