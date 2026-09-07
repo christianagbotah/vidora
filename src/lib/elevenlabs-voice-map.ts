@@ -4,6 +4,16 @@ export interface ElevenLabsVoiceMapValidation {
   entryCount: number;
 }
 
+const VIDORA_LOGICAL_VOICES = new Set([
+  "tongtong",
+  "chuichui",
+  "xiaochen",
+  "jam",
+  "kazi",
+  "douji",
+  "luodo",
+]);
+
 function normalizedRoutingPart(value: string | null | undefined, fallback: string): string {
   const normalized = (value || "").trim().toLowerCase();
   return normalized || fallback;
@@ -69,14 +79,24 @@ export function previewElevenLabsVoiceResolution(opts: {
   matchedKey: string | null;
   resolvedVoiceId: string | null;
   usedDefault: boolean;
+  usedDirectProviderVoice: boolean;
 } {
   const validation = validateElevenLabsVoiceMap(opts.rawMap);
-  const candidates = elevenLabsVoiceCandidatesForPreview(opts.requestedVoice || undefined, {
+  const requestedRaw = (opts.requestedVoice || "").trim();
+  const requestedLogical = requestedRaw.toLowerCase();
+  const candidates = elevenLabsVoiceCandidatesForPreview(requestedRaw || undefined, {
     language: opts.language,
     accent: opts.accent,
   });
   if (validation.error) {
-    return { validation, candidates, matchedKey: null, resolvedVoiceId: null, usedDefault: false };
+    return {
+      validation,
+      candidates,
+      matchedKey: null,
+      resolvedVoiceId: null,
+      usedDefault: false,
+      usedDirectProviderVoice: false,
+    };
   }
 
   for (const candidate of candidates) {
@@ -88,8 +108,20 @@ export function previewElevenLabsVoiceResolution(opts: {
         matchedKey: candidate,
         resolvedVoiceId: matched,
         usedDefault: false,
+        usedDirectProviderVoice: false,
       };
     }
+  }
+
+  if (requestedRaw && !VIDORA_LOGICAL_VOICES.has(requestedLogical)) {
+    return {
+      validation,
+      candidates,
+      matchedKey: null,
+      resolvedVoiceId: requestedRaw,
+      usedDefault: false,
+      usedDirectProviderVoice: true,
+    };
   }
 
   const defaultVoice = (opts.defaultVoiceId || "").trim();
@@ -99,5 +131,6 @@ export function previewElevenLabsVoiceResolution(opts: {
     matchedKey: null,
     resolvedVoiceId: defaultVoice || null,
     usedDefault: Boolean(defaultVoice),
+    usedDirectProviderVoice: false,
   };
 }
