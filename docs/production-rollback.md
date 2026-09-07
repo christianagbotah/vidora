@@ -6,13 +6,19 @@ Vidora deployments create a recovery point before any production migration runs.
 - a generated-media archive,
 - SHA-256 checksums for both archives,
 - the release SHA being deployed,
-- the commit that was on disk immediately before that deploy,
+- the last release that actually passed production deployment health,
 - the generated-media directory,
 - a timestamped recovery manifest.
 
 A manifest is written with `status: prepared` before `prisma migrate deploy`. It is marked `healthy` only after PM2 worker readiness, local web reachability, and `/api/ai/health` all pass. The latest healthy manifest is also copied to:
 
 `$BACKUP_DIR/vidora_last_successful_release.json`
+
+The currently deployed healthy code revision is tracked separately in:
+
+`$BACKUP_DIR/vidora_deployed_release.sha`
+
+`deploy.sh` uses that marker as the next manifest's `previousSha`, so an out-of-band Git pull or checkout cannot silently change the rollback target. On the first deployment after this mechanism is introduced, the clean on-disk Git SHA is used as the compatibility fallback. A successful rollback updates the marker to the restored prior SHA.
 
 ## Rollback is intentionally explicit
 
@@ -40,29 +46,29 @@ The rollback command refuses to continue unless:
 
 ## Recovery sequence
 
-Before destructive restore, rollback creates an emergency snapshot of the current/failed state:
+Before destructive restore, rollback stops every Vidora writer and creates an emergency snapshot of that quiesced current/failed state:
 
 - `vidora_emergency_db_<timestamp>_<release>.sql.gz`
 - `vidora_emergency_media_<timestamp>_<release>.tar.gz`
 
 It then:
 
-1. stops the web app, generation worker, and export worker;
-2. restores the manifest PostgreSQL dump into a fresh `public` schema;
-3. replaces generated media from the manifest archive;
-4. checks out the previous release commit as detached HEAD;
-5. installs the frozen dependency set;
-6. validates/generates Prisma and runs `prisma migrate deploy` against the restored database;
-7. builds the previous release;
-8. starts/reloads PM2;
-9. verifies PM2/worker readiness;
-10. verifies local HTTP 200 and `/api/ai/health` status `ok`;
+1. restores the manifest PostgreSQL dump into a fresh `public` schema;
+2. replaces generated media from the manifest archive;
+3. checks out the previous release commit as detached HEAD;
+4. installs the frozen dependency set;
+5. validates/generates Prisma and runs `prisma migrate deploy` against the restored database;
+6. builds the previous release;
+7. starts/reloads PM2;
+8. verifies PM2/worker readiness;
+9. verifies local HTTP 200 and `/api/ai/health` status `ok`;
+10. updates `vidora_deployed_release.sha` to the recovered release;
 11. writes a timestamped rollback record under `BACKUP_DIR`.
 
-If rollback fails **before** destructive restore starts, the script attempts to restart the current release. If it fails **after** destructive restore begins, all Vidora processes are stopped again and the emergency/current-state snapshots plus intended recovery archives are printed for manual recovery.
+If an emergency snapshot fails **before** destructive restore starts, the script attempts to restart the untouched current release. If it fails **after** destructive restore begins, all Vidora processes are stopped again and the emergency/current-state snapshots plus intended recovery archives are printed for manual recovery.
 
 ## After a successful rollback
 
-The repository remains on detached HEAD at the restored prior release. This is deliberate: it avoids rewriting the `main` branch. A later normal `deploy.sh` run checks out and fast-forwards `main` again.
+The repository remains on detached HEAD at the restored prior release. This is deliberate: it avoids rewriting the `main` branch. A later normal `deploy.sh` run checks out and fast-forwards `main` again; the deployed-release marker ensures that deploy still knows which revision was actually serving before it started.
 
 Do not delete the selected recovery manifest, its referenced database/media archives, or the emergency snapshots until the incident has been reviewed and the recovered release has been verified externally.
