@@ -175,6 +175,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 EMERGENCY_DB="$BACKUP_DIR_REAL/vidora_emergency_db_${STAMP}_${RELEASE_SHA:0:12}.sql.gz"
 EMERGENCY_MEDIA="$BACKUP_DIR_REAL/vidora_emergency_media_${STAMP}_${RELEASE_SHA:0:12}.tar.gz"
 ROLLBACK_RECORD="$BACKUP_DIR_REAL/vidora_rollback_${STAMP}_${RELEASE_SHA:0:12}_to_${PREVIOUS_SHA:0:12}.txt"
+DEPLOYED_SHA_FILE="$BACKUP_DIR_REAL/vidora_deployed_release.sha"
 
 SERVICES_STOPPED=false
 DESTRUCTIVE_STARTED=false
@@ -296,6 +297,13 @@ if [[ -z "$HEALTH" || "$HEALTH" != *'"status":"ok"'* ]]; then
   false
 fi
 
+# The release marker is updated only after every recovery health gate succeeds.
+DEPLOYED_SHA_TMP="${DEPLOYED_SHA_FILE}.tmp"
+printf '%s\n' "$PREVIOUS_SHA" > "$DEPLOYED_SHA_TMP"
+chmod 600 "$DEPLOYED_SHA_TMP"
+mv "$DEPLOYED_SHA_TMP" "$DEPLOYED_SHA_FILE"
+chmod 600 "$DEPLOYED_SHA_FILE"
+
 {
   echo "status=completed"
   echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -306,12 +314,14 @@ fi
   echo "media_backup=$MEDIA_BACKUP_REAL"
   echo "emergency_database_backup=$EMERGENCY_DB"
   echo "emergency_media_backup=$EMERGENCY_MEDIA"
+  echo "deployed_release_marker=$DEPLOYED_SHA_FILE"
   echo "web_http=$HTTP_CODE"
 } > "$ROLLBACK_RECORD"
 chmod 600 "$ROLLBACK_RECORD"
 
 echo "Rollback complete"
 echo "Code: $PREVIOUS_SHA (detached HEAD)"
+echo "Deployed release marker: $DEPLOYED_SHA_FILE"
 echo "Emergency database snapshot: $EMERGENCY_DB"
 echo "Emergency media snapshot: $EMERGENCY_MEDIA"
 echo "Rollback record: $ROLLBACK_RECORD"
