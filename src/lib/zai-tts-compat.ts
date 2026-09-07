@@ -35,9 +35,8 @@ export function resolveZaiTtsModel(explicitModel?: string, configuredModel?: str
   if (explicit) return explicit;
 
   const configured = configuredModel?.trim().toLowerCase();
-  return configured === DEFAULT_ZAI_TTS_MODEL
-    ? DEFAULT_ZAI_TTS_MODEL
-    : DEFAULT_ZAI_TTS_MODEL;
+  if (configured === DEFAULT_ZAI_TTS_MODEL) return DEFAULT_ZAI_TTS_MODEL;
+  return DEFAULT_ZAI_TTS_MODEL;
 }
 
 export function resolveZaiTtsBaseUrl(configuredBaseUrl?: string): string {
