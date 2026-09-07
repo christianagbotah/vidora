@@ -3,10 +3,13 @@ import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { TTS_VOICES } from "@/lib/narration";
 import {
+  hasVoiceStudioProjectDefaults,
   normalizeVoiceStudioProfile,
   parseVoiceStudioCharacterIds,
   summarizeVoiceStudioScenes,
+  voiceStudioProfileForProject,
   voiceStudioProfileForScene,
+  voiceStudioProjectDefaultsData,
 } from "@/lib/voice-studio";
 
 export const runtime = "nodejs";
@@ -35,6 +38,16 @@ function isKnownVoice(value: unknown): value is string {
   return TTS_VOICES.some((voice) => voice.id === requested);
 }
 
+function sameProfile(
+  left: { language: string; accent: string; style: string; voice: string },
+  right: { language: string; accent: string; style: string; voice: string },
+): boolean {
+  return left.language === right.language &&
+    left.accent === right.accent &&
+    left.style === right.style &&
+    left.voice === right.voice;
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -44,7 +57,16 @@ export async function GET(
     const access = await requireProjectAccess(id, false);
     if (!access.ok) return access.response;
 
-    const [scenes, characters] = await Promise.all([
+    const [projectDefaults, scenes, characters] = await Promise.all([
+      db.videoProject.findUnique({
+        where: { id },
+        select: {
+          narrationLang: true,
+          narrationAccent: true,
+          narrationStyle: true,
+          narrationVoice: true,
+        },
+      }),
       db.videoScene.findMany({
         where: { projectId: id },
         orderBy: { sceneNumber: "asc" },
@@ -67,14 +89,19 @@ export async function GET(
         select: { id: true, name: true, role: true, voiceId: true, imageUrl: true },
       }),
     ]);
+    if (!projectDefaults) {
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
 
     const summary = summarizeVoiceStudioScenes(scenes);
+    const bulkProfile = voiceStudioProfileForProject(projectDefaults, scenes);
 
     return NextResponse.json({
       success: true,
       project: access.project,
       canEdit: access.project.userId !== null && access.project.userId === access.session.userId,
-      bulkProfile: summary.profile,
+      bulkProfile,
+      hasPersistedBulkProfile: hasVoiceStudioProjectDefaults(projectDefaults),
       mixed: summary.mixed,
       voices: TTS_VOICES,
       characters,
@@ -189,10 +216,7 @@ export async function PUT(
       }
 
       const current = voiceStudioProfileForScene(scene);
-      const changed = current.language !== profile.language ||
-        current.accent !== profile.accent ||
-        current.style !== profile.style ||
-        current.voice !== profile.voice;
+      const changed = !sameProfile(current, profile);
       if (!changed) {
         return NextResponse.json({ success: true, changed: false, profile });
       }
@@ -222,33 +246,59 @@ export async function PUT(
       });
     }
 
-    const scenes = await db.videoScene.findMany({
-      where: { projectId: id },
-      orderBy: { sceneNumber: "asc" },
-      select: {
-        id: true,
-        narrationLang: true,
-        narrationAccent: true,
-        narrationStyle: true,
-        narrationVoice: true,
-        subtitleLang: true,
-        burnSubtitles: true,
-      },
-    });
-    const changedScenes = scenes.filter((scene) => {
-      const current = voiceStudioProfileForScene(scene);
-      return current.language !== profile.language ||
-        current.accent !== profile.accent ||
-        current.style !== profile.style ||
-        current.voice !== profile.voice;
-    });
+    const [projectDefaults, scenes] = await Promise.all([
+      db.videoProject.findUnique({
+        where: { id },
+        select: {
+          narrationLang: true,
+          narrationAccent: true,
+          narrationStyle: true,
+          narrationVoice: true,
+        },
+      }),
+      db.videoScene.findMany({
+        where: { projectId: id },
+        orderBy: { sceneNumber: "asc" },
+        select: {
+          id: true,
+          narrationLang: true,
+          narrationAccent: true,
+          narrationStyle: true,
+          narrationVoice: true,
+          subtitleLang: true,
+          burnSubtitles: true,
+        },
+      }),
+    ]);
+    if (!projectDefaults) {
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
 
-    if (changedScenes.length === 0) {
-      return NextResponse.json({ success: true, changed: false, profile, sceneCount: scenes.length });
+    const currentProjectProfile = voiceStudioProfileForProject(projectDefaults, scenes);
+    const defaultsChanged = !hasVoiceStudioProjectDefaults(projectDefaults) ||
+      !sameProfile(currentProjectProfile, profile);
+    const changedScenes = scenes.filter((scene) => !sameProfile(voiceStudioProfileForScene(scene), profile));
+
+    if (!defaultsChanged && changedScenes.length === 0) {
+      return NextResponse.json({
+        success: true,
+        changed: false,
+        defaultsChanged: false,
+        profile,
+        sceneCount: scenes.length,
+        changedSceneCount: 0,
+      });
     }
 
     let disabledSubtitleCount = 0;
     await db.$transaction(async (tx) => {
+      if (defaultsChanged) {
+        await tx.videoProject.update({
+          where: { id },
+          data: voiceStudioProjectDefaultsData(profile),
+        });
+      }
+
       for (const scene of changedScenes) {
         const current = voiceStudioProfileForScene(scene);
         const disableStaleBurnedSubtitles =
@@ -274,6 +324,7 @@ export async function PUT(
     return NextResponse.json({
       success: true,
       changed: true,
+      defaultsChanged,
       profile,
       sceneCount: scenes.length,
       changedSceneCount: changedScenes.length,
