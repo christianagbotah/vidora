@@ -3,7 +3,7 @@ import { getConfigValue } from "@/lib/secure-config";
 
 export const DEFAULT_GROK_TTS_BASE_URL = "https://api.x.ai/v1";
 export const DEFAULT_GROK_TTS_MODEL = "grok-tts";
-export const DEFAULT_GROK_TTS_VOICE = "eve";
+export const DEFAULT_GROK_TTS_VOICE = "orion";
 const GROK_TTS_MAX_CHARS = 15_000;
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 
@@ -16,6 +16,21 @@ const VIDORA_LOGICAL_VOICES = new Set([
   "douji",
   "luodo",
 ]);
+
+/**
+ * Provider-native preference lists mirror Vidora's logical voice archetypes.
+ * Availability is checked dynamically, so a changed/limited xAI voice roster
+ * falls back safely instead of hard-failing character dialogue.
+ */
+const GROK_VOICE_PREFERENCES: Record<string, string[]> = {
+  tongtong: ["orion", "altair", "lux", "eve", "sal"],       // cinematic narrator
+  chuichui: ["cosmo", "iris", "helios", "eve", "ara"],    // playful / youthful
+  kazi: ["perseus", "atlas", "rex", "leo", "helix"],      // heroic / confident
+  luodo: ["zagan", "helix", "kepler", "helios", "rex"],  // dramatic / expressive
+  douji: ["carina", "luna", "celeste", "ara", "sal"],    // warm / gentle
+  xiaochen: ["rigel", "lux", "celeste", "rex", "sal"],   // calm / professional
+  jam: ["altair", "leo", "lux", "sal", "orion"],         // mature / grounded
+};
 
 export interface GrokTtsRequest {
   input: string;
@@ -158,6 +173,10 @@ function stableIndex(value: string, modulo: number): number {
   return digest.readUInt32BE(0) % modulo;
 }
 
+function firstAvailable(preferences: string[], available: ReadonlySet<string>): string | null {
+  return preferences.find((voice) => available.has(voice)) || null;
+}
+
 function formatDirection(text: string, direction?: string | null): string {
   const cue = (direction || "").trim().toLowerCase();
   if (!cue) return text;
@@ -244,15 +263,30 @@ export async function resolveGrokVoice(
 
   const requestedVoice = (requested || "").trim().toLowerCase();
   const availableIds = availableVoices.map((voice) => voice.voice_id);
+  const availableSet = new Set(availableIds);
+
   if (requestedVoice && !VIDORA_LOGICAL_VOICES.has(requestedVoice)) {
     // Voice Studio can store a provider-native built-in/custom voice ID directly.
     return requestedVoice;
   }
-  if (!requestedVoice || requestedVoice === "tongtong") return settings.defaultVoice || DEFAULT_GROK_TTS_VOICE;
 
-  const nonNarrator = availableIds.filter((voice) => voice !== settings.defaultVoice);
+  const configuredDefault = settings.defaultVoice || DEFAULT_GROK_TTS_VOICE;
+  const narratorVoice = availableSet.has(configuredDefault)
+    ? configuredDefault
+    : firstAvailable(GROK_VOICE_PREFERENCES.tongtong, availableSet)
+      || availableIds[0]
+      || configuredDefault;
+  if (!requestedVoice || requestedVoice === "tongtong") return narratorVoice;
+
+  const preferred = firstAvailable(
+    GROK_VOICE_PREFERENCES[requestedVoice] || [],
+    new Set(availableIds.filter((voice) => voice !== narratorVoice)),
+  );
+  if (preferred) return preferred;
+
+  const nonNarrator = availableIds.filter((voice) => voice !== narratorVoice);
   const pool = nonNarrator.length ? nonNarrator : availableIds;
-  return pool[stableIndex(requestedVoice, pool.length)] || settings.defaultVoice || DEFAULT_GROK_TTS_VOICE;
+  return pool[stableIndex(requestedVoice, pool.length)] || narratorVoice;
 }
 
 export async function synthesizeGrokTts(request: GrokTtsRequest): Promise<GrokTtsResult> {
