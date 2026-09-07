@@ -19,7 +19,7 @@ jobs:
   quality:
     name: Lint, typecheck, tests, build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     services:
       postgres:
@@ -54,6 +54,10 @@ jobs:
       SMTP_PORT: "587"
       SMTP_USER: ci@example.invalid
       SMTP_PASSWORD: ci-not-real
+      VIDORA_E2E_EMAIL: e2e@vidora.local
+      VIDORA_E2E_PASSWORD: VidoraE2E!2026
+      VIDORA_E2E_PROJECT_TITLE: Vidora E2E Golden Project
+      VIDORA_E2E_BASE_URL: http://127.0.0.1:3000
 
     steps:
       - name: Checkout
@@ -101,3 +105,49 @@ jobs:
 
       - name: Production build
         run: bun run build
+
+      # Keep browser tooling out of the application dependency graph/lockfile.
+      # GitHub's Ubuntu image already ships stable Chrome; Playwright drives that
+      # system browser rather than downloading another browser binary.
+      - name: Install browser E2E harness
+        run: |
+          google-chrome --version
+          npm install --no-save --package-lock=false --ignore-scripts @playwright/test@1.55.0
+
+      - name: Zero-cost browser golden path
+        run: |
+          set -euo pipefail
+          SERVER_PID=""
+
+          cleanup() {
+            if [[ -n "$SERVER_PID" ]]; then
+              kill "$SERVER_PID" 2>/dev/null || true
+              wait "$SERVER_PID" 2>/dev/null || true
+            fi
+            bun scripts/e2e-seed.ts cleanup || true
+          }
+          trap cleanup EXIT
+
+          bun scripts/e2e-seed.ts seed
+          HOSTNAME=127.0.0.1 PORT=3000 bun .next/standalone/server.js > /tmp/vidora-e2e-server.log 2>&1 &
+          SERVER_PID=$!
+
+          READY=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+              READY=1
+              break
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$READY" != "1" ]]; then
+            echo "Vidora production server did not become ready for browser E2E." >&2
+            cat /tmp/vidora-e2e-server.log >&2 || true
+            exit 1
+          fi
+
+          npx playwright test
