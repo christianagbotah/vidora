@@ -5,6 +5,7 @@ import {
   qwenLanguageType,
   resolveQwenTtsModel,
   resolveQwenVoice,
+  splitQwenTtsInput,
 } from "@/lib/qwen-tts";
 import { readFileSync } from "fs";
 import path from "path";
@@ -40,6 +41,14 @@ describe("Qwen3-TTS provider compatibility", () => {
     expect(resolveQwenVoice("jam", settings, { language: "fr", accent: "ghanaian" })).toBe("Ryan");
     expect(resolveQwenVoice("tongtong", settings, { language: "en", accent: "auto" })).toBe("Cherry");
     expect(resolveQwenVoice("unknown", settings, { language: "de", accent: "auto" })).toBe(DEFAULT_QWEN_TTS_VOICE);
+  });
+
+  test("splits long legacy dialogue below the provider's 600-character request ceiling", () => {
+    const text = `${"A".repeat(700)} ${"B".repeat(700)}. Final sentence.`;
+    const chunks = splitQwenTtsInput(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 600)).toBe(true);
+    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(text.replace(/\s+/g, " ").trim());
   });
 
   test("provider alias and production preflight cannot silently bypass Qwen routing", () => {
