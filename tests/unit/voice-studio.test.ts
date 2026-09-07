@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_VOICE_STUDIO_PROFILE,
+  hasVoiceStudioProjectDefaults,
   normalizeVoiceStudioProfile,
   parseVoiceStudioCharacterIds,
   summarizeVoiceStudioScenes,
+  voiceStudioProfileForProject,
   voiceStudioProfileForScene,
+  voiceStudioProjectDefaultsData,
 } from "@/lib/voice-studio";
 
 describe("Voice Studio profile resolution", () => {
@@ -38,7 +41,7 @@ describe("Voice Studio profile resolution", () => {
     })).toEqual(DEFAULT_VOICE_STUDIO_PROFILE);
   });
 
-  test("reports which whole-video fields are mixed without inventing a second profile store", () => {
+  test("reports which scene fields are mixed", () => {
     const summary = summarizeVoiceStudioScenes([
       {
         narrationLang: "en",
@@ -65,6 +68,66 @@ describe("Voice Studio profile resolution", () => {
       accent: false,
       style: false,
       voice: true,
+    });
+  });
+
+  test("legacy projects without durable defaults preserve their existing scene-derived bulk profile", () => {
+    const project = {
+      narrationLang: null,
+      narrationAccent: null,
+      narrationStyle: null,
+      narrationVoice: null,
+    };
+    const scenes = [{
+      narrationLang: "fr",
+      narrationAccent: "ghanaian",
+      narrationStyle: "warm",
+      narrationVoice: "jam",
+    }];
+
+    expect(hasVoiceStudioProjectDefaults(project)).toBe(false);
+    expect(voiceStudioProfileForProject(project, scenes)).toEqual({
+      language: "fr",
+      accent: "ghanaian",
+      style: "warm",
+      voice: "jam",
+    });
+  });
+
+  test("persisted project defaults remain authoritative even when scenes have overrides", () => {
+    const project = {
+      narrationLang: "en",
+      narrationAccent: "ghanaian",
+      narrationStyle: "warm",
+      narrationVoice: "tongtong",
+    };
+    const scenes = [{
+      narrationLang: "fr",
+      narrationAccent: "native",
+      narrationStyle: "storyteller",
+      narrationVoice: "jam",
+    }];
+
+    expect(hasVoiceStudioProjectDefaults(project)).toBe(true);
+    expect(voiceStudioProfileForProject(project, scenes)).toEqual({
+      language: "en",
+      accent: "ghanaian",
+      style: "warm",
+      voice: "tongtong",
+    });
+  });
+
+  test("serializes the exact normalized profile used by future scene inheritance", () => {
+    expect(voiceStudioProjectDefaultsData({
+      language: "fr",
+      accent: "ghanaian",
+      style: "warm",
+      voice: "jam",
+    })).toEqual({
+      narrationLang: "fr",
+      narrationAccent: "ghanaian",
+      narrationStyle: "warm",
+      narrationVoice: "jam",
     });
   });
 
