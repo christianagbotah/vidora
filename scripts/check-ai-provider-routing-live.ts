@@ -2,7 +2,8 @@ import { getAIProviderSettings, type AIProviderSettings, type TextProviderId } f
 import { getConfigValue } from "../src/lib/secure-config";
 import { zai } from "../src/lib/zai";
 
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 60_000;
+const ZAI_PREFLIGHT_ATTEMPTS = 3;
 
 function effectiveTextModel(
   provider: TextProviderId,
@@ -104,7 +105,11 @@ async function probeTextProvider(
       userPrompt: "ping",
       thinking: "disabled",
       extra: { temperature: 0, max_tokens: 4 },
-      retry: { label: "Production routed Z.ai text preflight", maxRetries: 1, timeoutMs: TIMEOUT_MS },
+      retry: {
+        label: "Production routed Z.ai text preflight",
+        maxRetries: ZAI_PREFLIGHT_ATTEMPTS,
+        timeoutMs: TIMEOUT_MS,
+      },
     });
     console.log(`[provider-preflight] text ${provider}/${model}: OK`);
     return;
