@@ -61,6 +61,29 @@ function profileChangedLabel(mixed: MixedState): string {
   return `Scenes currently have mixed ${fields.join(", ")} settings. Applying the profile below will make them consistent.`;
 }
 
+function mixedStateForScenes(scenes: Scene[]): MixedState {
+  if (scenes.length === 0) {
+    return { language: false, accent: false, style: false, voice: false };
+  }
+  const first = scenes[0].profile;
+  return {
+    language: scenes.some((scene) => scene.profile.language !== first.language),
+    accent: scenes.some((scene) => scene.profile.accent !== first.accent),
+    style: scenes.some((scene) => scene.profile.style !== first.style),
+    voice: scenes.some((scene) => scene.profile.voice !== first.voice),
+  };
+}
+
+function patchScenePayload(
+  current: Payload | null,
+  sceneId: string,
+  patch: (scene: Scene) => Scene,
+): Payload | null {
+  if (!current) return current;
+  const scenes = current.scenes.map((scene) => scene.id === sceneId ? patch(scene) : scene);
+  return { ...current, scenes, mixed: mixedStateForScenes(scenes) };
+}
+
 export default function VoiceStudioProjectPage() {
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId;
@@ -109,12 +132,22 @@ export default function VoiceStudioProjectPage() {
         setMessage(body.changed
           ? `Applied the narration profile to ${body.changedSceneCount} scene${body.changedSceneCount === 1 ? "" : "s"}. A fresh full-video preview is required before export.`
           : "Every scene already uses this narration profile.");
+        await load();
       } else {
         setMessage(body.changed
           ? "Scene voice profile saved. Its stale narration was cleared and the project must be previewed again before export."
           : "This scene already uses that voice profile.");
+        if (scopeId) {
+          const savedProfile = (body.profile || profile) as Profile;
+          setSceneProfiles((current) => ({ ...current, [scopeId]: savedProfile }));
+          setData((current) => patchScenePayload(current, scopeId, (scene) => ({
+            ...scene,
+            profile: savedProfile,
+            narrationUrl: body.changed ? null : scene.narrationUrl,
+            burnSubtitles: body.staleBurnedSubtitlesDisabled ? false : scene.burnSubtitles,
+          })));
+        }
       }
-      await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save narration profile");
     } finally {
@@ -138,7 +171,23 @@ export default function VoiceStudioProjectPage() {
       setMessage(body.changed
         ? `Character voice saved. ${body.narrationInvalidatedScenes || 0} linked scene narration track${body.narrationInvalidatedScenes === 1 ? " was" : "s were"} invalidated.`
         : "This character already uses that voice setting.");
-      await load();
+
+      const persistedVoice = typeof body.voiceId === "string" && body.voiceId ? body.voiceId : "inherit";
+      const affectedSceneIds = new Set<string>(
+        Array.isArray(body.affectedSceneIds)
+          ? body.affectedSceneIds.filter((id: unknown): id is string => typeof id === "string")
+          : [],
+      );
+      setCharacterVoices((current) => ({ ...current, [characterId]: persistedVoice }));
+      setData((current) => current ? {
+        ...current,
+        characters: current.characters.map((character) => character.id === characterId
+          ? { ...character, voiceId: persistedVoice === "inherit" ? null : persistedVoice }
+          : character),
+        scenes: current.scenes.map((scene) => affectedSceneIds.has(scene.id)
+          ? { ...scene, narrationUrl: null }
+          : scene),
+      } : current);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save character voice");
     } finally {
@@ -166,7 +215,18 @@ export default function VoiceStudioProjectPage() {
         throw new Error(body.error || "Unable to generate scene narration");
       }
       setMessage(voiceStudioNarrationSuccessMessage(body));
-      await load();
+      const persistedProfile: Profile = {
+        language: typeof body.language === "string" ? body.language : profile.language,
+        accent: typeof body.accent === "string" ? body.accent : profile.accent,
+        style: typeof body.style === "string" ? body.style : profile.style,
+        voice: typeof body.voice === "string" ? body.voice : profile.voice,
+      };
+      setSceneProfiles((current) => ({ ...current, [sceneId]: persistedProfile }));
+      setData((current) => patchScenePayload(current, sceneId, (scene) => ({
+        ...scene,
+        profile: persistedProfile,
+        narrationUrl: typeof body.narrationUrl === "string" ? body.narrationUrl : scene.narrationUrl,
+      })));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to generate scene narration");
     } finally {
