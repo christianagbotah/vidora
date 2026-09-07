@@ -3,6 +3,7 @@ import {
   DEFAULT_QWEN_TTS_MODEL,
   DEFAULT_QWEN_TTS_VOICE,
   qwenLanguageType,
+  qwenPerformanceInstruction,
   resolveQwenTtsModel,
   resolveQwenVoice,
   splitQwenTtsInput,
@@ -11,13 +12,27 @@ import { readFileSync } from "fs";
 import path from "path";
 
 describe("Qwen3-TTS provider compatibility", () => {
-  test("uses the stable Qwen3-TTS model and ignores stale cross-provider model names", () => {
+  test("upgrades basic Qwen3 Flash to the instruction-capable production model", () => {
+    expect(DEFAULT_QWEN_TTS_MODEL).toBe("qwen3-tts-instruct-flash");
     expect(resolveQwenTtsModel("")).toBe(DEFAULT_QWEN_TTS_MODEL);
     expect(resolveQwenTtsModel("zai-tts")).toBe(DEFAULT_QWEN_TTS_MODEL);
     expect(resolveQwenTtsModel("eleven_v3")).toBe(DEFAULT_QWEN_TTS_MODEL);
-    expect(resolveQwenTtsModel("qwen3-tts-flash")).toBe("qwen3-tts-flash");
+    expect(resolveQwenTtsModel("qwen3-tts-flash")).toBe(DEFAULT_QWEN_TTS_MODEL);
+    expect(resolveQwenTtsModel("qwen3-tts-flash-2025-11-27")).toBe(DEFAULT_QWEN_TTS_MODEL);
     expect(resolveQwenTtsModel("qwen3-tts-instruct-flash")).toBe("qwen3-tts-instruct-flash");
-    expect(resolveQwenTtsModel("qwen3-tts-flash-2025-11-27")).toBe("qwen3-tts-flash-2025-11-27");
+    expect(resolveQwenTtsModel("qwen3-tts-instruct-flash-2026-01-26")).toBe("qwen3-tts-instruct-flash-2026-01-26");
+  });
+
+  test("turns Vidora performance metadata into Qwen instruction control", () => {
+    const instruction = qwenPerformanceInstruction({
+      input: "Move out!",
+      direction: "excited and heroic",
+      speed: 1.18,
+      accent: "ghanaian",
+    });
+    expect(instruction).toContain("excited and heroic");
+    expect(instruction).toContain("faster pace");
+    expect(instruction).toContain("ghanaian accent");
   });
 
   test("maps supported Vidora languages to DashScope language_type and safely uses Auto otherwise", () => {

@@ -6,7 +6,7 @@ import { promisify } from "util";
 import { getConfigValue } from "@/lib/secure-config";
 
 export const DEFAULT_QWEN_TTS_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1";
-export const DEFAULT_QWEN_TTS_MODEL = "qwen3-tts-flash";
+export const DEFAULT_QWEN_TTS_MODEL = "qwen3-tts-instruct-flash";
 export const DEFAULT_QWEN_TTS_VOICE = "Cherry";
 const QWEN_TTS_MAX_CHARS = 600;
 const QWEN_TTS_SAFE_CHARS = 560;
@@ -59,10 +59,18 @@ function parseVoiceMap(raw: string): Record<string, string> {
   }
 }
 
+/**
+ * The old qwen3-tts-flash model remains accepted as legacy configuration, but
+ * Vidora deliberately upgrades it to the instruction-capable stable model so
+ * screenplay performance direction is not silently ignored.
+ */
 export function resolveQwenTtsModel(explicitModel?: string | null): string {
   const candidate = (explicitModel || "").trim();
-  if (/^qwen3-tts-(?:flash|instruct-flash)(?:$|-\d{4}-\d{2}-\d{2}$)/i.test(candidate)) {
+  if (/^qwen3-tts-instruct-flash(?:$|-\d{4}-\d{2}-\d{2}$)/i.test(candidate)) {
     return candidate;
+  }
+  if (/^qwen3-tts-flash(?:$|-\d{4}-\d{2}-\d{2}$)/i.test(candidate)) {
+    return DEFAULT_QWEN_TTS_MODEL;
   }
   return DEFAULT_QWEN_TTS_MODEL;
 }
@@ -190,14 +198,17 @@ async function getSettings(): Promise<QwenTtsSettings> {
   };
 }
 
-function performanceInstruction(request: QwenTtsRequest): string | null {
+export function qwenPerformanceInstruction(request: QwenTtsRequest): string | null {
   const parts: string[] = [];
-  if (request.direction?.trim()) parts.push(`Delivery: ${request.direction.trim()}.`);
+  if (request.direction?.trim()) parts.push(`Perform the line ${request.direction.trim()}.`);
   const speed = Number(request.speed);
   if (Number.isFinite(speed) && speed > 0 && Math.abs(speed - 1) >= 0.08) {
     parts.push(speed < 1 ? "Speak at a slower pace." : "Speak at a faster pace.");
   }
-  return parts.join(" ").trim() || null;
+  if (request.accent?.trim() && request.accent.trim().toLowerCase() !== "auto") {
+    parts.push(`Use a natural ${request.accent.trim()} accent when appropriate for the selected language.`);
+  }
+  return parts.join(" ").trim() || "Deliver the line naturally with expressive, cinematic speech.";
 }
 
 function providerError(body: unknown, status: number): Error {
@@ -237,7 +248,7 @@ async function synthesizeOne(opts: {
   model: string;
   voice: string;
   languageType: string;
-  instruction: string | null;
+  instruction: string;
 }): Promise<DownloadedAudio> {
   if (opts.text.length > QWEN_TTS_MAX_CHARS) {
     throw new Error(`Qwen3-TTS internal chunk exceeds the ${QWEN_TTS_MAX_CHARS}-character API limit`);
@@ -259,14 +270,17 @@ async function synthesizeOne(opts: {
           text: opts.text,
           voice: opts.voice,
           language_type: opts.languageType,
-          ...(opts.instruction ? { instructions: opts.instruction, optimize_instructions: true } : {}),
+          instructions: opts.instruction,
+          optimize_instructions: true,
         },
       }),
       signal: controller.signal,
       cache: "no-store",
     });
 
-    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+    const body = response.ok
+      ? await response.json().catch(() => null) as Record<string, unknown> | null
+      : await response.json().catch(() => null) as Record<string, unknown> | null;
     const providerStatus = body && typeof body.status_code === "number" ? body.status_code : response.status;
     if (!response.ok || providerStatus >= 400 || (body?.code && String(body.code).trim())) {
       throw providerError(body, providerStatus);
@@ -340,9 +354,8 @@ export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTt
     accent: request.accent,
   });
   const languageType = qwenLanguageType(request.language);
-  const instruction = /qwen3-tts-instruct-flash/i.test(model)
-    ? performanceInstruction(request)
-    : null;
+  const instruction = qwenPerformanceInstruction(request)
+    || "Deliver the line naturally with expressive, cinematic speech.";
   const textParts = splitQwenTtsInput(text);
   const audioParts: DownloadedAudio[] = [];
   for (const part of textParts) {

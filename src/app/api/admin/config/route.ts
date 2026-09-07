@@ -29,7 +29,7 @@ const CONFIG_SCHEMA: Record<string, string> = {
   ai_text_provider: "Text/story provider: zai, xai, or compatible",
   ai_text_model: "Optional text model override for the active provider",
   ai_text_fallback_provider: "Text fallback provider: none, zai, xai, or compatible",
-  ai_tts_provider: "Voice/TTS provider: zai, qwen, or elevenlabs",
+  ai_tts_provider: "Voice/TTS provider: zai, qwen, grok, or elevenlabs",
   ai_tts_model: "Optional TTS model override for the active provider",
 
   zai_base_url: "Z.ai API base URL for chat/image/video (e.g. https://api.z.ai/api/paas/v4)",
@@ -41,6 +41,11 @@ const CONFIG_SCHEMA: Record<string, string> = {
   qwen_tts_api_key: "Alibaba Cloud Model Studio / DashScope API key for Qwen3-TTS",
   qwen_tts_default_voice: "Default Qwen3-TTS system voice",
   qwen_tts_voice_map: "JSON map from Vidora logical voice/profile keys to Qwen3-TTS voice names",
+
+  grok_tts_base_url: "Grok TTS API base URL (default https://api.x.ai/v1)",
+  xai_tts_api_key: "Optional dedicated xAI API key for Grok TTS; falls back to XAI_API_KEY",
+  grok_tts_default_voice: "Default Grok TTS narrator voice ID",
+  grok_tts_voice_map: "JSON map from Vidora logical voice/profile keys to Grok voice IDs",
 
   xai_base_url: "xAI API base URL (default https://api.x.ai/v1)",
   xai_api_key: "xAI API key",
@@ -69,6 +74,7 @@ const SECRET_ENV: Record<string, string> = {
   zai_tts_api_key: "ZAI_TTS_API_KEY",
   qwen_tts_api_key: "DASHSCOPE_API_KEY",
   xai_api_key: "XAI_API_KEY",
+  xai_tts_api_key: "XAI_TTS_API_KEY",
   elevenlabs_api_key: "ELEVENLABS_API_KEY",
   compatible_api_key: "AI_COMPATIBLE_API_KEY",
 };
@@ -83,6 +89,9 @@ const DEFAULT_VALUES: Record<string, string> = {
   qwen_tts_base_url: "https://dashscope-intl.aliyuncs.com/api/v1",
   qwen_tts_default_voice: "Cherry",
   qwen_tts_voice_map: "",
+  grok_tts_base_url: "https://api.x.ai/v1",
+  grok_tts_default_voice: "eve",
+  grok_tts_voice_map: "",
   xai_base_url: "https://api.x.ai/v1",
   xai_text_model: "grok-4.6",
   elevenlabs_base_url: "https://api.elevenlabs.io/v1",
@@ -92,14 +101,14 @@ const DEFAULT_VALUES: Record<string, string> = {
 const ENUM_VALUES: Record<string, Set<string>> = {
   ai_text_provider: new Set(["zai", "xai", "compatible"]),
   ai_text_fallback_provider: new Set(["none", "zai", "xai", "compatible"]),
-  ai_tts_provider: new Set(["zai", "qwen", "elevenlabs"]),
+  ai_tts_provider: new Set(["zai", "qwen", "grok", "elevenlabs"]),
 };
 
 function validateVoiceMap(key: string, value: string): void {
   if (!value) return;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value);
+    parsed = JSON.parse(value) as unknown;
   } catch {
     throw new Error(`${key} must be valid JSON`);
   }
@@ -122,7 +131,7 @@ function validateConfigValue(key: string, raw: string): string {
   if (key.endsWith("_base_url") && value && !/^https:\/\//i.test(value)) {
     throw new Error(`${key} must use HTTPS`);
   }
-  if (key === "elevenlabs_voice_map" || key === "qwen_tts_voice_map") {
+  if (key === "elevenlabs_voice_map" || key === "qwen_tts_voice_map" || key === "grok_tts_voice_map") {
     validateVoiceMap(key, value);
   }
   return value;
@@ -142,13 +151,23 @@ export async function GET(req: NextRequest) {
         const envName = SECRET_ENV[key];
         const fromEnv = Boolean(envName && process.env[envName]?.trim());
         const dbConfigured = Boolean(rowMap.get(key)?.value);
+        const inheritedXai = key === "xai_tts_api_key"
+          && !fromEnv
+          && !dbConfigured
+          && (Boolean(rowMap.get("xai_api_key")?.value) || Boolean(process.env.XAI_API_KEY?.trim()));
         result[key] = {
-          value: fromEnv || dbConfigured ? "********" : "",
+          value: fromEnv || dbConfigured || inheritedXai ? "********" : "",
           description,
-          configured: fromEnv || dbConfigured,
+          configured: fromEnv || dbConfigured || inheritedXai,
           secret: true,
           // getConfigValue() resolves encrypted DB values before env fallback.
-          source: dbConfigured ? "encrypted-database" : fromEnv ? "environment" : "none",
+          source: dbConfigured
+            ? "encrypted-database"
+            : fromEnv
+              ? "environment"
+              : inheritedXai
+                ? "shared-xai-key"
+                : "none",
         };
         continue;
       }
@@ -169,9 +188,9 @@ export async function GET(req: NextRequest) {
       providerCapabilities: {
         text: ["zai", "xai", "compatible"],
         video: ["zai"],
-        tts: ["zai", "qwen", "elevenlabs"],
+        tts: ["zai", "qwen", "grok", "elevenlabs"],
       },
-      secretPolicy: "Optional TTS provider keys may be entered by admins and are encrypted at rest. Other provider/payment secrets remain environment-managed.",
+      secretPolicy: "Optional TTS provider keys may be entered by admins and are encrypted at rest. Grok TTS can reuse the server XAI_API_KEY when no dedicated TTS key is configured. Other provider/payment secrets remain environment-managed.",
     });
   } catch (error) {
     console.error("Admin get config error:", error);
