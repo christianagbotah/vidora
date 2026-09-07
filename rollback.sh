@@ -220,9 +220,12 @@ Vidora production rollback
   Generated dir:    $GENERATED_DIR_REAL
 EOF
 
-# Preserve the failed/current database before stopping anything. pg_dump is a
-# transactionally consistent snapshot and gives operators a route back if the
-# selected recovery point turns out to be wrong.
+# Stop every Vidora writer before taking emergency snapshots so the database and
+# generated-media archives describe one quiesced failed/current state.
+stop_vidora_services
+
+# Preserve the failed/current database before destructive restore. If either
+# emergency snapshot fails, the ERR handler restarts the untouched current release.
 echo "Creating emergency database snapshot: $EMERGENCY_DB"
 EMERGENCY_DB_TMP="${EMERGENCY_DB}.tmp"
 pg_dump --no-owner --no-privileges "$PG_DATABASE_URL" | gzip -9 > "$EMERGENCY_DB_TMP"
@@ -230,9 +233,6 @@ gzip -t "$EMERGENCY_DB_TMP"
 [[ -s "$EMERGENCY_DB_TMP" ]]
 mv "$EMERGENCY_DB_TMP" "$EMERGENCY_DB"
 chmod 600 "$EMERGENCY_DB"
-
-# Stop writers before snapshotting/restoring generated media.
-stop_vidora_services
 
 echo "Creating emergency media snapshot: $EMERGENCY_MEDIA"
 mkdir -p "$GENERATED_DIR_REAL"
