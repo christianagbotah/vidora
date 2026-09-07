@@ -60,14 +60,31 @@ if [[ "$GENERATED_DIR" != /* ]]; then
   exit 1
 fi
 case "$GENERATED_DIR" in
-  "$PROJECT_DIR/.next"|"$PROJECT_DIR/.next/"*)
-    echo "FATAL: GENERATED_DIR must live outside .next so deploys cannot erase media"
+  "/"|"$PROJECT_DIR/.next"|"$PROJECT_DIR/.next/"*)
+    echo "FATAL: GENERATED_DIR must be a safe absolute path outside .next"
     exit 1
     ;;
 esac
-if [[ "$BACKUP_DIR" != /* ]]; then
-  echo "FATAL: BACKUP_DIR must be an absolute path"
+if [[ "$BACKUP_DIR" != /* || "$BACKUP_DIR" == "/" ]]; then
+  echo "FATAL: BACKUP_DIR must be a safe absolute path"
   exit 1
+fi
+
+# Prefer the last release that actually passed production health over whatever
+# commit happens to be checked out on disk. This prevents an out-of-band git
+# pull/checkout from silently changing the recovery target. On the first deploy
+# after this feature ships there is no marker yet, so the clean on-disk commit is
+# the migration-compatible fallback.
+ON_DISK_SHA="$(git rev-parse HEAD)"
+DEPLOYED_SHA_FILE="$BACKUP_DIR/vidora_deployed_release.sha"
+PREVIOUS_SHA="$ON_DISK_SHA"
+if [[ -f "$DEPLOYED_SHA_FILE" ]]; then
+  CANDIDATE_PREVIOUS_SHA="$(tr -d '\r\n' < "$DEPLOYED_SHA_FILE")"
+  if [[ ! "$CANDIDATE_PREVIOUS_SHA" =~ ^[A-Fa-f0-9]{40}$ ]] || ! git cat-file -e "${CANDIDATE_PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+    echo "FATAL: deployed release marker is invalid: $DEPLOYED_SHA_FILE"
+    exit 1
+  fi
+  PREVIOUS_SHA="${CANDIDATE_PREVIOUS_SHA,,}"
 fi
 
 if [[ "$NO_PULL" == false ]]; then
@@ -81,7 +98,7 @@ if [[ "$NO_PULL" == false ]]; then
 fi
 
 RELEASE_SHA="$(git rev-parse HEAD)"
-echo "Deploying Vidora commit $RELEASE_SHA"
+echo "Deploying Vidora commit $RELEASE_SHA (last deployed commit: $PREVIOUS_SHA; on-disk before pull: $ON_DISK_SHA)"
 
 if ! head -30 prisma/schema.prisma | grep -q 'provider = "postgresql"'; then
   echo "FATAL: canonical Prisma schema is not PostgreSQL"
@@ -122,6 +139,8 @@ chmod 750 "$GENERATED_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_FILE="$BACKUP_DIR/vidora_db_${STAMP}_${RELEASE_SHA:0:12}.sql.gz"
 MEDIA_BACKUP_FILE="$BACKUP_DIR/vidora_media_${STAMP}_${RELEASE_SHA:0:12}.tar.gz"
+MANIFEST_FILE="$BACKUP_DIR/vidora_release_${STAMP}_${RELEASE_SHA:0:12}.json"
+LAST_SUCCESSFUL_MANIFEST="$BACKUP_DIR/vidora_last_successful_release.json"
 
 # Prisma connection URLs commonly include ?schema=public. Prisma understands
 # that parameter, but libpq/pg_dump does not. Remove only the Prisma-specific
@@ -166,6 +185,24 @@ fi
 tar -tzf "$MEDIA_BACKUP_FILE" >/dev/null
 chmod 600 "$MEDIA_BACKUP_FILE"
 
+DB_SHA256="$(sha256sum "$BACKUP_FILE" | awk '{print $1}')"
+MEDIA_SHA256="$(sha256sum "$MEDIA_BACKUP_FILE" | awk '{print $1}')"
+
+# Write the recovery manifest before touching the schema. If any subsequent
+# migration/restart/health step fails, this exact backup set remains available
+# for an explicit operator-confirmed rollback.
+bun scripts/deployment-manifest.ts write \
+  "$MANIFEST_FILE" \
+  "$PREVIOUS_SHA" \
+  "$RELEASE_SHA" \
+  "$BACKUP_FILE" \
+  "$DB_SHA256" \
+  "$MEDIA_BACKUP_FILE" \
+  "$MEDIA_SHA256" \
+  "$GENERATED_DIR"
+chmod 600 "$MANIFEST_FILE"
+echo "Recovery manifest prepared: $MANIFEST_FILE"
+
 # Production schema changes are versioned and reviewable. db push is forbidden.
 bunx prisma migrate deploy
 
@@ -173,9 +210,9 @@ mkdir -p logs
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
 
-# PM2 accepting the reload command is not enough: a worker can crash-loop after
-# launch while the web process still serves HTTP. Require the web app and both
-# durable workers to settle in the online state before declaring the release healthy.
+# PM2 accepting the reload command is not enough. Require the web app and both
+# durable workers to settle online AND prove that the current worker PIDs can
+# reach PostgreSQL through the PID-bound readiness heartbeat gate.
 NODE_ENV=production bun scripts/check-pm2-health.ts
 
 HTTP_CODE="000"
@@ -186,6 +223,7 @@ for attempt in 1 2 3 4 5; do
 done
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "FATAL: Vidora did not become reachable after deploy (HTTP $HTTP_CODE)"
+  echo "Recovery manifest: $MANIFEST_FILE"
   pm2 logs vidora --lines 80 --nostream || true
   exit 1
 fi
@@ -193,17 +231,34 @@ fi
 HEALTH="$(curl -sS -m 20 http://127.0.0.1:3004/api/ai/health || true)"
 if [[ -z "$HEALTH" ]]; then
   echo "FATAL: AI health endpoint did not respond"
+  echo "Recovery manifest: $MANIFEST_FILE"
   exit 1
 fi
 if [[ "$HEALTH" != *'"status":"ok"'* ]]; then
   echo "FATAL: AI service is not configured as production-ready"
   echo "AI health: $HEALTH"
+  echo "Recovery manifest: $MANIFEST_FILE"
   exit 1
 fi
+
+# Only a release that passed every post-restart gate becomes the latest healthy
+# recovery point. The timestamped manifest remains in the backup set; the
+# well-known manifest and deployed-SHA marker make current recovery state explicit.
+bun scripts/deployment-manifest.ts mark "$MANIFEST_FILE" healthy
+cp "$MANIFEST_FILE" "$LAST_SUCCESSFUL_MANIFEST"
+chmod 600 "$LAST_SUCCESSFUL_MANIFEST"
+DEPLOYED_SHA_TMP="${DEPLOYED_SHA_FILE}.tmp"
+printf '%s\n' "$RELEASE_SHA" > "$DEPLOYED_SHA_TMP"
+chmod 600 "$DEPLOYED_SHA_TMP"
+mv "$DEPLOYED_SHA_TMP" "$DEPLOYED_SHA_FILE"
+chmod 600 "$DEPLOYED_SHA_FILE"
 
 echo "Deploy complete"
 echo "Commit: $RELEASE_SHA"
 echo "Database backup: $BACKUP_FILE"
 echo "Media backup: $MEDIA_BACKUP_FILE"
+echo "Recovery manifest: $MANIFEST_FILE"
+echo "Latest healthy manifest: $LAST_SUCCESSFUL_MANIFEST"
+echo "Deployed release marker: $DEPLOYED_SHA_FILE"
 echo "Web: HTTP $HTTP_CODE"
 echo "AI health: $HEALTH"
