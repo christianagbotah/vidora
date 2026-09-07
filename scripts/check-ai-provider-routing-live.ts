@@ -1,6 +1,7 @@
 import { getAIProviderSettings, type AIProviderSettings, type TextProviderId } from "../src/lib/ai-provider-router";
 import { getConfigValue } from "../src/lib/secure-config";
 import { zai } from "../src/lib/zai";
+import { getZaiTtsSettings, ttsWithRequiredModel } from "../src/lib/zai-tts-compat";
 
 const TIMEOUT_MS = 60_000;
 const ZAI_PREFLIGHT_ATTEMPTS = 3;
@@ -185,6 +186,22 @@ async function probeElevenLabs(settings: AIProviderSettings): Promise<void> {
   console.log(`[provider-preflight] TTS elevenlabs/${model}: OK (${voiceIds.length} voice${voiceIds.length === 1 ? "" : "s"} verified)`);
 }
 
+async function probeZaiTts(): Promise<void> {
+  const settings = await getZaiTtsSettings();
+  const audio = await ttsWithRequiredModel({
+    input: "OK",
+    voice: "tongtong",
+    responseFormat: "wav",
+    retry: {
+      label: "Production routed Z.ai TTS preflight",
+      timeoutMs: TIMEOUT_MS,
+      maxRetries: ZAI_PREFLIGHT_ATTEMPTS,
+    },
+  });
+  if (audio.byteLength <= 0) throw new Error("Z.AI GLM-TTS preflight returned empty audio");
+  console.log(`[provider-preflight] TTS zai/${settings.model}: OK`);
+}
+
 async function main(): Promise<void> {
   try {
     const settings = await getAIProviderSettings();
@@ -199,9 +216,11 @@ async function main(): Promise<void> {
     if (settings.ttsProvider === "elevenlabs") {
       await probeElevenLabs(settings);
     } else {
-      // Z.ai video is already live-probed separately during deploy. Z.ai TTS
-      // uses the same credential, so avoid a paid audio generation just for health.
-      console.log("[provider-preflight] TTS zai: credential covered by Z.ai live preflight");
+      // GLM-TTS lives on a dedicated BigModel speech endpoint and can use a
+      // distinct credential from the api.z.ai chat/image/video client. Probe
+      // the exact runtime route so missing credentials or stale model config
+      // fail deployment before users encounter them in Voice Studio/export.
+      await probeZaiTts();
     }
 
     console.log("AI provider routing live preflight: OK");
