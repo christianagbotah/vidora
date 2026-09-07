@@ -78,6 +78,7 @@ async function main(): Promise<void> {
   const decision = decideProductionMonitorNotification(previous, report);
   const alertEmail = (process.env.OPS_ALERT_EMAIL || "").trim();
   let notifiedKey: string | null = null;
+  let notificationFailed = false;
 
   console.log(`[production-monitor] status=${report.status} checkedAt=${report.checkedAt}`);
   if (report.issues.length) console.log(reportSummary(report));
@@ -95,8 +96,9 @@ async function main(): Promise<void> {
       notifiedKey = decision.key;
       console.log(`[production-monitor] ${decision.kind} email sent to ${alertEmail}`);
     } catch (error) {
+      notificationFailed = true;
       console.error(
-        "[production-monitor] alert email failed; notification will be retried on the next monitor run:",
+        "[production-monitor] alert email failed; notification state will stay unchanged so the next monitor run retries:",
         error instanceof Error ? error.message : "unknown error",
       );
     }
@@ -104,7 +106,9 @@ async function main(): Promise<void> {
     console.warn("[production-monitor] OPS_ALERT_EMAIL is not configured; health transition was not emailed");
   }
 
-  const next = nextProductionMonitorState(previous, report, notifiedKey);
+  const next = notificationFailed
+    ? previous
+    : nextProductionMonitorState(previous, report, notifiedKey);
   await writeState(filePath, next);
   if (report.status !== "ok") process.exitCode = 1;
 }
