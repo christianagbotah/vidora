@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AudioLines, ChevronRight, Film, Users } from "lucide-react";
+import { AudioLines, CheckCircle2, ChevronRight, Film, Users } from "lucide-react";
+import { voiceStudioProjectHasPersistedDefault } from "@/lib/voice-studio-project-status";
 
 type Project = {
   id: string;
@@ -11,6 +12,10 @@ type Project = {
   scenes?: unknown[];
   characters?: unknown[];
   status?: string;
+  narrationLang?: string | null;
+  narrationAccent?: string | null;
+  narrationStyle?: string | null;
+  narrationVoice?: string | null;
 };
 
 export default function VoiceStudioIndexPage() {
@@ -43,7 +48,7 @@ export default function VoiceStudioIndexPage() {
             ← Back to Vidora
           </Link>
           <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700 dark:border-violet-900 dark:bg-violet-950/50 dark:text-violet-300">
-            Uses the same profiles as Preview & Export
+            Uses the same profiles as Preview &amp; Export
           </span>
         </div>
 
@@ -54,7 +59,7 @@ export default function VoiceStudioIndexPage() {
           <p className="mt-5 text-xs font-semibold uppercase tracking-[0.22em] text-violet-700 dark:text-violet-300">Vidora Voice Studio</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Direct the voices for an entire video.</h1>
           <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-400">
-            Set whole-video narration language, accent, voice and speaking style, then fine-tune individual scenes and character voices. Changes invalidate stale narration and require a fresh full-video review before export.
+            Save a whole-video narration language, accent, voice and speaking style so new scenes inherit it automatically, then fine-tune individual scenes and character voices. Changes to current scenes invalidate stale narration and require a fresh full-video review; saving a future-scene default by itself does not alter the reviewed cut.
           </p>
         </div>
 
@@ -69,26 +74,42 @@ export default function VoiceStudioIndexPage() {
           </div>
         ) : (
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((project) => (
-              <Link
-                key={project.id}
-                href={`/voice-studio/${encodeURIComponent(project.id)}`}
-                className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-violet-700"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="truncate font-semibold">{project.title}</h2>
-                    <p className="mt-1 text-xs capitalize text-slate-500 dark:text-slate-400">{project.projectType || "custom"} · {project.status || "draft"}</p>
+            {projects.map((project) => {
+              const hasVoiceDefault = voiceStudioProjectHasPersistedDefault(project);
+              return (
+                <Link
+                  key={project.id}
+                  href={`/voice-studio/${encodeURIComponent(project.id)}`}
+                  className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-violet-700"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="truncate font-semibold">{project.title}</h2>
+                      <p className="mt-1 text-xs capitalize text-slate-500 dark:text-slate-400">{project.projectType || "custom"} · {project.status || "draft"}</p>
+                    </div>
+                    <ChevronRight className="mt-0.5 h-5 w-5 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-violet-600" />
                   </div>
-                  <ChevronRight className="mt-0.5 h-5 w-5 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-violet-600" />
-                </div>
-                <div className="mt-5 flex gap-4 text-xs text-slate-500 dark:text-slate-400">
-                  <span className="inline-flex items-center gap-1.5"><Film className="h-3.5 w-3.5" />{project.scenes?.length || 0} scenes</span>
-                  <span className="inline-flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />{project.characters?.length || 0} characters</span>
-                </div>
-                <p className="mt-5 text-sm font-semibold text-violet-700 dark:text-violet-300">Open Voice Studio</p>
-              </Link>
-            ))}
+
+                  <div className="mt-4">
+                    {hasVoiceDefault ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                        <CheckCircle2 className="h-3.5 w-3.5" />Voice default saved
+                      </span>
+                    ) : (
+                      <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                        Voice default not saved
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-5 flex gap-4 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="inline-flex items-center gap-1.5"><Film className="h-3.5 w-3.5" />{project.scenes?.length || 0} scenes</span>
+                    <span className="inline-flex items-center gap-1.5"><Users className="h-3.5 w-3.5" />{project.characters?.length || 0} characters</span>
+                  </div>
+                  <p className="mt-5 text-sm font-semibold text-violet-700 dark:text-violet-300">Open Voice Studio</p>
+                </Link>
+              );
+            })}
           </div>
         )}
       </div>
