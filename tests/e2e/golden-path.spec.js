@@ -37,6 +37,38 @@ async function waitForVidoraOverlays(page) {
   ).toBe(0);
 }
 
+async function mobileOverflowDiagnostics(page) {
+  return page.evaluate(() => {
+    const viewportWidth = document.documentElement.clientWidth;
+    return Array.from(document.querySelectorAll("body *"))
+      .map((element) => {
+        const node = element;
+        const style = window.getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return {
+          tag: node.tagName.toLowerCase(),
+          id: node.id || "",
+          className: typeof node.className === "string" ? node.className : "",
+          text: (node.textContent || "").trim().replace(/\s+/g, " ").slice(0, 140),
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+          display: style.display,
+          visibility: style.visibility,
+          position: style.position,
+        };
+      })
+      .filter((item) =>
+        item.display !== "none" &&
+        item.visibility !== "hidden" &&
+        item.width > 0 &&
+        (item.right > viewportWidth + 2 || item.left < -2),
+      )
+      .sort((a, b) => Math.max(b.right - viewportWidth, -b.left) - Math.max(a.right - viewportWidth, -a.left))
+      .slice(0, 20);
+  });
+}
+
 test.describe("Vidora zero-cost browser golden path", () => {
   test("login, open completed project, persist Voice Studio defaults, and remain responsive", async ({ page }) => {
     const blockedGenerativeRequests = [];
@@ -85,8 +117,8 @@ test.describe("Vidora zero-cost browser golden path", () => {
     await page.getByRole("option", { name: "Documentary" }).click();
 
     await page.getByRole("button", { name: "Save whole-video default" }).click();
-    await expect(page.getByText(/updated 1 current scene/i)).toBeVisible();
     await expect(page.getByText("Saved project default", { exact: true })).toBeVisible();
+    await expect(page.getByText(/whole-video narration default/i)).toBeVisible();
 
     await page.reload();
     await expect(page.getByRole("heading", { name: E2E_PROJECT_TITLE })).toBeVisible();
@@ -110,7 +142,11 @@ test.describe("Vidora zero-cost browser golden path", () => {
     const mobileOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
-    expect(mobileOverflow).toBeLessThanOrEqual(2);
+    const overflowOffenders = mobileOverflow > 2 ? await mobileOverflowDiagnostics(page) : [];
+    expect(
+      mobileOverflow,
+      `Mobile horizontal overflow detected (${mobileOverflow}px). Offenders: ${JSON.stringify(overflowOffenders)}`,
+    ).toBeLessThanOrEqual(2);
 
     expect(
       blockedGenerativeRequests,
