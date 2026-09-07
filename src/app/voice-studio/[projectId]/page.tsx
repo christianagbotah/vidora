@@ -16,6 +16,10 @@ import {
   buildVoiceStudioNarrationRequest,
   voiceStudioNarrationSuccessMessage,
 } from "@/lib/voice-studio-audition";
+import {
+  voiceStudioBulkProfileStatus,
+  voiceStudioProjectSaveMessage,
+} from "@/lib/voice-studio-project-status";
 
 type Profile = {
   language: string;
@@ -47,6 +51,7 @@ type Payload = {
   project: { id: string; title: string };
   canEdit: boolean;
   bulkProfile: Profile;
+  hasPersistedBulkProfile: boolean;
   mixed: MixedState;
   voices: Voice[];
   characters: Character[];
@@ -57,8 +62,8 @@ function profileChangedLabel(mixed: MixedState): string {
   const fields = Object.entries(mixed)
     .filter(([, value]) => value)
     .map(([key]) => key);
-  if (fields.length === 0) return "All scenes currently use the same narration profile.";
-  return `Scenes currently have mixed ${fields.join(", ")} settings. Applying the profile below will make them consistent.`;
+  if (fields.length === 0) return "All current scenes use the same narration profile.";
+  return `Current scenes have mixed ${fields.join(", ")} settings. Saving the whole-video default below will make them consistent.`;
 }
 
 function mixedStateForScenes(scenes: Scene[]): MixedState {
@@ -129,9 +134,7 @@ export default function VoiceStudioProjectPage() {
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.error || "Unable to save narration profile");
       if (scope === "project") {
-        setMessage(body.changed
-          ? `Applied the narration profile to ${body.changedSceneCount} scene${body.changedSceneCount === 1 ? "" : "s"}. A fresh full-video preview is required before export.`
-          : "Every scene already uses this narration profile.");
+        setMessage(voiceStudioProjectSaveMessage(body));
         await load();
       } else {
         setMessage(body.changed
@@ -250,6 +253,7 @@ export default function VoiceStudioProjectPage() {
   }
 
   const disabled = !data.canEdit;
+  const bulkStatus = voiceStudioBulkProfileStatus(data.hasPersistedBulkProfile);
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
@@ -268,7 +272,7 @@ export default function VoiceStudioProjectPage() {
               </div>
             </div>
             <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-400">
-              These controls write directly to the narration fields used by Vidora Full Preview and Export. Language changes are translated when narration is prepared; accent and speaking-style precision depend on the active TTS provider.
+              These controls write directly to the narration settings used by Vidora Full Preview and Export. Whole-video defaults also carry forward to scenes added later, while scene overrides remain independent.
             </p>
           </div>
           <button
@@ -297,8 +301,19 @@ export default function VoiceStudioProjectPage() {
         <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-lg font-semibold">Entire video</h2></div>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Apply one narration profile across all existing scenes, then override any scene below.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Film className="h-5 w-5 text-violet-600" />
+                <h2 className="text-lg font-semibold">Entire video</h2>
+                <span className={data.hasPersistedBulkProfile
+                  ? "rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                  : "rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200"}
+                >
+                  {bulkStatus.label}
+                </span>
+              </div>
+              <p className="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">
+                Save one narration profile as the project default, apply it to current scenes, and let new scenes inherit it automatically. Any scene can override it below.
+              </p>
             </div>
             <button
               type="button"
@@ -306,11 +321,12 @@ export default function VoiceStudioProjectPage() {
               disabled={disabled || !bulkProfile || busyKey === "project"}
               className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {busyKey === "project" ? "Applying…" : "Apply to entire video"}
+              {busyKey === "project" ? "Saving…" : "Save whole-video default"}
             </button>
           </div>
           <div className="mt-4 flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 dark:bg-slate-950 dark:text-slate-400">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{profileChangedLabel(data.mixed)}
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span><strong>{bulkStatus.description}</strong> {profileChangedLabel(data.mixed)}</span>
           </div>
           {bulkProfile ? (
             <div className="mt-5">
@@ -332,7 +348,7 @@ export default function VoiceStudioProjectPage() {
 
         <section className="mt-8">
           <div className="flex items-center gap-2"><Users className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Character voices</h2></div>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Attributed dialogue uses a character's assigned voice. “Use scene voice” falls back to the scene profile.</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Attributed dialogue uses a character&apos;s assigned voice. “Use scene voice” falls back to the scene profile.</p>
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {data.characters.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">No characters are attached to this project.</div>
@@ -378,7 +394,7 @@ export default function VoiceStudioProjectPage() {
 
         <section className="mt-10 pb-12">
           <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Scene overrides &amp; auditions</h2></div>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Fine-tune a scene without changing the visual clip. Save clears stale narration; Generate &amp; listen uses the selected profile through Vidora's normal narration pipeline and may use narration tokens.</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Fine-tune a scene without changing the visual clip. Save clears stale narration; Generate &amp; listen uses the selected profile through Vidora&apos;s normal narration pipeline and may use narration tokens.</p>
           <div className="mt-4 space-y-4">
             {data.scenes.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">This project does not have scenes yet.</div>
