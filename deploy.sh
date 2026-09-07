@@ -39,6 +39,22 @@ for name in "${required_env[@]}"; do
   fi
 done
 
+BACKUP_RETENTION_SETS="${BACKUP_RETENTION_SETS:-5}"
+BACKUP_SPACE_HEADROOM_PERCENT="${BACKUP_SPACE_HEADROOM_PERCENT:-25}"
+BACKUP_MIN_FREE_GB="${BACKUP_MIN_FREE_GB:-5}"
+if [[ ! "$BACKUP_RETENTION_SETS" =~ ^[0-9]+$ ]] || (( BACKUP_RETENTION_SETS < 1 || BACKUP_RETENTION_SETS > 50 )); then
+  echo "FATAL: BACKUP_RETENTION_SETS must be an integer from 1 to 50"
+  exit 1
+fi
+if [[ ! "$BACKUP_SPACE_HEADROOM_PERCENT" =~ ^[0-9]+$ ]] || (( BACKUP_SPACE_HEADROOM_PERCENT > 200 )); then
+  echo "FATAL: BACKUP_SPACE_HEADROOM_PERCENT must be an integer from 0 to 200"
+  exit 1
+fi
+if [[ ! "$BACKUP_MIN_FREE_GB" =~ ^[0-9]+$ ]] || (( BACKUP_MIN_FREE_GB > 10000 )); then
+  echo "FATAL: BACKUP_MIN_FREE_GB must be an integer from 0 to 10000"
+  exit 1
+fi
+
 if [[ ${#NEXTAUTH_SECRET} -lt 32 ]] || [[ "$NEXTAUTH_SECRET" == *"CHANGE_ME"* ]] || [[ "$NEXTAUTH_SECRET" == "vidora-secret-change-in-production-2024" ]]; then
   echo "FATAL: NEXTAUTH_SECRET is weak, default, or a placeholder"
   exit 1
@@ -154,6 +170,32 @@ url.searchParams.delete("schema");
 process.stdout.write(url.toString());
 ')"
 
+# Fail before writing a new recovery set if the backup filesystem cannot hold a
+# conservative uncompressed-size estimate plus configured headroom. Old backups
+# are never deleted automatically to make a low-space deploy fit; an operator can
+# inspect/prune known healthy sets explicitly, and normal retention runs only
+# after a release has passed every health gate.
+MEDIA_BYTES="$(du -sb -- "$GENERATED_DIR" | awk '{print $1}')"
+DATABASE_BYTES="$(psql "$PG_DUMP_DATABASE_URL" -Atqc 'SELECT pg_database_size(current_database())')"
+if [[ ! "$MEDIA_BYTES" =~ ^[0-9]+$ || ! "$DATABASE_BYTES" =~ ^[0-9]+$ ]]; then
+  echo "FATAL: could not determine media/database size for backup-capacity preflight"
+  exit 1
+fi
+CAPACITY_JSON=""
+if ! CAPACITY_JSON="$(bun scripts/backup-policy.ts capacity \
+  "$BACKUP_DIR" \
+  "$MEDIA_BYTES" \
+  "$DATABASE_BYTES" \
+  "$BACKUP_SPACE_HEADROOM_PERCENT" \
+  "$BACKUP_MIN_FREE_GB")"; then
+  echo "FATAL: backup filesystem does not have enough safe free space for a new recovery set"
+  echo "Capacity: ${CAPACITY_JSON:-unavailable}"
+  echo "Policy: media=${MEDIA_BYTES}B database=${DATABASE_BYTES}B headroom=${BACKUP_SPACE_HEADROOM_PERCENT}% minimum-free=${BACKUP_MIN_FREE_GB}GiB"
+  echo "No existing backup was deleted. Review BACKUP_DIR before retrying."
+  exit 1
+fi
+echo "Backup capacity: $CAPACITY_JSON"
+
 BACKUP_TMP="${BACKUP_FILE}.tmp"
 rm -f "$BACKUP_TMP"
 echo "Creating PostgreSQL backup: $BACKUP_FILE"
@@ -253,6 +295,15 @@ chmod 600 "$DEPLOYED_SHA_TMP"
 mv "$DEPLOYED_SHA_TMP" "$DEPLOYED_SHA_FILE"
 chmod 600 "$DEPLOYED_SHA_FILE"
 
+# Retention is deliberately post-health and best-effort. It prunes only old
+# HEALTHY timestamped recovery sets, preserves every prepared/failed-deploy set,
+# never targets emergency rollback snapshots, and keeps the current manifest.
+# Cleanup failure does not misreport an already healthy release as failed; the
+# next deployment's capacity preflight will still fail closed if space is unsafe.
+if ! bun scripts/backup-policy.ts prune "$BACKUP_DIR" "$BACKUP_RETENTION_SETS" "$MANIFEST_FILE"; then
+  echo "WARNING: backup retention cleanup failed; no release health state was changed"
+fi
+
 echo "Deploy complete"
 echo "Commit: $RELEASE_SHA"
 echo "Database backup: $BACKUP_FILE"
@@ -260,5 +311,6 @@ echo "Media backup: $MEDIA_BACKUP_FILE"
 echo "Recovery manifest: $MANIFEST_FILE"
 echo "Latest healthy manifest: $LAST_SUCCESSFUL_MANIFEST"
 echo "Deployed release marker: $DEPLOYED_SHA_FILE"
+echo "Backup retention: keep $BACKUP_RETENTION_SETS healthy recovery set(s)"
 echo "Web: HTTP $HTTP_CODE"
 echo "AI health: $HEALTH"
