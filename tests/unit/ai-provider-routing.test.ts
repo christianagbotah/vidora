@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildProfessionalSceneDirectorPrompt,
+  elevenLabsLanguageCode,
+  elevenLabsVoiceCandidates,
   formatElevenLabsPerformanceText,
   normalizePerformanceDirection,
+  resolveElevenLabsVoice,
 } from "@/lib/ai-provider-router";
 import { parseDialogueSegments, stripSpeakerAttributions } from "@/lib/narration";
 
@@ -50,6 +53,54 @@ describe("professional AI provider routing primitives", () => {
     expect(
       formatElevenLabsPerformanceText("Happy birthday, Giannis!", "excited", "eleven_multilingual_v2")
     ).toBe("Happy birthday, Giannis!");
+  });
+
+  test("ElevenLabs voice maps prefer the most specific language/accent/voice key", () => {
+    expect(elevenLabsVoiceCandidates("Jam", { language: "fr", accent: "ghanaian" })).toEqual([
+      "profile:fr:ghanaian:jam",
+      "profile:fr:ghanaian",
+      "accent:fr:ghanaian",
+      "accent:ghanaian",
+      "language:fr",
+      "jam",
+    ]);
+
+    const settings = {
+      elevenLabsVoiceMap: {
+        "profile:fr:ghanaian:jam": "voice-fr-gh-jam",
+        "accent:ghanaian": "voice-gh-generic",
+        "language:fr": "voice-fr-generic",
+        jam: "voice-jam-generic",
+      },
+      elevenLabsDefaultVoiceId: "voice-default",
+    };
+    expect(resolveElevenLabsVoice("Jam", settings, { language: "fr", accent: "ghanaian" }))
+      .toBe("voice-fr-gh-jam");
+    expect(resolveElevenLabsVoice("Jam", settings, { language: "en", accent: "ghanaian" }))
+      .toBe("voice-gh-generic");
+    expect(resolveElevenLabsVoice("Jam", settings, { language: "fr", accent: "auto" }))
+      .toBe("voice-fr-generic");
+  });
+
+  test("ElevenLabs voice routing preserves explicit provider-native ids and falls back safely", () => {
+    expect(resolveElevenLabsVoice("NativeVoiceABC", {
+      elevenLabsVoiceMap: {},
+      elevenLabsDefaultVoiceId: "voice-default",
+    }, { language: "en", accent: "british" })).toBe("NativeVoiceABC");
+
+    expect(resolveElevenLabsVoice("tongtong", {
+      elevenLabsVoiceMap: {},
+      elevenLabsDefaultVoiceId: "voice-default",
+    }, { language: "en", accent: "auto" })).toBe("voice-default");
+  });
+
+  test("ElevenLabs language hints include only safe ISO 639-1 codes", () => {
+    expect(elevenLabsLanguageCode("fr")).toBe("fr");
+    expect(elevenLabsLanguageCode("en")).toBe("en");
+    expect(elevenLabsLanguageCode("auto")).toBeNull();
+    expect(elevenLabsLanguageCode("twi")).toBeNull();
+    // Vidora uses `ga` for Ghanaian Ga, while ISO 639-1 `ga` means Irish.
+    expect(elevenLabsLanguageCode("ga")).toBeNull();
   });
 
   test("legacy single-voice helper still removes attribution without dropping words", () => {
