@@ -1,3 +1,6 @@
+// CommonJS is intentional here: CI installs Playwright under /tmp and exposes it
+// through NODE_PATH so browser tooling cannot mutate Vidora's Bun dependency tree.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { test, expect } = require("@playwright/test");
 
 const E2E_EMAIL = process.env.VIDORA_E2E_EMAIL || "e2e@vidora.local";
