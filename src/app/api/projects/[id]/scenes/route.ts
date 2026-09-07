@@ -42,6 +42,19 @@ export async function POST(
     const authResult = await requireProjectAccess(id, true); // write access
     if (!authResult.ok) return authResult.response;
 
+    const projectDefaults = await db.videoProject.findUnique({
+      where: { id },
+      select: {
+        narrationLang: true,
+        narrationAccent: true,
+        narrationStyle: true,
+        narrationVoice: true,
+      },
+    });
+    if (!projectDefaults) {
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
+    }
+
     const body = await req.json();
     const { prompt, enhancedPrompt, duration, transition, characterIds, characterNames, dialogue, visualNote, musicTrackUrl, musicMood, musicVolume } = body;
 
@@ -114,6 +127,13 @@ export async function POST(
         duration: duration || 3,
         transition: transition || "fade",
         characterIds: linkedCharacterIds,
+        // A whole-video Voice Studio profile is a durable project default, not
+        // merely a one-time bulk edit. Newly added scenes inherit it while
+        // remaining independently overridable afterward.
+        narrationLang: projectDefaults.narrationLang,
+        narrationAccent: projectDefaults.narrationAccent,
+        narrationStyle: projectDefaults.narrationStyle,
+        narrationVoice: projectDefaults.narrationVoice,
         // Smart defaults: the script analyzer may pre-assign a background
         // music track (celebration scripts get a matching mood).
         musicTrackUrl: typeof musicTrackUrl === "string" && musicTrackUrl ? musicTrackUrl : null,
