@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { chooseAutoCharacterVoice } from "@/lib/character-voice-casting";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -45,6 +46,10 @@ export async function GET(
 /**
  * POST /api/projects/[id]/characters
  * Creates a new character. Only the project owner can add characters.
+ *
+ * A character without an explicit Voice Studio assignment is automatically
+ * cast to a stable non-narrator logical voice. This prevents manually added
+ * dialogue speakers from silently inheriting the narrator voice.
  */
 export async function POST(
   req: NextRequest,
@@ -62,6 +67,28 @@ export async function POST(
       return NextResponse.json({ success: false, error: "Character name is required" }, { status: 400 });
     }
 
+    const explicitVoice = typeof voiceId === "string" && voiceId.trim() ? voiceId.trim() : null;
+    const existingVoices = explicitVoice
+      ? []
+      : await db.character.findMany({
+          where: { projectId: id, voiceId: { not: null } },
+          select: { voiceId: true },
+        });
+    const usedVoices = new Set(
+      existingVoices
+        .map((character) => character.voiceId?.trim().toLocaleLowerCase())
+        .filter((voice): voice is string => Boolean(voice)),
+    );
+    const resolvedVoice = explicitVoice || chooseAutoCharacterVoice(
+      {
+        name: String(name),
+        role: typeof role === "string" ? role : "supporting",
+        description: typeof description === "string" ? description : null,
+        stylePrompt: typeof stylePrompt === "string" ? stylePrompt : null,
+      },
+      usedVoices,
+    );
+
     const character = await db.character.create({
       data: {
         projectId: id,
@@ -70,7 +97,7 @@ export async function POST(
         description: description || null,
         imageUrl: imageUrl || null,
         stylePrompt: stylePrompt || null,
-        voiceId: typeof voiceId === "string" && voiceId.trim() ? voiceId.trim() : null,
+        voiceId: resolvedVoice,
       },
     });
 
