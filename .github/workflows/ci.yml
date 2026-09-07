@@ -106,17 +106,19 @@ jobs:
       - name: Production build
         run: bun run build
 
-      # Keep browser tooling out of the application dependency graph/lockfile.
+      # Keep browser tooling outside Vidora's Bun-managed node_modules and lockfile.
       # GitHub's Ubuntu image already ships stable Chrome; Playwright drives that
       # system browser rather than downloading another browser binary.
-      - name: Install browser E2E harness
+      - name: Install isolated browser E2E harness
         run: |
           google-chrome --version
-          npm install --no-save --package-lock=false --ignore-scripts @playwright/test@1.55.0
+          rm -rf /tmp/vidora-playwright
+          npm install --prefix /tmp/vidora-playwright --package-lock=false --ignore-scripts @playwright/test@1.55.0
 
       - name: Zero-cost browser golden path
         run: |
           set -euo pipefail
+          export NODE_PATH=/tmp/vidora-playwright/node_modules
           SERVER_PID=""
 
           cleanup() {
@@ -150,4 +152,4 @@ jobs:
             exit 1
           fi
 
-          npx playwright test
+          /tmp/vidora-playwright/node_modules/.bin/playwright test --config=playwright.config.js
