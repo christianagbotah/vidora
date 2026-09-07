@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 describe("audio-aware project review invalidation", () => {
-  test("dialogue, music, and character voice changes invalidate review while derived narration writes do not", async () => {
+  test("dialogue, music, narration profile, and character voice changes invalidate review while derived narration writes do not", async () => {
     const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const user = await db.user.create({
       data: { email: `audio-review-${nonce}@example.invalid`, name: "Audio Review Test" },
@@ -58,6 +58,9 @@ describe("audio-aware project review invalidation", () => {
         dialogue: "Marshall (excited): Happy birthday, Giannis!",
         characterIds: JSON.stringify([character.id]),
         narrationVoice: "tongtong",
+        narrationLang: "en",
+        narrationAccent: "auto",
+        narrationStyle: "natural",
         narrationUrl: "/api/audio/old-performance.wav",
         musicTrackUrl: "/generated/birthday-bed.mp3",
         musicVolume: 30,
@@ -98,12 +101,32 @@ describe("audio-aware project review invalidation", () => {
     expect(afterMusic.reviewedCutVersion).toBeNull();
 
     const reviewedAfterMusic = await markReviewed(project.id);
+    await db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationAccent: "ghanaian" },
+    });
+    const afterAccent = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
+    expect(afterAccent.cutVersion).toBeGreaterThan(reviewedAfterMusic.cutVersion);
+    expect(afterAccent.reviewedCutVersion).toBeNull();
+    expect(afterAccent.reviewedAt).toBeNull();
+
+    const reviewedAfterAccent = await markReviewed(project.id);
+    await db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationStyle: "warm" },
+    });
+    const afterStyle = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
+    expect(afterStyle.cutVersion).toBeGreaterThan(reviewedAfterAccent.cutVersion);
+    expect(afterStyle.reviewedCutVersion).toBeNull();
+    expect(afterStyle.reviewedAt).toBeNull();
+
+    const reviewedAfterStyle = await markReviewed(project.id);
     await db.character.update({
       where: { id: character.id },
       data: { voiceId: "luodo" },
     });
     const afterVoice = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
-    expect(afterVoice.cutVersion).toBeGreaterThan(reviewedAfterMusic.cutVersion);
+    expect(afterVoice.cutVersion).toBeGreaterThan(reviewedAfterStyle.cutVersion);
     expect(afterVoice.reviewedCutVersion).toBeNull();
 
     await markReviewed(project.id);
@@ -119,6 +142,14 @@ describe("audio-aware project review invalidation", () => {
     await expectExportActiveGuard(() => db.videoScene.update({
       where: { id: scene.id },
       data: { dialogue: "Marshall: A last-second line change." },
+    }));
+    await expectExportActiveGuard(() => db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationAccent: "british" },
+    }));
+    await expectExportActiveGuard(() => db.videoScene.update({
+      where: { id: scene.id },
+      data: { narrationStyle: "cinematic" },
     }));
     await expectExportActiveGuard(() => db.character.update({
       where: { id: character.id },
