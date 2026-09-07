@@ -9,6 +9,13 @@ import { readFileSync } from "fs";
 import path from "path";
 
 const voices = [
+  { voice_id: "orion", name: "Orion", language: "multilingual" },
+  { voice_id: "cosmo", name: "Cosmo", language: "multilingual" },
+  { voice_id: "perseus", name: "Perseus", language: "multilingual" },
+  { voice_id: "zagan", name: "Zagan", language: "multilingual" },
+  { voice_id: "carina", name: "Carina", language: "multilingual" },
+  { voice_id: "rigel", name: "Rigel", language: "multilingual" },
+  { voice_id: "altair", name: "Altair", language: "multilingual" },
   { voice_id: "eve", name: "Eve", language: "multilingual" },
   { voice_id: "ara", name: "Ara", language: "multilingual" },
   { voice_id: "leo", name: "Leo", language: "multilingual" },
@@ -19,7 +26,7 @@ const voices = [
 describe("Grok TTS provider", () => {
   test("uses the stable Grok TTS model and safe language routing", () => {
     expect(DEFAULT_GROK_TTS_MODEL).toBe("grok-tts");
-    expect(DEFAULT_GROK_TTS_VOICE).toBe("eve");
+    expect(DEFAULT_GROK_TTS_VOICE).toBe("orion");
     expect(grokLanguageCode("en")).toBe("en");
     expect(grokLanguageCode("fr")).toBe("fr");
     expect(grokLanguageCode("Spanish")).toBe("es-ES");
@@ -29,7 +36,7 @@ describe("Grok TTS provider", () => {
 
   test("profile-aware mappings win over automatic provider voice casting", async () => {
     const settings = {
-      defaultVoice: "eve",
+      defaultVoice: "orion",
       voiceMap: {
         "profile:fr:ghanaian:kazi": "rex",
         "language:fr": "ara",
@@ -39,19 +46,30 @@ describe("Grok TTS provider", () => {
     expect(await resolveGrokVoice("jam", settings, voices, { language: "fr", accent: "auto" })).toBe("ara");
   });
 
-  test("narrator keeps the default while distinct logical characters auto-cast away from it", async () => {
-    const settings = { defaultVoice: "eve", voiceMap: {} };
-    const narrator = await resolveGrokVoice("tongtong", settings, voices, { language: "en", accent: "auto" });
-    const chase = await resolveGrokVoice("kazi", settings, voices, { language: "en", accent: "auto" });
-    const marshall = await resolveGrokVoice("luodo", settings, voices, { language: "en", accent: "auto" });
+  test("casts Vidora logical archetypes to matching Grok voice personalities", async () => {
+    const settings = { defaultVoice: "orion", voiceMap: {} };
+    expect(await resolveGrokVoice("tongtong", settings, voices, { language: "en", accent: "auto" })).toBe("orion");
+    expect(await resolveGrokVoice("chuichui", settings, voices, { language: "en", accent: "auto" })).toBe("cosmo");
+    expect(await resolveGrokVoice("kazi", settings, voices, { language: "en", accent: "auto" })).toBe("perseus");
+    expect(await resolveGrokVoice("luodo", settings, voices, { language: "en", accent: "auto" })).toBe("zagan");
+    expect(await resolveGrokVoice("douji", settings, voices, { language: "en", accent: "auto" })).toBe("carina");
+    expect(await resolveGrokVoice("xiaochen", settings, voices, { language: "en", accent: "auto" })).toBe("rigel");
+    expect(await resolveGrokVoice("jam", settings, voices, { language: "en", accent: "auto" })).toBe("altair");
+  });
+
+  test("falls back safely when a preferred new voice is absent from an account roster", async () => {
+    const limited = voices.filter((voice) => ["eve", "ara", "leo", "rex", "sal"].includes(voice.voice_id));
+    const settings = { defaultVoice: "orion", voiceMap: {} };
+    const narrator = await resolveGrokVoice("tongtong", settings, limited, { language: "en", accent: "auto" });
+    const chase = await resolveGrokVoice("kazi", settings, limited, { language: "en", accent: "auto" });
     expect(narrator).toBe("eve");
-    expect(chase).not.toBe("eve");
-    expect(marshall).not.toBe("eve");
+    expect(chase).toBe("rex");
+    expect(chase).not.toBe(narrator);
   });
 
   test("provider-native Voice Studio IDs pass through directly", async () => {
-    const settings = { defaultVoice: "eve", voiceMap: {} };
-    expect(await resolveGrokVoice("zagan", settings, voices, { language: "en", accent: "auto" })).toBe("zagan");
+    const settings = { defaultVoice: "orion", voiceMap: {} };
+    expect(await resolveGrokVoice("custom-voice-123", settings, voices, { language: "en", accent: "auto" })).toBe("custom-voice-123");
   });
 
   test("production routing and secret policy include Grok TTS", () => {
