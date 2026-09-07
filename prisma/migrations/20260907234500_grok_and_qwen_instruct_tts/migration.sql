@@ -2,6 +2,27 @@
 -- qwen3-tts-instruct-flash model and register Grok-specific TTS settings with
 -- the existing derived-audio invalidation trigger.
 
+-- Grok is optional and is not activated by this migration. Seed only safe
+-- provider defaults so selecting it later has a production-oriented narrator
+-- and endpoint without requiring manual database setup.
+INSERT INTO "SystemConfig" ("id", "key", "value", "description", "updatedAt")
+VALUES
+  (
+    'cfg_grok_tts_base_v1',
+    'grok_tts_base_url',
+    'https://api.x.ai/v1',
+    'Grok TTS API base URL',
+    CURRENT_TIMESTAMP
+  ),
+  (
+    'cfg_grok_tts_voice_v1',
+    'grok_tts_default_voice',
+    'orion',
+    'Default Grok TTS narrator voice ID',
+    CURRENT_TIMESTAMP
+  )
+ON CONFLICT ("key") DO NOTHING;
+
 DO $$
 DECLARE
   qwen_active boolean;
