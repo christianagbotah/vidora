@@ -34,6 +34,13 @@ const commonEnv = {
   IMAGE_API_KEY: process.env.IMAGE_API_KEY,
   VIDEO_API_KEY: process.env.VIDEO_API_KEY,
   TTS_API_KEY: process.env.TTS_API_KEY,
+
+  // Durable workers are supervised by an in-process PostgreSQL probe. After
+  // repeated failures they exit so PM2 cannot present a disconnected consumer
+  // as healthy. The deployment health gate also verifies the current worker PID
+  // has written a fresh successful probe heartbeat.
+  WORKER_DB_PROBE_INTERVAL_MS: process.env.WORKER_DB_PROBE_INTERVAL_MS || "10000",
+  WORKER_DB_FAILURE_LIMIT: process.env.WORKER_DB_FAILURE_LIMIT || "3",
 };
 
 module.exports = {
@@ -64,7 +71,7 @@ module.exports = {
     },
     {
       name: "vidora-generation-worker",
-      script: "scripts/generation-worker.ts",
+      script: "scripts/generation-worker-entry.ts",
       interpreter: "bun",
       cwd: __dirname,
       instances: 1,
@@ -88,7 +95,7 @@ module.exports = {
     },
     {
       name: "vidora-export-worker",
-      script: "scripts/export-worker.ts",
+      script: "scripts/export-worker-entry.ts",
       interpreter: "bun",
       cwd: __dirname,
       instances: 1,
