@@ -68,7 +68,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate production shell syntax
-        run: bash -n deploy.sh rollback.sh scripts/check-ffmpeg-export.sh
+        run: bash -n deploy.sh rollback.sh cron-check.sh scripts/check-ffmpeg-export.sh
 
       - name: Install FFmpeg
         run: |

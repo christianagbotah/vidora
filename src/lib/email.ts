@@ -127,31 +127,31 @@ async function connectSocket(cfg: SmtpConfig): Promise<SmtpConnection> {
   return smtp;
 }
 
-export async function sendPasswordResetEmail(opts: {
+export async function sendPlainTextEmail(opts: {
   to: string;
-  name?: string | null;
-  resetUrl: string;
-  expiresMinutes: number;
+  subject: string;
+  body: string;
 }): Promise<void> {
   const cfg = config();
+  const recipient = sanitizeHeader(opts.to);
+  const subject = sanitizeHeader(opts.subject);
+  if (!recipient || !subject) throw new Error("Email recipient and subject are required");
+
   const smtp = await connectSocket(cfg);
   try {
     await smtp.command(`MAIL FROM:<${sanitizeHeader(cfg.from)}>`, [250]);
-    await smtp.command(`RCPT TO:<${sanitizeHeader(opts.to)}>`, [250, 251]);
+    await smtp.command(`RCPT TO:<${recipient}>`, [250, 251]);
     await smtp.command("DATA", [354]);
 
-    const subject = "Reset your Vidora password";
-    const greeting = opts.name ? `Hello ${opts.name},` : "Hello,";
-    const body = `${greeting}\n\nWe received a request to reset your Vidora password.\n\nOpen this secure link to choose a new password:\n${opts.resetUrl}\n\nThis link expires in ${opts.expiresMinutes} minutes and can be used only once.\n\nIf you did not request this reset, you can ignore this email.\n\nVidora`;
     const message = [
       `From: Vidora <${sanitizeHeader(cfg.from)}>`,
-      `To: <${sanitizeHeader(opts.to)}>`,
+      `To: <${recipient}>`,
       `Subject: ${subject}`,
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=UTF-8",
       "Content-Transfer-Encoding: 8bit",
       "",
-      dotStuff(body),
+      dotStuff(opts.body),
       ".",
       "",
     ].join("\r\n");
@@ -162,4 +162,19 @@ export async function sendPasswordResetEmail(opts: {
   } finally {
     smtp.end();
   }
+}
+
+export async function sendPasswordResetEmail(opts: {
+  to: string;
+  name?: string | null;
+  resetUrl: string;
+  expiresMinutes: number;
+}): Promise<void> {
+  const greeting = opts.name ? `Hello ${opts.name},` : "Hello,";
+  const body = `${greeting}\n\nWe received a request to reset your Vidora password.\n\nOpen this secure link to choose a new password:\n${opts.resetUrl}\n\nThis link expires in ${opts.expiresMinutes} minutes and can be used only once.\n\nIf you did not request this reset, you can ignore this email.\n\nVidora`;
+  await sendPlainTextEmail({
+    to: opts.to,
+    subject: "Reset your Vidora password",
+    body,
+  });
 }
