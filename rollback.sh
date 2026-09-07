@@ -178,22 +178,33 @@ ROLLBACK_RECORD="$BACKUP_DIR_REAL/vidora_rollback_${STAMP}_${RELEASE_SHA:0:12}_t
 
 SERVICES_STOPPED=false
 DESTRUCTIVE_STARTED=false
+stop_vidora_services() {
+  for app in vidora vidora-generation-worker vidora-export-worker; do
+    if pm2 describe "$app" >/dev/null 2>&1; then
+      pm2 stop "$app"
+    fi
+  done
+  SERVICES_STOPPED=true
+}
 restart_current_release() {
   echo "Attempting to restart the current release because destructive restore has not begun..."
   pm2 startOrReload ecosystem.config.js --update-env || true
   pm2 save || true
+  SERVICES_STOPPED=false
 }
 on_error() {
   local code=$?
-  if [[ "$SERVICES_STOPPED" == true && "$DESTRUCTIVE_STARTED" == false ]]; then
-    restart_current_release
-  fi
+  trap - ERR
   if [[ "$DESTRUCTIVE_STARTED" == true ]]; then
-    echo "FATAL: rollback failed after destructive restore began. Keep services stopped and recover manually using:"
+    echo "Stopping Vidora because rollback failed after destructive restore began..."
+    stop_vidora_services || true
+    echo "FATAL: rollback failed after destructive restore began. Services have been stopped; recover manually using:"
     echo "  Emergency DB: $EMERGENCY_DB"
     echo "  Emergency media: $EMERGENCY_MEDIA"
     echo "  Intended recovery DB: $DATABASE_BACKUP_REAL"
     echo "  Intended recovery media: $MEDIA_BACKUP_REAL"
+  elif [[ "$SERVICES_STOPPED" == true ]]; then
+    restart_current_release
   fi
   exit "$code"
 }
@@ -221,12 +232,7 @@ mv "$EMERGENCY_DB_TMP" "$EMERGENCY_DB"
 chmod 600 "$EMERGENCY_DB"
 
 # Stop writers before snapshotting/restoring generated media.
-for app in vidora vidora-generation-worker vidora-export-worker; do
-  if pm2 describe "$app" >/dev/null 2>&1; then
-    pm2 stop "$app"
-  fi
-done
-SERVICES_STOPPED=true
+stop_vidora_services
 
 echo "Creating emergency media snapshot: $EMERGENCY_MEDIA"
 mkdir -p "$GENERATED_DIR_REAL"
@@ -267,6 +273,7 @@ bun run build
 mkdir -p logs
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
+SERVICES_STOPPED=false
 NODE_ENV=production bun scripts/check-pm2-health.ts
 
 HTTP_CODE="000"
