@@ -1,0 +1,337 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
+import { AudioLines, CheckCircle2, Film, Info, Mic2, RefreshCw, Users } from "lucide-react";
+import { NarrationProfileControls } from "@/components/NarrationProfileControls";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+type Profile = {
+  language: string;
+  accent: string;
+  style: string;
+  voice: string;
+};
+
+type Voice = { id: string; label: string; desc?: string };
+type Character = {
+  id: string;
+  name: string;
+  role: string | null;
+  voiceId: string | null;
+  imageUrl: string | null;
+};
+type Scene = {
+  id: string;
+  sceneNumber: number;
+  title: string | null;
+  narrationUrl: string | null;
+  subtitleLang: string | null;
+  burnSubtitles: boolean;
+  profile: Profile;
+};
+type MixedState = { language: boolean; accent: boolean; style: boolean; voice: boolean };
+type Payload = {
+  success: true;
+  project: { id: string; title: string };
+  canEdit: boolean;
+  bulkProfile: Profile;
+  mixed: MixedState;
+  voices: Voice[];
+  characters: Character[];
+  scenes: Scene[];
+};
+
+function profileChangedLabel(mixed: MixedState): string {
+  const fields = Object.entries(mixed)
+    .filter(([, value]) => value)
+    .map(([key]) => key);
+  if (fields.length === 0) return "All scenes currently use the same narration profile.";
+  return `Scenes currently have mixed ${fields.join(", ")} settings. Applying the profile below will make them consistent.`;
+}
+
+export default function VoiceStudioProjectPage() {
+  const params = useParams<{ projectId: string }>();
+  const projectId = params.projectId;
+  const [data, setData] = useState<Payload | null>(null);
+  const [bulkProfile, setBulkProfile] = useState<Profile | null>(null);
+  const [sceneProfiles, setSceneProfiles] = useState<Record<string, Profile>>({});
+  const [characterVoices, setCharacterVoices] = useState<Record<string, string>>({});
+  const [busyKey, setBusyKey] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/voice-studio`, { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok || !body.success) throw new Error(body.error || "Unable to load Voice Studio");
+    const payload = body as Payload;
+    setData(payload);
+    setBulkProfile(payload.bulkProfile);
+    setSceneProfiles(Object.fromEntries(payload.scenes.map((scene) => [scene.id, scene.profile])));
+    setCharacterVoices(Object.fromEntries(payload.characters.map((character) => [character.id, character.voiceId || "inherit"])));
+  }, [projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    load().catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load Voice Studio");
+    });
+    return () => { cancelled = true; };
+  }, [load]);
+
+  const saveProfile = async (scope: "project" | "scene", profile: Profile, scopeId?: string) => {
+    const key = scope === "project" ? "project" : `scene:${scopeId}`;
+    setBusyKey(key);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/voice-studio`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope, scopeId, profile }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || "Unable to save narration profile");
+      if (scope === "project") {
+        setMessage(body.changed
+          ? `Applied the narration profile to ${body.changedSceneCount} scene${body.changedSceneCount === 1 ? "" : "s"}. A fresh full-video preview is required before export.`
+          : "Every scene already uses this narration profile.");
+      } else {
+        setMessage(body.changed
+          ? "Scene voice profile saved. Its stale narration was cleared and the project must be previewed again before export."
+          : "This scene already uses that voice profile.");
+      }
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save narration profile");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const saveCharacterVoice = async (characterId: string) => {
+    const key = `character:${characterId}`;
+    setBusyKey(key);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/voice-studio`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "character", scopeId: characterId, voice: characterVoices[characterId] || "inherit" }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || "Unable to save character voice");
+      setMessage(body.changed
+        ? `Character voice saved. ${body.narrationInvalidatedScenes || 0} linked scene narration track${body.narrationInvalidatedScenes === 1 ? " was" : "s were"} invalidated.`
+        : "This character already uses that voice setting.");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save character voice");
+    } finally {
+      setBusyKey("");
+    }
+  };
+
+  const title = useMemo(() => data?.project.title || "Voice Studio", [data]);
+
+  if (!data) {
+    return (
+      <main className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+          <Link href="/voice-studio" className="text-sm font-medium text-violet-700 dark:text-violet-300">← Voice Studio projects</Link>
+          <div className="mt-10 rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+            {error || "Loading project voice settings…"}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const disabled = !data.canEdit;
+
+  return (
+    <main className="min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm font-medium">
+              <Link href="/voice-studio" className="text-violet-700 hover:text-violet-600 dark:text-violet-300">← Voice Studio projects</Link>
+              <Link href="/" className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Back to Vidora Studio</Link>
+            </div>
+            <div className="mt-6 flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-600 text-white"><AudioLines className="h-5 w-5" /></div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-700 dark:text-violet-300">Voice Studio</p>
+                <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{title}</h1>
+              </div>
+            </div>
+            <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-400">
+              These controls write directly to the narration fields used by Vidora Full Preview and Export. Language changes are translated when narration is prepared; accent and speaking-style precision depend on the active TTS provider.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => load().catch((reason) => setError(reason instanceof Error ? reason.message : "Refresh failed"))}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"
+          >
+            <RefreshCw className="h-4 w-4" />Refresh
+          </button>
+        </div>
+
+        {!data.canEdit ? (
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            You have read-only access to this project. Only its owner can change voice settings.
+          </div>
+        ) : null}
+        {message ? (
+          <div className="mt-6 flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{message}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">{error}</div>
+        ) : null}
+
+        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-lg font-semibold">Entire video</h2></div>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Apply one narration profile across all existing scenes, then override any scene below.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => bulkProfile && saveProfile("project", bulkProfile)}
+              disabled={disabled || !bulkProfile || busyKey === "project"}
+              className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busyKey === "project" ? "Applying…" : "Apply to entire video"}
+            </button>
+          </div>
+          <div className="mt-4 flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-xs leading-5 text-slate-600 dark:bg-slate-950 dark:text-slate-400">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />{profileChangedLabel(data.mixed)}
+          </div>
+          {bulkProfile ? (
+            <div className="mt-5">
+              <NarrationProfileControls
+                language={bulkProfile.language}
+                accent={bulkProfile.accent}
+                style={bulkProfile.style}
+                voice={bulkProfile.voice}
+                voices={data.voices}
+                onLanguageChange={(language) => setBulkProfile((current) => current ? { ...current, language } : current)}
+                onAccentChange={(accent) => setBulkProfile((current) => current ? { ...current, accent } : current)}
+                onStyleChange={(style) => setBulkProfile((current) => current ? { ...current, style } : current)}
+                onVoiceChange={(voice) => setBulkProfile((current) => current ? { ...current, voice } : current)}
+                disabled={disabled || busyKey === "project"}
+              />
+            </div>
+          ) : null}
+        </section>
+
+        <section className="mt-8">
+          <div className="flex items-center gap-2"><Users className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Character voices</h2></div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Attributed dialogue uses a character's assigned voice. “Use scene voice” falls back to the scene profile.</p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {data.characters.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">No characters are attached to this project.</div>
+            ) : data.characters.map((character) => {
+              const key = `character:${character.id}`;
+              return (
+                <article key={character.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                  <div className="flex items-center gap-3">
+                    {character.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={character.imageUrl} alt="" className="h-10 w-10 rounded-full border border-slate-200 object-cover dark:border-slate-700" />
+                    ) : (
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300"><Mic2 className="h-4 w-4" /></div>
+                    )}
+                    <div className="min-w-0"><h3 className="truncate font-semibold">{character.name}</h3><p className="truncate text-xs text-slate-500 dark:text-slate-400">{character.role || "Character"}</p></div>
+                  </div>
+                  <div className="mt-4">
+                    <Select
+                      value={characterVoices[character.id] || "inherit"}
+                      onValueChange={(voice) => setCharacterVoices((current) => ({ ...current, [character.id]: voice }))}
+                      disabled={disabled || busyKey === key}
+                    >
+                      <SelectTrigger aria-label={`Voice for ${character.name}`}><SelectValue placeholder="Character voice" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="inherit">Use scene voice</SelectItem>
+                        {data.voices.map((voice) => <SelectItem key={voice.id} value={voice.id}>{voice.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => saveCharacterVoice(character.id)}
+                    disabled={disabled || busyKey === key}
+                    className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                  >
+                    {busyKey === key ? "Saving…" : "Save character voice"}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-10 pb-12">
+          <div className="flex items-center gap-2"><Film className="h-5 w-5 text-violet-600" /><h2 className="text-xl font-semibold">Scene overrides</h2></div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Fine-tune a scene without changing the visual clip. Saving clears only its derived narration track; the generated video remains intact.</p>
+          <div className="mt-4 space-y-4">
+            {data.scenes.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">This project does not have scenes yet.</div>
+            ) : data.scenes.map((scene) => {
+              const profile = sceneProfiles[scene.id] || scene.profile;
+              const key = `scene:${scene.id}`;
+              return (
+                <article key={scene.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">Scene {scene.sceneNumber}{scene.title ? ` — ${scene.title}` : ""}</h3>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        {scene.narrationUrl ? "Narration exists — changing this profile will invalidate it." : "Narration will be generated from this profile during narration/preview."}
+                        {scene.burnSubtitles && scene.subtitleLang ? ` Burned subtitles: ${scene.subtitleLang}.` : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => saveProfile("scene", profile, scene.id)}
+                      disabled={disabled || busyKey === key}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                    >
+                      {busyKey === key ? "Saving…" : "Save scene"}
+                    </button>
+                  </div>
+                  <div className="mt-5">
+                    <NarrationProfileControls
+                      language={profile.language}
+                      accent={profile.accent}
+                      style={profile.style}
+                      voice={profile.voice}
+                      voices={data.voices}
+                      onLanguageChange={(language) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, language } }))}
+                      onAccentChange={(accent) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, accent } }))}
+                      onStyleChange={(style) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, style } }))}
+                      onVoiceChange={(voice) => setSceneProfiles((current) => ({ ...current, [scene.id]: { ...profile, voice } }))}
+                      disabled={disabled || busyKey === key}
+                    />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
