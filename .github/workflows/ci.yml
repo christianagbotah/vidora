@@ -91,6 +91,9 @@ jobs:
       - name: Apply production migrations to disposable database
         run: bunx prisma migrate deploy
 
+      - name: Verify runtime database contract
+        run: NODE_ENV=test bun scripts/check-runtime-db-contract.ts
+
       - name: Lint
         run: bun run lint
 
