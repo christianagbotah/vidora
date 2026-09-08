@@ -72,6 +72,7 @@ import { BrandKitDialog } from "@/components/BrandKitDialog";
 import AIAssistant from "@/components/AIAssistant";
 import ScrollToTop from "@/components/ScrollToTop";
 import NarrationProfileControls from "@/components/NarrationProfileControls";
+import { FullPreviewDialog } from "@/components/FullPreviewDialog";
 import { DUBBING_LANGUAGE_GROUPS, ALL_DUBBING_LANGUAGES } from "@/lib/dubbing-languages";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
@@ -10350,6 +10351,19 @@ function VidoraApp() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Full Preview Review Dialog */}
+      <FullPreviewDialog
+        open={fullPreviewOpen}
+        onOpenChange={setFullPreviewOpen}
+        previewUrl={fullPreviewUrl}
+        isRebuilding={isBuildingFullPreview}
+        onRebuild={handleBuildFullPreview}
+        onProceedToExport={() => {
+          setFullPreviewOpen(false);
+          setExportDialogOpen(true);
+        }}
+      />
 
       {/* Video Preview Dialog */}
       <Dialog open={!!previewVideoUrl} onOpenChange={closePreview}>
