@@ -86,6 +86,12 @@ if [[ "$BACKUP_DIR" != /* || "$BACKUP_DIR" == "/" ]]; then
   exit 1
 fi
 
+# Canonicalize and validate the relationship between code, live generated media,
+# and recovery storage before Git, backups, migrations, or process state change.
+# In particular, recovery archives must never live inside the media tree they
+# archive (or vice versa), and backups must never be written into the checkout.
+bash scripts/check-storage-path-topology.sh "$PROJECT_DIR" "$GENERATED_DIR" "$BACKUP_DIR"
+
 # Prefer the last release that actually passed production health over whatever
 # commit happens to be checked out on disk. This prevents an out-of-band git
 # pull/checkout from silently changing the recovery target. On the first deploy
