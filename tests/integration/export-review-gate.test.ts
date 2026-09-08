@@ -55,21 +55,59 @@ afterAll(async () => {
 });
 
 describe("server-enforced full-video review gate", () => {
-  test("blocks unreviewed export, freezes an active reviewed cut, and invalidates review after mutation", async () => {
+  test("allows preview jobs before review, blocks final export, freezes active cuts, and invalidates review after mutation", async () => {
     const { user, project, scene } = await createProjectWithClip();
 
     const afterSceneCreate = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
     expect(afterSceneCreate.cutVersion).toBeGreaterThan(0);
     expect(afterSceneCreate.reviewedCutVersion).toBeNull();
 
-    // Direct POST /api/export-video ultimately creates this row. The database
-    // must reject it even if a caller bypasses the browser's preview state.
+    // Full Preview itself must be allowed to queue before the cut is reviewed.
+    // It is the job that creates the reviewable media. The activeKey still
+    // freezes the cut while this preview is queued/running.
+    const previewJob = await db.exportJob.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        activeKey: `project:${project.id}`,
+        params: JSON.stringify({ mode: "preview", expectedCutVersion: afterSceneCreate.cutVersion }),
+      },
+    });
+
+    await expectDatabaseGuard(
+      () => db.videoScene.update({
+        where: { id: scene.id },
+        data: { videoUrl: "/generated/review-preview-race.mp4" },
+      }),
+      "VIDORA_EXPORT_ACTIVE",
+    );
+
+    await db.exportJob.update({
+      where: { id: previewJob.id },
+      data: { status: "done", activeKey: null },
+    });
+
+    // Direct POST /api/export-video ultimately creates a final-mode row. The
+    // database must reject it even if a caller bypasses browser preview state.
     await expectDatabaseGuard(
       () => db.exportJob.create({
         data: {
           projectId: project.id,
           userId: user.id,
           activeKey: `project:${project.id}`,
+          params: JSON.stringify({ mode: "final" }),
+        },
+      }),
+      "VIDORA_PREVIEW_REQUIRED",
+    );
+
+    // Legacy/malformed params are fail-closed and must also be treated as final.
+    await expectDatabaseGuard(
+      () => db.exportJob.create({
+        data: {
+          projectId: project.id,
+          userId: user.id,
+          params: "not-json",
         },
       }),
       "VIDORA_PREVIEW_REQUIRED",
@@ -88,6 +126,7 @@ describe("server-enforced full-video review gate", () => {
         projectId: project.id,
         userId: user.id,
         activeKey: `project:${project.id}`,
+        params: JSON.stringify({ mode: "final" }),
       },
     });
 
