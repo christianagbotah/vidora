@@ -3,11 +3,11 @@ import { promisify } from "util";
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { enforceProjectFinalExportRetention } from "@/lib/final-export-retention";
 import { currentCutIsReviewed, mediaJobMode } from "@/lib/media-job-mode";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { GET as getCoreExportStatus, runExportJob } from "./route-core";
+import { GET as getCoreExportStatus, runExportJob as runCoreExportJob } from "./route-core";
 
-export { runExportJob };
 export type { ExportAudioSummary } from "./route-core";
 
 const execFileAsync = promisify(execFile);
@@ -64,6 +64,50 @@ function resumedFinalJob(job: {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function completedFinalVideoUrl(result: string | null): string | null {
+  if (!result) return null;
+  try {
+    const parsed = JSON.parse(result) as { finalVideoUrl?: unknown };
+    return typeof parsed.finalVideoUrl === "string" ? parsed.finalVideoUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Durable final-export worker boundary.
+ *
+ * The core exporter owns rendering and the terminal ExportJob write. Retention
+ * runs only after that durable success state exists, and it is deliberately
+ * best-effort so cleanup can never turn a valid export into a failed user job.
+ */
+export async function runExportJob(jobId: string): Promise<void> {
+  await runCoreExportJob(jobId);
+
+  const job = await db.exportJob.findUnique({
+    where: { id: jobId },
+    select: { projectId: true, status: true, params: true, result: true },
+  });
+  if (!job || job.status !== "done" || mediaJobMode(job.params) !== "final") return;
+
+  const finalVideoUrl = completedFinalVideoUrl(job.result);
+  const retention = await enforceProjectFinalExportRetention(job.projectId, {
+    protectedUrls: finalVideoUrl ? [finalVideoUrl] : [],
+  }).catch((error) => {
+    console.warn(
+      `[final-export-retention] project=${job.projectId} cleanup skipped:`,
+      error instanceof Error ? error.message : "unknown error",
+    );
+    return null;
+  });
+
+  if (retention && (retention.deletedFiles > 0 || retention.expiredJobs > 0)) {
+    console.log(
+      `[final-export-retention] project=${job.projectId} deleted files=${retention.deletedFiles} expired jobs=${retention.expiredJobs}`,
+    );
+  }
 }
 
 /**
