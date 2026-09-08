@@ -3,6 +3,7 @@ import {
   renderFullProjectPreview,
   type FullPreviewTransition,
 } from "@/lib/full-preview-render";
+import { enforceProjectReviewCutRetention } from "@/lib/review-cut-retention";
 
 const PREVIEW_TRANSITIONS = new Set<FullPreviewTransition>([
   "fade",
@@ -156,6 +157,25 @@ export async function runFullPreviewJob(jobId: string): Promise<void> {
         updatedAt: new Date(),
       },
     });
+
+    // Retention is deliberately best-effort and runs only after the new preview
+    // result is durable. A cleanup failure must never turn a valid reviewed cut
+    // into a failed user job. The current URL is explicitly protected in
+    // addition to the newest-count and age safety windows.
+    const retention = await enforceProjectReviewCutRetention(job.projectId, {
+      protectedUrls: [preview.previewVideoUrl],
+    }).catch((error) => {
+      console.warn(
+        `[review-cut-retention] project=${job.projectId} cleanup skipped:`,
+        error instanceof Error ? error.message : "unknown error",
+      );
+      return null;
+    });
+    if (retention && (retention.deletedFiles > 0 || retention.deletedJobs > 0)) {
+      console.log(
+        `[review-cut-retention] project=${job.projectId} deleted files=${retention.deletedFiles} jobs=${retention.deletedJobs}`,
+      );
+    }
   } catch (error) {
     console.error(`[full-preview-job] ${jobId} failed:`, error);
     await db.exportJob
