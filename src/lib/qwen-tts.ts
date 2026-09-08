@@ -12,6 +12,56 @@ const QWEN_TTS_MAX_CHARS = 600;
 const QWEN_TTS_SAFE_CHARS = 560;
 const execFileAsync = promisify(execFile);
 
+const QWEN_INSTRUCT_VOICES = [
+  "Cherry",
+  "Serena",
+  "Ethan",
+  "Chelsie",
+  "Momo",
+  "Vivian",
+  "Moon",
+  "Maia",
+  "Kai",
+  "Nofish",
+  "Bella",
+  "Eldric Sage",
+  "Mia",
+  "Mochi",
+  "Bellona",
+  "Vincent",
+  "Bunny",
+  "Neil",
+  "Elias",
+  "Arthur",
+  "Nini",
+  "Seren",
+  "Pip",
+  "Stella",
+] as const;
+
+const QWEN_INSTRUCT_VOICE_BY_LOWER = new Map(
+  QWEN_INSTRUCT_VOICES.map((voice) => [voice.toLowerCase(), voice]),
+);
+
+const QWEN_INSTRUCT_LEGACY_REMAP: Record<string, string> = {
+  ryan: "Bellona",
+  jennifer: "Maia",
+  katerina: "Maia",
+  aiden: "Mochi",
+  bodega: "Vincent",
+  sonrisa: "Bella",
+};
+
+const QWEN_INSTRUCT_LOGICAL_FALLBACK: Record<string, string> = {
+  tongtong: "Cherry",
+  chuichui: "Pip",
+  luodo: "Bellona",
+  kazi: "Ethan",
+  douji: "Serena",
+  xiaochen: "Neil",
+  jam: "Eldric Sage",
+};
+
 export interface QwenTtsRequest {
   input: string;
   voice?: string;
@@ -40,6 +90,10 @@ interface QwenTtsSettings {
 interface DownloadedAudio {
   buffer: Buffer;
   extension: "wav" | "mp3";
+}
+
+interface SynthesizedAudio extends DownloadedAudio {
+  voice: string;
 }
 
 function parseVoiceMap(raw: string): Record<string, string> {
@@ -169,6 +223,47 @@ export function resolveQwenVoice(
   return settings.defaultVoice || DEFAULT_QWEN_TTS_VOICE;
 }
 
+function canonicalInstructVoice(value: string | null | undefined): string | null {
+  return QWEN_INSTRUCT_VOICE_BY_LOWER.get((value || "").trim().toLowerCase()) || null;
+}
+
+/**
+ * qwen3-tts-instruct-flash does not share the complete system-voice roster of
+ * qwen3-tts-flash. Preserve valid/current voices, translate known legacy
+ * Flash-only voices to close Instruct equivalents, and leave unknown values
+ * untouched so newly-added provider voices can still be attempted. A provider
+ * rejection is handled by a second safe attempt below.
+ */
+export function resolveQwenVoiceForModel(
+  resolvedVoice: string,
+  requestedVoice: string | undefined,
+  model: string,
+  defaultVoice: string,
+): string {
+  if (!/^qwen3-tts-instruct-flash/i.test(model)) return resolvedVoice;
+
+  const canonical = canonicalInstructVoice(resolvedVoice);
+  if (canonical) return canonical;
+
+  const legacy = QWEN_INSTRUCT_LEGACY_REMAP[resolvedVoice.trim().toLowerCase()];
+  if (legacy) return legacy;
+
+  const logical = QWEN_INSTRUCT_LOGICAL_FALLBACK[(requestedVoice || "").trim().toLowerCase()];
+  if (logical && !resolvedVoice.trim()) return logical;
+
+  const safeDefault = canonicalInstructVoice(defaultVoice) || DEFAULT_QWEN_TTS_VOICE;
+  return resolvedVoice.trim() || safeDefault;
+}
+
+export function qwenInstructFallbackVoice(
+  requestedVoice: string | undefined,
+  defaultVoice: string,
+): string {
+  const logical = QWEN_INSTRUCT_LOGICAL_FALLBACK[(requestedVoice || "").trim().toLowerCase()];
+  if (logical) return logical;
+  return canonicalInstructVoice(defaultVoice) || DEFAULT_QWEN_TTS_VOICE;
+}
+
 function buildEndpoint(baseUrl: string): string {
   const normalized = (baseUrl || DEFAULT_QWEN_TTS_BASE_URL).trim().replace(/\/+$/, "");
   if (!/^https:\/\//i.test(normalized)) {
@@ -221,6 +316,12 @@ function providerError(body: unknown, status: number): Error {
   return new Error(`Qwen3-TTS request failed with HTTP ${status}`);
 }
 
+function isUnsupportedVoiceError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /voice\s+['\"].+['\"]\s+is\s+not\s+supported/i.test(error.message)
+    || /invalidparameter.*voice/i.test(error.message);
+}
+
 async function downloadAudio(url: string): Promise<DownloadedAudio> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
@@ -242,14 +343,14 @@ async function downloadAudio(url: string): Promise<DownloadedAudio> {
   }
 }
 
-async function synthesizeOne(opts: {
+async function synthesizeOneAttempt(opts: {
   text: string;
   settings: QwenTtsSettings;
   model: string;
   voice: string;
   languageType: string;
   instruction: string;
-}): Promise<DownloadedAudio> {
+}): Promise<SynthesizedAudio> {
   if (opts.text.length > QWEN_TTS_MAX_CHARS) {
     throw new Error(`Qwen3-TTS internal chunk exceeds the ${QWEN_TTS_MAX_CHARS}-character API limit`);
   }
@@ -278,9 +379,7 @@ async function synthesizeOne(opts: {
       cache: "no-store",
     });
 
-    const body = response.ok
-      ? await response.json().catch(() => null) as Record<string, unknown> | null
-      : await response.json().catch(() => null) as Record<string, unknown> | null;
+    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
     const providerStatus = body && typeof body.status_code === "number" ? body.status_code : response.status;
     if (!response.ok || providerStatus >= 400 || (body?.code && String(body.code).trim())) {
       throw providerError(body, providerStatus);
@@ -294,7 +393,7 @@ async function synthesizeOne(opts: {
       : null;
     const audioUrl = typeof audio?.url === "string" ? audio.url : "";
     if (!audioUrl) throw new Error("Qwen3-TTS returned no complete audio URL");
-    return downloadAudio(audioUrl);
+    return { ...(await downloadAudio(audioUrl)), voice: opts.voice };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Qwen3-TTS synthesis timed out");
@@ -302,6 +401,32 @@ async function synthesizeOne(opts: {
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function synthesizeOne(opts: {
+  text: string;
+  settings: QwenTtsSettings;
+  model: string;
+  voice: string;
+  fallbackVoice: string;
+  languageType: string;
+  instruction: string;
+}): Promise<SynthesizedAudio> {
+  try {
+    return await synthesizeOneAttempt(opts);
+  } catch (error) {
+    if (
+      /^qwen3-tts-instruct-flash/i.test(opts.model)
+      && opts.voice.toLowerCase() !== opts.fallbackVoice.toLowerCase()
+      && isUnsupportedVoiceError(error)
+    ) {
+      console.warn(
+        `[Qwen3-TTS] Voice ${JSON.stringify(opts.voice)} is unavailable for ${opts.model}; retrying with ${JSON.stringify(opts.fallbackVoice)}`,
+      );
+      return synthesizeOneAttempt({ ...opts, voice: opts.fallbackVoice });
+    }
+    throw error;
   }
 }
 
@@ -349,32 +474,37 @@ export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTt
 
   const settings = await getSettings();
   const model = resolveQwenTtsModel(request.model);
-  const voice = resolveQwenVoice(request.voice, settings, {
+  const mappedVoice = resolveQwenVoice(request.voice, settings, {
     language: request.language,
     accent: request.accent,
   });
+  const voice = resolveQwenVoiceForModel(mappedVoice, request.voice, model, settings.defaultVoice);
+  const fallbackVoice = qwenInstructFallbackVoice(request.voice, settings.defaultVoice);
   const languageType = qwenLanguageType(request.language);
   const instruction = qwenPerformanceInstruction(request)
     || "Deliver the line naturally with expressive, cinematic speech.";
   const textParts = splitQwenTtsInput(text);
-  const audioParts: DownloadedAudio[] = [];
+  const audioParts: SynthesizedAudio[] = [];
   for (const part of textParts) {
     audioParts.push(await synthesizeOne({
       text: part,
       settings,
       model,
       voice,
+      fallbackVoice,
       languageType,
       instruction,
     }));
   }
 
+  const usedVoice = audioParts[0]?.voice || voice;
   if (audioParts.length === 1) {
     return {
-      ...audioParts[0],
+      buffer: audioParts[0].buffer,
+      extension: audioParts[0].extension,
       provider: "qwen",
       model,
-      voice,
+      voice: usedVoice,
     };
   }
 
@@ -383,6 +513,6 @@ export async function synthesizeQwenTts(request: QwenTtsRequest): Promise<QwenTt
     extension: "wav",
     provider: "qwen",
     model,
-    voice,
+    voice: usedVoice,
   };
 }

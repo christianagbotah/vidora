@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_QWEN_TTS_MODEL,
   DEFAULT_QWEN_TTS_VOICE,
+  qwenInstructFallbackVoice,
   qwenLanguageType,
   qwenPerformanceInstruction,
   resolveQwenTtsModel,
   resolveQwenVoice,
+  resolveQwenVoiceForModel,
   splitQwenTtsInput,
 } from "@/lib/qwen-tts";
 import { readFileSync } from "fs";
@@ -58,6 +60,27 @@ describe("Qwen3-TTS provider compatibility", () => {
     expect(resolveQwenVoice("unknown", settings, { language: "de", accent: "auto" })).toBe(DEFAULT_QWEN_TTS_VOICE);
   });
 
+  test("remaps Flash-only Ryan to an expressive Instruct-compatible character voice", () => {
+    expect(
+      resolveQwenVoiceForModel("Ryan", "luodo", "qwen3-tts-instruct-flash", "Cherry"),
+    ).toBe("Bellona");
+    expect(
+      resolveQwenVoiceForModel("ryan", "luodo", "qwen3-tts-instruct-flash-2026-01-26", "Cherry"),
+    ).toBe("Bellona");
+    expect(
+      resolveQwenVoiceForModel("Pip", "chuichui", "qwen3-tts-instruct-flash", "Cherry"),
+    ).toBe("Pip");
+  });
+
+  test("keeps character-aware safe fallbacks for provider-side voice rejection", () => {
+    expect(qwenInstructFallbackVoice("tongtong", "Cherry")).toBe("Cherry");
+    expect(qwenInstructFallbackVoice("chuichui", "Cherry")).toBe("Pip");
+    expect(qwenInstructFallbackVoice("luodo", "Cherry")).toBe("Bellona");
+    expect(qwenInstructFallbackVoice("kazi", "Cherry")).toBe("Ethan");
+    expect(qwenInstructFallbackVoice("jam", "Cherry")).toBe("Eldric Sage");
+    expect(qwenInstructFallbackVoice("unknown", "Ryan")).toBe("Cherry");
+  });
+
   test("splits long legacy dialogue below the provider's 600-character request ceiling", () => {
     const text = `${"A".repeat(700)} ${"B".repeat(700)}. Final sentence.`;
     const chunks = splitQwenTtsInput(text);
@@ -69,9 +92,15 @@ describe("Qwen3-TTS provider compatibility", () => {
   test("provider alias and production preflight cannot silently bypass Qwen routing", () => {
     const tsconfig = readFileSync(path.join(process.cwd(), "tsconfig.json"), "utf8");
     const preflight = readFileSync(path.join(process.cwd(), "scripts/check-ai-provider-routing-live.ts"), "utf8");
+    const migration = readFileSync(
+      path.join(process.cwd(), "prisma/migrations/20260908001000_qwen_instruct_voice_compat/migration.sql"),
+      "utf8",
+    );
     expect(tsconfig).toContain('"@/lib/ai-provider-router"');
     expect(tsconfig).toContain("ai-provider-router-qwen.ts");
     expect(preflight).toContain('settings.ttsProvider === "qwen"');
     expect(preflight).toContain("probeQwenTts()");
+    expect(migration).toContain('"Ryan"');
+    expect(migration).toContain('"Bellona"');
   });
 });
