@@ -248,6 +248,11 @@ echo "Recovery manifest prepared: $MANIFEST_FILE"
 # Production schema changes are versioned and reviewable. db push is forbidden.
 bunx prisma migrate deploy
 
+# Migrations must leave the durable preview/export queue contract usable before
+# the running processes are touched. This catches Prisma-vs-migration drift such
+# as a missing ExportJob.activeKey column/index and fails closed on the old app.
+NODE_ENV=production bun scripts/check-runtime-db-contract.ts
+
 mkdir -p logs
 pm2 startOrReload ecosystem.config.js --update-env
 pm2 save
