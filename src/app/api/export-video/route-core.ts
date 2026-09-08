@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { generatedStoreDir, generatedFilePath, resolvePublicAssetPath } from "@/lib/generated-store";
+import { generatedStoreDir, promoteGeneratedFile, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { resolveSceneLanguageText } from "@/lib/scene-language";
 import { materializeSceneVideo } from "@/lib/scene-video-materializer";
 import { getAudioPath, audioFileExists } from "@/lib/audio-storage";
-import { writeFile, mkdir, rm, readFile } from "fs/promises";
+import { writeFile, mkdir, rm } from "fs/promises";
 import { existsSync, statSync } from "fs";
 import path from "path";
 import { execFile, spawn } from "child_process";
@@ -869,16 +869,14 @@ async function runSingleSceneExport(
       throw new Error("ffmpeg produced no output file");
     }
 
-    // Copy final to the persistent generated store
+    // Promote the completed render without loading the MP4/WebM into JS memory.
     await onProgress(94, "Saving final video…");
-    const finalPath = generatedFilePath(outputFileName);
-    const finalData = await readFile(outputPath);
-    await mkdir(path.dirname(finalPath), { recursive: true });
-    await writeFile(finalPath, finalData);
-
-    const finalVideoUrl = `/generated/${outputFileName}`;
+    const { path: finalPath, url: finalVideoUrl } = await promoteGeneratedFile(
+      outputPath,
+      outputFileName,
+    );
     const fileSize = statSync(finalPath).size;
-    const outputDuration = await getVideoDuration(outputPath);
+    const outputDuration = await getVideoDuration(finalPath);
     const durationStr = formatDuration(outputDuration);
 
     await db.videoProject.update({
@@ -1058,18 +1056,16 @@ async function runMultiSceneExport(
       throw new Error("ffmpeg export produced no output file");
     }
 
-    // ── Step 7: Copy to the persistent generated store ───────────────
+    // ── Step 7: Promote to the persistent generated store ────────────
     await onProgress(94, "Saving final video…");
-    const finalPath = generatedFilePath(outputFileName);
-    const finalData = await readFile(outputPath);
-    await mkdir(path.dirname(finalPath), { recursive: true });
-    await writeFile(finalPath, finalData);
-
-    const finalVideoUrl = `/generated/${outputFileName}`;
+    const { path: finalPath, url: finalVideoUrl } = await promoteGeneratedFile(
+      outputPath,
+      outputFileName,
+    );
 
     // ── Step 8: Gather output stats ──────────────────────────────────
     const fileSize = statSync(finalPath).size;
-    const outputDuration = await getVideoDuration(outputPath);
+    const outputDuration = await getVideoDuration(finalPath);
     const durationStr = formatDuration(outputDuration);
 
     // ── Step 9: Update project ───────────────────────────────────────

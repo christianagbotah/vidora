@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, stat } from "fs/promises";
+import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import type { NextRequest } from "next/server";
@@ -55,6 +55,37 @@ export function generatedFilePath(relPath: string): string {
 /** Absolute store directory (for routes that need a workDir). */
 export function generatedStoreDir(): string {
   return STORE_DIR;
+}
+
+/**
+ * Promote an already-rendered file into the persistent generated store without
+ * buffering the complete media file in JavaScript memory. Render workdirs are
+ * normally inside this store, so rename is an atomic metadata operation. The
+ * EXDEV fallback covers future callers whose source lives on another filesystem.
+ */
+export async function promoteGeneratedFile(
+  sourcePath: string,
+  relPath: string,
+): Promise<{ path: string; url: string }> {
+  const safe = sanitizeRelPath(relPath);
+  const abs = path.join(STORE_DIR, safe);
+  await mkdir(path.dirname(abs), { recursive: true });
+
+  if (path.resolve(sourcePath) !== path.resolve(abs)) {
+    try {
+      await rename(sourcePath, abs);
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (code !== "EXDEV") throw error;
+      await copyFile(sourcePath, abs);
+      await unlink(sourcePath);
+    }
+  }
+
+  return { path: abs, url: `/generated/${safe}` };
 }
 
 /** Save a file into the store; returns the public URL (`/generated/<rel>`). */

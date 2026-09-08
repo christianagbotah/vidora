@@ -3,9 +3,9 @@ import path from "path";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
-import { mkdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, rm, writeFile } from "fs/promises";
 import { db } from "@/lib/db";
-import { generatedFilePath, generatedStoreDir, resolvePublicAssetPath } from "@/lib/generated-store";
+import { generatedStoreDir, promoteGeneratedFile, resolvePublicAssetPath } from "@/lib/generated-store";
 import { generateSceneNarration, pickSceneNarrationVoice } from "@/lib/narration";
 import { resolveSceneLanguageText } from "@/lib/scene-language";
 import { audioFileExists, getAudioPath } from "@/lib/audio-storage";
@@ -488,11 +488,12 @@ export async function renderFullProjectPreview(
     }
 
     const outputName = `preview_${projectId}_${expectedCutVersion}_${Date.now()}.mp4`;
-    const persistentPath = generatedFilePath(outputName);
-    await mkdir(path.dirname(persistentPath), { recursive: true });
-    await writeFile(persistentPath, await readFile(outputPath));
+    const { path: persistentPath, url: previewVideoUrl } = await promoteGeneratedFile(
+      outputPath,
+      outputName,
+    );
     return {
-      previewVideoUrl: `/generated/${outputName}`,
+      previewVideoUrl,
       sceneCount: scenes.length,
       durationSeconds: await videoDuration(persistentPath),
       transition,
