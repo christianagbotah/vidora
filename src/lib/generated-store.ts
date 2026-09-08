@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile } from "fs/promises";
+import { mkdir, writeFile, readFile, stat } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import type { NextRequest } from "next/server";
@@ -67,6 +67,35 @@ export async function saveGeneratedFile(
   await mkdir(path.dirname(abs), { recursive: true });
   await writeFile(abs, data);
   return `/generated/${safe}`;
+}
+
+export interface GeneratedFileLocation {
+  path: string;
+  size: number;
+}
+
+async function locateFile(candidate: string): Promise<GeneratedFileLocation | null> {
+  try {
+    const metadata = await stat(candidate);
+    if (!metadata.isFile()) return null;
+    return { path: candidate, size: metadata.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Locate generated media without reading its bytes into application memory.
+ * The generated-media route uses this for streaming large previews/exports;
+ * callers that truly need a Buffer can continue using readGeneratedFile().
+ */
+export async function locateGeneratedFile(
+  relPath: string,
+): Promise<GeneratedFileLocation | null> {
+  const safe = sanitizeRelPath(relPath);
+  const stored = await locateFile(path.join(STORE_DIR, safe));
+  if (stored) return stored;
+  return locateFile(path.join(process.cwd(), "public", "generated", safe));
 }
 
 /** Read a generated file: store first, then legacy `public/generated`. */
