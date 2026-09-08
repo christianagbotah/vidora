@@ -5,8 +5,9 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { currentCutIsReviewed, mediaJobMode } from "@/lib/media-job-mode";
 import { requireProjectAccess } from "@/lib/project-auth";
+import { GET as getCoreExportStatus, runExportJob } from "./route-core";
 
-export { GET, runExportJob } from "./route-core";
+export { runExportJob };
 export type { ExportAudioSummary } from "./route-core";
 
 const execFileAsync = promisify(execFile);
@@ -225,4 +226,43 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+/**
+ * Final-export status boundary.
+ *
+ * `GET ?projectId=...` is used by the Studio after reload to recover an active
+ * background final export. Full Preview uses the same ExportJob table and the
+ * same per-project activeKey, so returning a preview here would hydrate the
+ * preview into the final-export progress UI. For project recovery, expose only
+ * an active final job; explicit job-id polling keeps the core status behavior.
+ */
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const jobId = searchParams.get("jobId");
+  const projectId = searchParams.get("projectId");
+
+  if (jobId || !projectId) {
+    return getCoreExportStatus(req);
+  }
+
+  const authResult = await requireProjectAccess(projectId, false);
+  if (!authResult.ok) return authResult.response;
+
+  const activeJob = await db.exportJob.findUnique({
+    where: { activeKey: `project:${projectId}` },
+    select: { id: true, params: true },
+  });
+  if (!activeJob || mediaJobMode(activeJob.params) === "preview") {
+    return NextResponse.json({ success: true, job: null });
+  }
+
+  const forwardedUrl = new URL(req.url);
+  forwardedUrl.searchParams.delete("projectId");
+  forwardedUrl.searchParams.set("jobId", activeJob.id);
+  const forwardedRequest = new NextRequest(forwardedUrl, {
+    method: "GET",
+    headers: req.headers,
+  });
+  return getCoreExportStatus(forwardedRequest);
 }
