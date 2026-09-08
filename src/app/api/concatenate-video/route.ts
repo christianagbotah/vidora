@@ -5,11 +5,11 @@ import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import {
   generatedStoreDir,
-  generatedFilePath,
+  promoteGeneratedFile,
   resolvePublicAssetPath,
 } from "@/lib/generated-store";
 import type { FullPreviewTransition } from "@/lib/full-preview-render";
-import { writeFile, mkdir, rm, readFile } from "fs/promises";
+import { writeFile, mkdir, rm } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { execFile } from "child_process";
@@ -484,10 +484,10 @@ export async function POST(req: NextRequest) {
       }
 
       const resultFileName = `final_${projectId}.mp4`;
-      const resultPath = generatedFilePath(resultFileName);
-      await mkdir(path.dirname(resultPath), { recursive: true });
-      await writeFile(resultPath, await readFile(outputPath));
-      const resultVideoUrl = `/generated/${resultFileName}`;
+      const { url: resultVideoUrl } = await promoteGeneratedFile(
+        outputPath,
+        resultFileName,
+      );
 
       await db.videoProject.update({
         where: { id: projectId },
