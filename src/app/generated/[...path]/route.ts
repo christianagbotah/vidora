@@ -7,6 +7,7 @@ import {
   verifyShareAccessToken,
 } from "@/lib/share-access";
 import { verifyProviderMediaToken } from "@/lib/provider-media-access";
+import { reviewCutProjectId } from "@/lib/review-cut-media";
 
 export const runtime = "nodejs";
 
@@ -57,12 +58,14 @@ async function authorizeGeneratedMedia(
     };
   }
 
-  // Review-cut files are private and intentionally are not stored in
-  // VideoProject.finalVideoUrl. Their filename contains only the project id;
-  // access is still resolved through the normal project authorization layer.
-  const reviewCut = /^preview_([A-Za-z0-9_-]+)\.mp4$/.exec(rel);
-  if (reviewCut?.[1]) {
-    const access = await requireProjectAccess(reviewCut[1], false);
+  // Full Preview review cuts are private and intentionally are not stored in
+  // VideoProject.finalVideoUrl. Current filenames include the reviewed cut
+  // version and a timestamp so repeated previews never collide:
+  //   preview_<projectId>_<cutVersion>_<timestamp>.mp4
+  // Legacy preview_<projectId>.mp4 files remain readable as well.
+  const reviewProjectId = reviewCutProjectId(rel);
+  if (reviewProjectId) {
+    const access = await requireProjectAccess(reviewProjectId, false);
     return { allowed: access.ok, publicCache: false };
   }
 
