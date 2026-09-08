@@ -24,8 +24,10 @@ describe("language and export pipeline regression guards", () => {
   test("final export carries language profile and uses resilient scene media materialization", () => {
     const route = source("src/app/api/export-video/route.ts");
     const core = source("src/app/api/export-video/route-core.ts");
-    expect(route).toContain('import { GET as getCoreExportStatus, runExportJob } from "./route-core"');
-    expect(route).toContain("export { runExportJob }");
+    expect(route).toContain('import { GET as getCoreExportStatus, runExportJob as runCoreExportJob } from "./route-core"');
+    expect(route).toContain("export async function runExportJob(jobId: string)");
+    expect(route).toContain("await runCoreExportJob(jobId)");
+    expect(route).toContain("enforceProjectFinalExportRetention(job.projectId");
     expect(core).toContain("resolveSceneLanguageText(scene.id, language)");
     expect(core).toContain("language,");
     expect(core).toContain("accent: scene.narrationAccent || undefined");
