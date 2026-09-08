@@ -6,7 +6,7 @@
 DO $$
 DECLARE
   qwen_active boolean;
-  changed boolean := false;
+  changed_count integer := 0;
 BEGIN
   SELECT EXISTS (
     SELECT 1
@@ -20,9 +20,9 @@ BEGIN
   WHERE "key" = 'qwen_tts_voice_map'
     AND ("value" LIKE '%"Ryan"%' OR "value" LIKE '%"ryan"%');
 
-  GET DIAGNOSTICS changed = ROW_COUNT;
+  GET DIAGNOSTICS changed_count = ROW_COUNT;
 
-  IF qwen_active AND changed THEN
+  IF qwen_active AND changed_count > 0 THEN
     UPDATE "VideoScene"
     SET "narrationUrl" = NULL
     WHERE "narrationUrl" IS NOT NULL;
