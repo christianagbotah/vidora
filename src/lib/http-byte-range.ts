@@ -9,7 +9,7 @@ export interface ByteRange {
  * Vidora intentionally supports a single range only because media players use
  * single seek ranges and multipart/byteranges would add substantial response
  * complexity. Invalid, unsatisfiable, or multiple ranges return null so the
- * route can answer 416 with the required `Content-Range: bytes */<size>`.
+ * route can answer 416 with the RFC unsatisfied-range Content-Range header.
  */
 export function parseSingleByteRange(
   header: string,
