@@ -24,12 +24,21 @@ describe("language and export pipeline regression guards", () => {
   test("final export carries language profile and uses resilient scene media materialization", () => {
     const route = source("src/app/api/export-video/route.ts");
     const core = source("src/app/api/export-video/route-core.ts");
-    expect(route).toContain('export { GET, runExportJob } from "./route-core"');
+    expect(route).toContain('import { GET as getCoreExportStatus, runExportJob } from "./route-core"');
+    expect(route).toContain("export { runExportJob }");
     expect(core).toContain("resolveSceneLanguageText(scene.id, language)");
     expect(core).toContain("language,");
     expect(core).toContain("accent: scene.narrationAccent || undefined");
     expect(core).toContain("style: scene.narrationStyle || undefined");
     expect(core).toContain("materializeSceneVideo(scene)");
+  });
+
+  test("final export project recovery excludes Full Preview jobs", () => {
+    const route = source("src/app/api/export-video/route.ts");
+    expect(route).toContain('where: { activeKey: `project:${projectId}` }');
+    expect(route).toContain('mediaJobMode(activeJob.params) === "preview"');
+    expect(route).toContain("return NextResponse.json({ success: true, job: null })");
+    expect(route).toContain('forwardedUrl.searchParams.set("jobId", activeJob.id)');
   });
 
   test("production provider preflight exercises the dedicated Z.AI GLM-TTS route", () => {
