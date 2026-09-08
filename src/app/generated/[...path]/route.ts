@@ -1,13 +1,16 @@
+import { createReadStream } from "fs";
+import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
-import { readGeneratedFile, sanitizeRelPath } from "@/lib/generated-store";
+import { locateGeneratedFile, sanitizeRelPath } from "@/lib/generated-store";
 import {
   shareAccessCookieName,
   verifyShareAccessToken,
 } from "@/lib/share-access";
 import { verifyProviderMediaToken } from "@/lib/provider-media-access";
 import { reviewCutProjectId } from "@/lib/review-cut-media";
+import { parseSingleByteRange, type ByteRange } from "@/lib/http-byte-range";
 
 export const runtime = "nodejs";
 
@@ -28,6 +31,13 @@ const MIME: Record<string, string> = {
 };
 
 type MediaAccess = { allowed: boolean; publicCache: boolean };
+
+function generatedFileStream(filePath: string, range?: ByteRange): ReadableStream<Uint8Array> {
+  const nodeStream = range
+    ? createReadStream(filePath, { start: range.start, end: range.end })
+    : createReadStream(filePath);
+  return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
+}
 
 async function authorizeGeneratedMedia(
   req: NextRequest,
@@ -150,15 +160,15 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const buffer = await readGeneratedFile(rel);
-  if (!buffer) {
+  const file = await locateGeneratedFile(rel);
+  if (!file) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const dot = rel.lastIndexOf(".");
   const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : "";
   const contentType = MIME[ext] ?? "application/octet-stream";
-  const total = buffer.length;
+  const total = file.size;
   const baseHeaders: Record<string, string> = {
     "Content-Type": contentType,
     "Accept-Ranges": "bytes",
@@ -168,44 +178,31 @@ export async function GET(
     "X-Content-Type-Options": "nosniff",
   };
 
-  const range = req.headers.get("range");
-  if (range) {
-    const match = /bytes=(\d*)-(\d*)/.exec(range);
-    if (match) {
-      const startRaw = match[1];
-      const endRaw = match[2];
-      let start = startRaw ? parseInt(startRaw, 10) : 0;
-      let end = endRaw ? parseInt(endRaw, 10) : total - 1;
-
-      if (
-        Number.isNaN(start) ||
-        Number.isNaN(end) ||
-        start >= total ||
-        start > end
-      ) {
-        return new NextResponse(null, {
-          status: 416,
-          headers: { "Content-Range": `bytes */${total}` },
-        });
-      }
-      start = Math.max(0, start);
-      end = Math.min(total - 1, end);
-
-      const chunk = buffer.subarray(start, end + 1);
-      const responseChunk = Uint8Array.from(chunk);
-      return new NextResponse(responseChunk, {
-        status: 206,
+  const rangeHeader = req.headers.get("range");
+  if (rangeHeader) {
+    const range = parseSingleByteRange(rangeHeader, total);
+    if (!range) {
+      return new NextResponse(null, {
+        status: 416,
         headers: {
           ...baseHeaders,
-          "Content-Range": `bytes ${start}-${end}/${total}`,
-          "Content-Length": chunk.length.toString(),
+          "Content-Range": `bytes */${total}`,
         },
       });
     }
+
+    const length = range.end - range.start + 1;
+    return new NextResponse(generatedFileStream(file.path, range), {
+      status: 206,
+      headers: {
+        ...baseHeaders,
+        "Content-Range": `bytes ${range.start}-${range.end}/${total}`,
+        "Content-Length": length.toString(),
+      },
+    });
   }
 
-  const responseBody = Uint8Array.from(buffer);
-  return new NextResponse(responseBody, {
+  return new NextResponse(generatedFileStream(file.path), {
     status: 200,
     headers: {
       ...baseHeaders,
