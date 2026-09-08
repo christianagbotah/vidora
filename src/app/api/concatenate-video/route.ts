@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
 import {
@@ -26,6 +27,15 @@ const PREVIEW_STREAM_HEARTBEAT_MS = 10_000;
 const PREVIEW_STREAM_POLL_MS = 1_000;
 const PREVIEW_STREAM_MAX_MS = 20 * 60_000;
 
+type ConcatenateStage =
+  | "parse-request"
+  | "auth"
+  | "project-load"
+  | "queue-lookup"
+  | "queue-create"
+  | "legacy-ffmpeg-preflight"
+  | "legacy-render";
+
 async function checkFfmpeg(): Promise<boolean> {
   try {
     await execFileAsync("which", ["ffmpeg"]);
@@ -44,6 +54,51 @@ function jobMode(params: string | null): string {
   } catch {
     return "final";
   }
+}
+
+function concatenateFailure(
+  stage: ConcatenateStage,
+  error: unknown,
+  requestId: string,
+): NextResponse {
+  const prismaCode =
+    error instanceof Prisma.PrismaClientKnownRequestError ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+
+  console.error(
+    `[concatenate-video] request=${requestId} stage=${stage}${prismaCode ? ` prisma=${prismaCode}` : ""}`,
+    error,
+  );
+
+  if (prismaCode === "P2021" || prismaCode === "P2022") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "The production database schema does not match the running Vidora release.",
+        code: "VIDORA_DATABASE_SCHEMA_MISMATCH",
+        stage,
+        prismaCode,
+        requestId,
+      },
+      { status: 503 },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      success: false,
+      error: "Could not start the full-video assembly request.",
+      code: "VIDORA_CONCATENATE_INTERNAL",
+      stage,
+      ...(prismaCode ? { prismaCode } : {}),
+      requestId,
+      // Do not expose raw SQL/provider secrets. This short class is enough to
+      // correlate browser failures with the full server-side log entry.
+      errorClass: error instanceof Error ? error.name : "UnknownError",
+      detail: process.env.NODE_ENV === "production" ? undefined : message,
+    },
+    { status: 500 },
+  );
 }
 
 function streamFullPreviewJob(jobId: string): Response {
@@ -117,7 +172,9 @@ function streamFullPreviewJob(jobId: string): Response {
 
           if (job.status === "done") {
             try {
-              const result = job.result ? JSON.parse(job.result) as Record<string, unknown> : null;
+              const result = job.result
+                ? JSON.parse(job.result) as Record<string, unknown>
+                : null;
               if (!result) throw new Error("missing preview result");
               finish({ ...result, jobId });
             } catch {
@@ -163,6 +220,9 @@ function streamFullPreviewJob(jobId: string): Response {
 }
 
 export async function POST(req: NextRequest) {
+  const requestId = randomUUID();
+  let stage: ConcatenateStage = "parse-request";
+
   try {
     const body = await req.json();
     const {
@@ -185,20 +245,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    stage = "auth";
     const authResult = await requireProjectAccess(projectId, true);
     if (!authResult.ok) return authResult.response;
 
-    const hasFfmpeg = await checkFfmpeg();
-    if (!hasFfmpeg) {
-      return NextResponse.json(
-        { success: false, error: "ffmpeg/ffprobe is not installed on the server." },
-        { status: 500 },
-      );
-    }
-
+    stage = "project-load";
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: { scenes: { orderBy: { sceneNumber: "asc" } } },
+      select: {
+        id: true,
+        cutVersion: true,
+        scenes: {
+          orderBy: { sceneNumber: "asc" },
+          select: { id: true, sceneNumber: true, videoUrl: true },
+        },
+      },
     });
     if (!project) {
       return NextResponse.json(
@@ -229,6 +290,7 @@ export async function POST(req: NextRequest) {
       // Preview and final export share one active project lock. This preserves
       // review/export invariants and closes double-click/concurrent races.
       const activeKey = `project:${projectId}`;
+      stage = "queue-lookup";
       const activeJob = await db.exportJob.findUnique({ where: { activeKey } });
       if (activeJob) {
         if (jobMode(activeJob.params) === "preview") {
@@ -245,6 +307,7 @@ export async function POST(req: NextRequest) {
       }
 
       let job;
+      stage = "queue-create";
       try {
         job = await db.exportJob.create({
           data: {
@@ -268,6 +331,7 @@ export async function POST(req: NextRequest) {
         });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          stage = "queue-lookup";
           const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
           if (concurrent && jobMode(concurrent.params) === "preview") {
             return streamFullPreviewJob(concurrent.id);
@@ -291,7 +355,24 @@ export async function POST(req: NextRequest) {
 
     // ── Legacy direct concatenate path ────────────────────────────────────
     // Kept for backward compatibility. Production final export uses
-    // /api/export-video and the durable export worker.
+    // /api/export-video and the durable export worker. FFmpeg is checked only
+    // here; worker-backed Full Preview must not depend on the web process PATH.
+    stage = "legacy-ffmpeg-preflight";
+    const hasFfmpeg = await checkFfmpeg();
+    if (!hasFfmpeg) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "ffmpeg/ffprobe is not installed in the web process environment.",
+          code: "VIDORA_FFMPEG_UNAVAILABLE",
+          stage,
+          requestId,
+        },
+        { status: 503 },
+      );
+    }
+
+    stage = "legacy-render";
     if (completedScenes.length === 1) {
       await db.videoProject.update({
         where: { id: projectId },
@@ -425,17 +506,9 @@ export async function POST(req: NextRequest) {
       await db.videoProject
         .update({ where: { id: projectId }, data: { status: "failed" } })
         .catch(() => undefined);
-      console.error("Legacy concatenate failed:", error);
-      return NextResponse.json(
-        { success: false, error: "Failed to concatenate videos" },
-        { status: 500 },
-      );
+      return concatenateFailure(stage, error, requestId);
     }
   } catch (error) {
-    console.error("Concatenate error:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to concatenate videos" },
-      { status: 500 },
-    );
+    return concatenateFailure(stage, error, requestId);
   }
 }
