@@ -43,8 +43,8 @@ describe("production storage path topology", () => {
   test("rejects backup storage inside generated media", () => {
     const result = check(
       "/srv/vidora",
-      "/srv/vidora/generated-store",
-      "/srv/vidora/generated-store/recovery",
+      "/srv/media/vidora",
+      "/srv/media/vidora/recovery",
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("must not overlap");
