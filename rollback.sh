@@ -67,6 +67,12 @@ if [[ ! -d "$BACKUP_DIR" ]]; then
   echo "FATAL: BACKUP_DIR does not exist: $BACKUP_DIR"
   exit 1
 fi
+
+# Apply the same canonical code/media/recovery topology policy used by deploy
+# before trusting a manifest or stopping any service. A misconfigured recovery
+# tree must fail closed while the current release is still untouched.
+bash scripts/check-storage-path-topology.sh "$PROJECT_DIR" "$GENERATED_DIR" "$BACKUP_DIR"
+
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "FATAL: production working tree is dirty; rollback refuses to overwrite local changes"
   exit 1
