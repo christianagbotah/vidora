@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { resolve } from "path";
 import { promisify } from "util";
 import {
   type VidoraDurableWorkerName,
@@ -15,6 +16,11 @@ export const EXPECTED_VIDORA_PM2_APPS = [
   "vidora-export-worker",
 ] as const;
 
+export const EXPECTED_DURABLE_WORKER_TARGETS: Record<VidoraDurableWorkerName, string> = {
+  "vidora-generation-worker": "scripts/generation-worker-entry.ts",
+  "vidora-export-worker": "scripts/export-worker-entry.ts",
+};
+
 interface Pm2ProcessRow {
   name?: unknown;
   pid?: unknown;
@@ -22,6 +28,7 @@ interface Pm2ProcessRow {
     status?: unknown;
     restart_time?: unknown;
     unstable_restarts?: unknown;
+    pm_exec_path?: unknown;
   } | null;
 }
 
@@ -34,6 +41,13 @@ export interface Pm2HealthEvaluation {
 export interface WorkerHeartbeatEvaluation {
   ok: boolean;
   status: string;
+}
+
+export interface DurableWorkerTargetIssue {
+  name: VidoraDurableWorkerName;
+  status: string;
+  currentPath: string | null;
+  expectedPath: string;
 }
 
 export function evaluatePm2Processes(
@@ -61,6 +75,42 @@ export function evaluatePm2Processes(
   }
 
   return { ok: missing.length === 0 && unhealthy.length === 0, missing, unhealthy };
+}
+
+function normalizePm2ExecPath(raw: unknown, projectDir: string): string | null {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  return resolve(projectDir, raw);
+}
+
+export function evaluateDurableWorkerTargets(
+  raw: unknown,
+  projectDir = process.cwd(),
+): DurableWorkerTargetIssue[] {
+  const rows = Array.isArray(raw) ? raw as Pm2ProcessRow[] : [];
+  const byName = new Map<string, Pm2ProcessRow>();
+  for (const row of rows) {
+    if (typeof row?.name === "string" && row.name) byName.set(row.name, row);
+  }
+
+  const issues: DurableWorkerTargetIssue[] = [];
+  for (const worker of VIDORA_DURABLE_WORKERS) {
+    const row = byName.get(worker);
+    if (!row) continue;
+
+    const expectedPath = resolve(projectDir, EXPECTED_DURABLE_WORKER_TARGETS[worker]);
+    const currentPath = normalizePm2ExecPath(row.pm2_env?.pm_exec_path, projectDir);
+    if (currentPath === expectedPath) continue;
+
+    issues.push({
+      name: worker,
+      currentPath,
+      expectedPath,
+      status: currentPath
+        ? `script-target-mismatch:${currentPath}`
+        : "script-target-missing",
+    });
+  }
+  return issues;
 }
 
 export function evaluateWorkerHeartbeat(
@@ -100,6 +150,29 @@ async function readPm2List(): Promise<unknown> {
     return JSON.parse(stdout);
   } catch {
     throw new Error("pm2 jlist returned invalid JSON");
+  }
+}
+
+async function recreateStaleWorkerTargets(
+  issues: readonly DurableWorkerTargetIssue[],
+): Promise<void> {
+  for (const issue of issues) {
+    console.warn(
+      `[pm2-health] ${issue.name} is registered with ${issue.currentPath ?? "no script target"}; recreating it with ${issue.expectedPath}`,
+    );
+    await execFileAsync("pm2", ["delete", issue.name], {
+      timeout: 15_000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    await execFileAsync(
+      "pm2",
+      ["start", "ecosystem.config.js", "--only", issue.name, "--update-env"],
+      {
+        cwd: process.cwd(),
+        timeout: 20_000,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
   }
 }
 
@@ -180,20 +253,45 @@ async function main(): Promise<void> {
   const attempts = Math.max(1, Math.min(30, Number(process.env.PM2_HEALTH_ATTEMPTS || 10)) || 10);
   const delayMs = Math.max(250, Math.min(10_000, Number(process.env.PM2_HEALTH_DELAY_MS || 2_000)) || 2_000);
   let last: Pm2HealthEvaluation | null = null;
+  const reconciledTargets = new Set<VidoraDurableWorkerName>();
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const raw = await readPm2List();
       last = evaluatePm2Processes(raw);
       if (last.ok) {
-        const heartbeatIssues = await evaluateCurrentWorkerHeartbeats(raw);
-        if (heartbeatIssues.length === 0) {
-          console.log(
-            `PM2 health: OK (${EXPECTED_VIDORA_PM2_APPS.join(", ")}; durable worker DB heartbeats verified)`,
-          );
-          return;
+        const targetIssues = evaluateDurableWorkerTargets(raw);
+        if (targetIssues.length > 0) {
+          const unreconciled = targetIssues.filter((issue) => !reconciledTargets.has(issue.name));
+          if (unreconciled.length > 0) {
+            try {
+              await recreateStaleWorkerTargets(unreconciled);
+              for (const issue of unreconciled) reconciledTargets.add(issue.name);
+              console.warn(
+                `[pm2-health] recreated stale durable worker definition(s): ${unreconciled.map((issue) => issue.name).join(", ")}`,
+              );
+            } catch (error) {
+              console.warn(
+                "[pm2-health] failed to recreate stale durable worker definition:",
+                error instanceof Error ? error.message : "unknown error",
+              );
+            }
+          }
+          last = {
+            ...last,
+            ok: false,
+            unhealthy: targetIssues.map((issue) => ({ name: issue.name, status: issue.status })),
+          };
+        } else {
+          const heartbeatIssues = await evaluateCurrentWorkerHeartbeats(raw);
+          if (heartbeatIssues.length === 0) {
+            console.log(
+              `PM2 health: OK (${EXPECTED_VIDORA_PM2_APPS.join(", ")}; durable worker script targets and DB heartbeats verified)`,
+            );
+            return;
+          }
+          last = { ...last, ok: false, unhealthy: heartbeatIssues };
         }
-        last = { ...last, ok: false, unhealthy: heartbeatIssues };
       }
 
       const issues = [

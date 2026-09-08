@@ -1,13 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
+  EXPECTED_DURABLE_WORKER_TARGETS,
   EXPECTED_VIDORA_PM2_APPS,
+  evaluateDurableWorkerTargets,
   evaluatePm2Processes,
   evaluateWorkerHeartbeat,
 } from "../../scripts/check-pm2-health";
 import type { WorkerHeartbeatRecord } from "../../scripts/worker-heartbeat";
 
-function row(name: string, status: string, pid = 1000) {
-  return { name, pid, pm2_env: { status, restart_time: 0, unstable_restarts: 0 } };
+function row(name: string, status: string, pid = 1000, pmExecPath?: string) {
+  return {
+    name,
+    pid,
+    pm2_env: {
+      status,
+      restart_time: 0,
+      unstable_restarts: 0,
+      ...(pmExecPath ? { pm_exec_path: pmExecPath } : {}),
+    },
+  };
 }
 
 function heartbeat(
@@ -60,6 +71,72 @@ describe("Vidora PM2 deployment health", () => {
     const result = evaluatePm2Processes({ unexpected: true });
     expect(result.ok).toBe(false);
     expect(result.missing).toEqual([...EXPECTED_VIDORA_PM2_APPS]);
+  });
+
+  test("accepts the supervised worker entry scripts registered in PM2", () => {
+    const projectDir = "/home/lightworld/webapps/vidora";
+    const result = evaluateDurableWorkerTargets([
+      row(
+        "vidora-generation-worker",
+        "online",
+        1002,
+        `${projectDir}/${EXPECTED_DURABLE_WORKER_TARGETS["vidora-generation-worker"]}`,
+      ),
+      row(
+        "vidora-export-worker",
+        "online",
+        1003,
+        `${projectDir}/${EXPECTED_DURABLE_WORKER_TARGETS["vidora-export-worker"]}`,
+      ),
+    ], projectDir);
+
+    expect(result).toEqual([]);
+  });
+
+  test("detects historical direct worker scripts that bypass the supervisor", () => {
+    const projectDir = "/home/lightworld/webapps/vidora";
+    const result = evaluateDurableWorkerTargets([
+      row(
+        "vidora-generation-worker",
+        "online",
+        1002,
+        `${projectDir}/scripts/generation-worker.ts`,
+      ),
+      row(
+        "vidora-export-worker",
+        "online",
+        1003,
+        `${projectDir}/scripts/export-worker-entry.ts`,
+      ),
+    ], projectDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      name: "vidora-generation-worker",
+      currentPath: `${projectDir}/scripts/generation-worker.ts`,
+      expectedPath: `${projectDir}/scripts/generation-worker-entry.ts`,
+      status: `script-target-mismatch:${projectDir}/scripts/generation-worker.ts`,
+    });
+  });
+
+  test("treats a missing PM2 executable path as a stale worker definition", () => {
+    const projectDir = "/home/lightworld/webapps/vidora";
+    const result = evaluateDurableWorkerTargets([
+      row("vidora-generation-worker", "online", 1002),
+      row(
+        "vidora-export-worker",
+        "online",
+        1003,
+        `${projectDir}/scripts/export-worker-entry.ts`,
+      ),
+    ], projectDir);
+
+    expect(result).toEqual([{
+      name: "vidora-generation-worker",
+      currentPath: null,
+      expectedPath: `${projectDir}/scripts/generation-worker-entry.ts`,
+      status: "script-target-missing",
+    }]);
   });
 
   test("accepts a fresh database heartbeat from the current PM2 worker PID", () => {
