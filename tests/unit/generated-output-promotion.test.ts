@@ -1,41 +1,37 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "fs/promises";
 import { existsSync, readFileSync } from "fs";
-import os from "os";
 import path from "path";
-
-const originalGeneratedDir = process.env.GENERATED_DIR;
-const tempRoots: string[] = [];
-
-afterEach(async () => {
-  if (originalGeneratedDir === undefined) delete process.env.GENERATED_DIR;
-  else process.env.GENERATED_DIR = originalGeneratedDir;
-  vi.resetModules();
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+import {
+  generatedStoreDir,
+  promoteGeneratedFile,
+} from "../../src/lib/generated-store";
 
 describe("generated output promotion", () => {
-  it("moves a completed render into the generated store without a Buffer copy", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "vidora-promote-"));
-    tempRoots.push(root);
-    const store = path.join(root, "store");
-    const work = path.join(store, "work");
-    await mkdir(work, { recursive: true });
+  test("moves a completed render into the generated store without a Buffer copy", async () => {
+    const store = generatedStoreDir();
+    await mkdir(store, { recursive: true });
+    const work = await mkdtemp(path.join(store, "promotion-test-"));
     const source = path.join(work, "render.mp4");
-    await writeFile(source, Buffer.from("completed-render"));
+    const relPath = `promotion-test-${process.pid}-${Date.now()}.mp4`;
+    let promotedPath = path.join(store, relPath);
 
-    process.env.GENERATED_DIR = store;
-    vi.resetModules();
-    const { promoteGeneratedFile } = await import("../../src/lib/generated-store");
-    const promoted = await promoteGeneratedFile(source, "final_project_123.mp4");
+    try {
+      await writeFile(source, Buffer.from("completed-render"));
+      const promoted = await promoteGeneratedFile(source, relPath);
+      promotedPath = promoted.path;
 
-    expect(promoted.url).toBe("/generated/final_project_123.mp4");
-    expect(promoted.path).toBe(path.join(store, "final_project_123.mp4"));
-    expect(existsSync(source)).toBe(false);
-    expect((await readFile(promoted.path)).toString()).toBe("completed-render");
+      expect(promoted.url).toBe(`/generated/${relPath}`);
+      expect(promoted.path).toBe(path.join(store, relPath));
+      expect(existsSync(source)).toBe(false);
+      expect((await readFile(promoted.path)).toString()).toBe("completed-render");
+    } finally {
+      await rm(work, { recursive: true, force: true });
+      await rm(promotedPath, { force: true });
+    }
   });
 
-  it("wires every completed-video path through promoteGeneratedFile", () => {
+  test("wires every completed-video path through promoteGeneratedFile", () => {
     const preview = readFileSync("src/lib/full-preview-render.ts", "utf8");
     const exporter = readFileSync("src/app/api/export-video/route-core.ts", "utf8");
     const legacy = readFileSync("src/app/api/concatenate-video/route.ts", "utf8");
