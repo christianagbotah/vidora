@@ -144,6 +144,11 @@ CREATE INDEX IF NOT EXISTS "ProviderUsageLedger_generationRunId_idx" ON "Provide
 -- Official provider COGS snapshots verified 2026-09-09.
 -- Z.ai pricing source: https://docs.z.ai/guides/overview/pricing
 INSERT INTO "ProviderPrice" ("id","provider","model","operation","billingUnit","unitPriceUsd","unitsPerPrice","sourceUrl","pricingVersion","verifiedAt") VALUES
+('zai-glm47-text-input-20260909','zai','glm-4.7','text_input','token',0.60,1000000,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
+('zai-glm47-text-output-20260909','zai','glm-4.7','text_output','token',2.20,1000000,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
+('zai-glm46v-vision-input-20260909','zai','glm-4.6v','vision_input','token',0.30,1000000,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
+('zai-glm46v-vision-output-20260909','zai','glm-4.6v','vision_output','token',0.90,1000000,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
+('zai-glm-asr-2512-20260909','zai','glm-asr-2512','asr','minute',0.0024,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-cogvideox3-video-20260909','zai','CogVideoX-3','video_generation','request',0.20,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-vidu2-image-video-20260909','zai','vidu2-image','video_generation','request',0.20,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-vidu2-reference-video-20260909','zai','vidu2-reference','video_generation','request',0.40,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
