@@ -3,7 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { zai, cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
+import {
+  captureMeteredZaiTextOperation,
+  reserveMeteredZaiTextOperation,
+} from "@/lib/zai-metered-billing";
 
 export const runtime = "nodejs";
 
@@ -52,21 +55,6 @@ export async function POST(req: NextRequest) {
     const cameraMove = typeof body.cameraMove === "string" ? body.cameraMove.slice(0, 100) : "";
     const lighting = typeof body.lighting === "string" ? body.lighting.slice(0, 100) : "";
 
-    const operationId = crypto.randomUUID();
-    const deduction = await deductTokensForOperation({
-      userId: authResult.session.userId,
-      operation: "llm",
-      description: `AI Director enhancement for scene ${sceneIndex + 1}`,
-      referenceId: operationId,
-      idempotencyKey: `enhance-scene:${operationId}`,
-    });
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
-    }
-
     const systemPrompt = [
       "You are an elite AI Film Director and Cinematographer.",
       "Enhance a scene description for AI video generation.",
@@ -86,10 +74,31 @@ export async function POST(req: NextRequest) {
       prompt,
     ].filter(Boolean).join("\n");
 
+    const operationId = crypto.randomUUID();
+    const lineKeyPrefix = `enhance-scene:${operationId}`;
+    const billing = await reserveMeteredZaiTextOperation({
+      userId: authResult.session.userId,
+      referenceId: operationId,
+      idempotencyKey: `${lineKeyPrefix}:reservation`,
+      lineKeyPrefix,
+      label: `AI Director enhancement for scene ${sceneIndex + 1}`,
+      systemPrompt,
+      userPrompt,
+      maxOutputTokens: 800,
+      requireConfiguredPrimary: false,
+    });
+    const captures = await captureMeteredZaiTextOperation({
+      reservationId: billing.reservation.id,
+      lineKeyPrefix,
+      userId: authResult.session.userId,
+    });
+
     const raw = await zai.chat({
       systemPrompt,
       userPrompt,
+      model: billing.model,
       thinking: "disabled",
+      extra: { max_tokens: 800 },
       retry: { label: "AI Director prompt enhancement", timeoutMs: 45_000, maxRetries: 3 },
     });
     const enhancedPrompt = cleanLLMOutput(raw) || prompt;
@@ -108,14 +117,19 @@ export async function POST(req: NextRequest) {
       if (lower.includes(value)) { aiLighting = value; break; }
     }
 
+    const tokensCharged = captures.reduce(
+      (sum, capture) => sum + (capture.alreadyCaptured ? 0 : capture.creditsCaptured),
+      0,
+    );
     return NextResponse.json({
       success: true,
       enhancedPrompt,
       mood: aiMood,
       cameraMove: aiCamera,
       lighting: aiLighting,
-      tokensCharged: deduction.alreadyApplied ? 0 : 1,
-      remainingTokens: deduction.remainingTokens,
+      providerModel: billing.model,
+      tokensCharged,
+      remainingTokens: billing.wallet.availableCredits,
     });
   } catch (error) {
     return zaiErrorResponse(error, {
