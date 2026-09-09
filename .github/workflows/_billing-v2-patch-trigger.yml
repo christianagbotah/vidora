@@ -1,0 +1,41 @@
+name: Billing v2 patch trigger
+
+on:
+  workflow_run:
+    workflows: ["Vidora CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-billing-branch:
+    if: github.event.workflow_run.head_branch == 'billing/provider-cost-backed-v2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: billing/provider-cost-backed-v2
+          fetch-depth: 0
+      - name: Apply reviewed core wiring
+        run: |
+          set -euo pipefail
+          if [[ -f .github/workflows/_temp-billing-v2-core-patch.yml ]]; then
+            awk '
+              /python3 - <<.PY./ { capture=1; next }
+              capture && /^          PY$/ { exit }
+              capture { sub(/^          /, ""); print }
+            ' .github/workflows/_temp-billing-v2-core-patch.yml > /tmp/apply-billing-v2.py
+            test -s /tmp/apply-billing-v2.py
+            python3 /tmp/apply-billing-v2.py
+          fi
+          rm -f .github/workflows/_temp-billing-v2-core-patch.yml .github/workflows/_temp-billing-v2-pr-trigger.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Wire cost-backed reservations through provider execution"
+            git push origin HEAD:billing/provider-cost-backed-v2
+          fi
+          git rev-parse HEAD
