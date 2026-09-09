@@ -8,6 +8,11 @@ import { resolveModelForRequest } from "@/lib/video-models";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
 import { autoNarrateScene } from "@/lib/narration";
 import {
+  captureReservedQuoteLine,
+  releaseReservationRemainder,
+} from "@/lib/credit-reservations";
+import { getGenerationRunBillingLink } from "@/lib/generation-run-billing";
+import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
   type CharacterLike,
@@ -33,6 +38,12 @@ const IDLE_MS = Math.max(1_000, Number(process.env.GENERATION_WORKER_IDLE_MS || 
 const SUBMISSION_SPACING_MS = Math.max(0, Number(process.env.GENERATION_SUBMISSION_SPACING_MS || 15_000));
 const PROCESSING_STALE_MINUTES = 5;
 let stopping = false;
+
+interface RunBillingContext {
+  userId: string;
+  projectId: string;
+  reservationId: string;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -125,12 +136,11 @@ async function submitSceneTask(opts: {
     aspectRatio: string;
     videoModel: string | null;
   };
+  billing: RunBillingContext;
 }): Promise<string> {
-  const { runId, scene, videoSize, origin, ctx } = opts;
+  const { runId, scene, videoSize, origin, ctx, billing } = opts;
 
-  // Persist intent BEFORE crossing the provider boundary. If a worker dies
-  // after this point but before taskId persistence, the next worker sees
-  // "submitting" and fails closed into reconciliation rather than resubmitting.
+  // Persist ambiguous-submission intent before doing anything irreversible.
   await db.videoScene.update({
     where: { id: scene.id },
     data: { status: "submitting", errorMessage: null },
@@ -174,7 +184,7 @@ async function submitSceneTask(opts: {
     const normalized = await ensureReferenceAspect(
       referenceImage,
       ctx.aspectRatio,
-      `Scene ${scene.sceneNumber}`
+      `Scene ${scene.sceneNumber}`,
     );
     referenceImage = toProviderFetchUrl(normalized, origin) ?? undefined;
   }
@@ -185,6 +195,20 @@ async function submitSceneTask(opts: {
     linkedCharacterIds: scene.characterIds,
   });
   const model = resolveModelForRequest(ctx.videoModel, Boolean(referenceImage));
+
+  // Capture the already-reserved commercial line BEFORE the paid submission.
+  // If the process dies after this point but before taskId persistence, the
+  // scene remains `submitting` and a later worker fails closed instead of
+  // spending against the provider a second time.
+  await captureReservedQuoteLine({
+    reservationId: billing.reservationId,
+    lineKey: `video:${scene.id}`,
+    userId: billing.userId,
+    projectId: billing.projectId,
+    sceneId: scene.id,
+    generationRunId: runId,
+  });
+
   const taskId = await zai.generateVideo({
     prompt,
     size: videoSize,
@@ -222,8 +246,9 @@ async function ensureThumbnail(opts: {
   };
   thumbSize: string;
   ctx: { style: string; characters: CharacterLike[] };
+  billing: RunBillingContext;
 }): Promise<boolean> {
-  const { runId, scene, thumbSize, ctx } = opts;
+  const { runId, scene, thumbSize, ctx, billing } = opts;
   if (scene.imageUrl) return true;
   try {
     const prompt = buildSceneImagePrompt({
@@ -232,6 +257,18 @@ async function ensureThumbnail(opts: {
       characters: ctx.characters,
       linkedCharacterIds: scene.characterIds,
     });
+
+    // Same fail-closed rule as video submission: the provider call is only
+    // crossed after its quote line has been funded and captured.
+    await captureReservedQuoteLine({
+      reservationId: billing.reservationId,
+      lineKey: `thumbnail:${scene.id}`,
+      userId: billing.userId,
+      projectId: billing.projectId,
+      sceneId: scene.id,
+      generationRunId: runId,
+    });
+
     const base64 = await zai.generateImage({
       prompt,
       size: thumbSize as "1024x1024" | "768x1344" | "864x1152" | "1344x768" | "1152x864" | "1440x720" | "720x1440",
@@ -243,7 +280,7 @@ async function ensureThumbnail(opts: {
     });
     const imageUrl = await saveGeneratedFile(
       `thumb_${Date.now()}_${scene.sceneNumber}.png`,
-      Buffer.from(base64, "base64")
+      Buffer.from(base64, "base64"),
     );
     await db.videoScene.update({ where: { id: scene.id }, data: { imageUrl } });
     await heartbeat(runId);
@@ -251,7 +288,7 @@ async function ensureThumbnail(opts: {
   } catch (error) {
     console.error(
       `[generation-worker] thumbnail scene=${scene.id} failed`,
-      error instanceof Error ? error.message : "unknown error"
+      error instanceof Error ? error.message : "unknown error",
     );
     return false;
   }
@@ -261,11 +298,10 @@ async function pollSubmittedTask(opts: {
   runId: string;
   sceneId: string;
   taskId: string;
+  billing: RunBillingContext;
 }): Promise<"completed" | "waiting" | "failed"> {
   const result = await zai.pollVideoTask({
     taskId: opts.taskId,
-    // Short polling slices make the worker restartable/responsive. A timeout
-    // here is not a provider failure; the durable row remains claimable.
     maxAttempts: 4,
     intervalMs: 15_000,
   });
@@ -295,8 +331,17 @@ async function pollSubmittedTask(opts: {
       data: { videoUrl: localVideoUrl, status: "completed", errorMessage: null },
     });
     await heartbeat(opts.runId);
-    // Narration has its own shared metered/idempotent provider boundary.
-    void autoNarrateScene(opts.sceneId);
+
+    // Narration is part of the same prepaid quote. Run it synchronously so the
+    // GenerationRun cannot release its remaining reservation before speech is
+    // either captured or explicitly held for reconciliation.
+    const narration = await autoNarrateScene(opts.sceneId, {
+      reservationId: opts.billing.reservationId,
+      generationRunId: opts.runId,
+    });
+    if (!narration.ok && narration.reason !== "no dialogue") {
+      console.warn(`[generation-worker] prepaid narration pending scene=${opts.sceneId}: ${narration.reason || "unknown"}`);
+    }
     return "completed";
   }
   if (result.status === "timeout") {
@@ -315,9 +360,70 @@ async function pollSubmittedTask(opts: {
   return "failed";
 }
 
+async function finishRunIfComplete(opts: {
+  runId: string;
+  projectId: string;
+  userId: string;
+  scopedSceneIds: string[];
+  reservationId: string;
+}): Promise<boolean> {
+  const scoped = await db.videoScene.findMany({
+    where: { projectId: opts.projectId, id: { in: opts.scopedSceneIds } },
+    select: { id: true, videoUrl: true, dialogue: true, narrationUrl: true },
+  });
+  if (scoped.some((scene) => !scene.videoUrl)) return false;
+
+  for (const scene of scoped) {
+    if (!scene.dialogue?.trim() || scene.narrationUrl) continue;
+    const result = await autoNarrateScene(scene.id, {
+      reservationId: opts.reservationId,
+      generationRunId: opts.runId,
+    });
+    if (!result.ok) {
+      await markReconciliation(
+        opts.runId,
+        opts.projectId,
+        `Video generation completed but prepaid narration for scene ${scene.id} requires reconciliation: ${result.reason || "TTS unavailable"}`,
+      );
+      return true;
+    }
+  }
+
+  await releaseReservationRemainder({
+    reservationId: opts.reservationId,
+    userId: opts.userId,
+    reason: `Generation run ${opts.runId} completed; releasing provider work that was not consumed`,
+  });
+
+  const incompleteProjectScenes = await db.videoScene.count({
+    where: { projectId: opts.projectId, videoUrl: null },
+  });
+  await Promise.all([
+    db.videoProject.update({
+      where: { id: opts.projectId },
+      data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" },
+    }),
+    db.generationRun.update({
+      where: { id: opts.runId },
+      data: { status: "completed", activeKey: null, error: null },
+    }),
+  ]);
+  return true;
+}
+
 async function processRun(runId: string): Promise<void> {
   const run = await db.generationRun.findUnique({ where: { id: runId } });
   if (!run || !run.activeKey) return;
+
+  const billingLink = await getGenerationRunBillingLink(run.id);
+  if (!billingLink.creditReservationId) {
+    await markReconciliation(
+      run.id,
+      run.projectId,
+      "Generation run has no prepaid credit reservation; paid provider execution is blocked",
+    );
+    return;
+  }
 
   const project = await db.videoProject.findUnique({
     where: { id: run.projectId },
@@ -330,6 +436,11 @@ async function processRun(runId: string): Promise<void> {
     await markReconciliation(run.id, run.projectId, "Generation run ownership/project state is inconsistent");
     return;
   }
+  const billing: RunBillingContext = {
+    userId: run.userId,
+    projectId: project.id,
+    reservationId: billingLink.creditReservationId,
+  };
 
   let persistedSceneIds: string[] = [];
   try {
@@ -354,7 +465,7 @@ async function processRun(runId: string): Promise<void> {
           scene.status === "queued" ||
           scene.status === "submitting" ||
           scene.status === "generating" ||
-          Boolean(scene.taskId)
+          Boolean(scene.taskId),
       );
 
   if (requestedIds.length > 0 && runScenes.length !== requestedSet.size) {
@@ -362,30 +473,22 @@ async function processRun(runId: string): Promise<void> {
     return;
   }
 
-  const scenes = runScenes.filter((scene) => !scene.videoUrl);
-  if (scenes.length === 0) {
-    const incompleteProjectScenes = await db.videoScene.count({
-      where: { projectId: project.id, videoUrl: null },
-    });
-    await Promise.all([
-      db.videoProject.update({
-        where: { id: project.id },
-        data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" },
-      }),
-      db.generationRun.update({
-        where: { id: run.id },
-        data: { status: "completed", activeKey: null, error: null },
-      }),
-    ]);
-    return;
-  }
+  const scopedSceneIds = runScenes.map((scene) => scene.id);
+  if (await finishRunIfComplete({
+    runId: run.id,
+    projectId: project.id,
+    userId: run.userId,
+    scopedSceneIds,
+    reservationId: billing.reservationId,
+  })) return;
 
+  const scenes = runScenes.filter((scene) => !scene.videoUrl);
   const ambiguous = scenes.find((scene) => scene.status === "submitting" && !scene.taskId);
   if (ambiguous) {
     await markReconciliation(
       run.id,
       project.id,
-      `Scene ${ambiguous.sceneNumber} was interrupted during provider submission; do not resubmit automatically`
+      `Scene ${ambiguous.sceneNumber} was interrupted during a funded provider submission; automatic resubmission is blocked`,
     );
     return;
   }
@@ -406,7 +509,7 @@ async function processRun(runId: string): Promise<void> {
   for (let index = 0; index < queued.length; index += 1) {
     const scene = queued[index];
     try {
-      await submitSceneTask({ runId: run.id, scene, videoSize, origin, ctx });
+      await submitSceneTask({ runId: run.id, scene, videoSize, origin, ctx, billing });
       newlySubmittedSceneIds.add(scene.id);
     } catch (error) {
       const info = getErrorInfo(error);
@@ -417,7 +520,7 @@ async function processRun(runId: string): Promise<void> {
       await markReconciliation(
         run.id,
         project.id,
-        `Scene ${scene.sceneNumber} provider submission failed or is ambiguous${info.rateLimited ? " (rate limited)" : ""}`
+        `Scene ${scene.sceneNumber} funded provider submission failed or is ambiguous${info.rateLimited ? " (rate limited)" : ""}`,
       );
       return;
     }
@@ -426,58 +529,49 @@ async function processRun(runId: string): Promise<void> {
     }
   }
 
-  const scopedSceneIds = runScenes.map((scene) => scene.id);
   const afterSubmission = await db.videoScene.findMany({
     where: { projectId: project.id, id: { in: scopedSceneIds } },
     orderBy: { sceneNumber: "asc" },
   });
-  // Thumbnail generation is auxiliary. Attempt it once for scenes submitted
-  // in THIS claim, but never stop provider-video polling if it fails. Repeating
-  // thumbnail attempts on every polling claim can also burn provider balance.
   for (const scene of afterSubmission.filter(
-    (item) => newlySubmittedSceneIds.has(item.id) && !item.videoUrl && item.taskId && !item.imageUrl
+    (item) => newlySubmittedSceneIds.has(item.id) && !item.videoUrl && item.taskId && !item.imageUrl,
   )) {
-    await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx });
+    await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx, billing });
   }
 
   let providerFailure = false;
   let providerWaiting = false;
   for (const scene of afterSubmission.filter((item) => !item.videoUrl && item.taskId)) {
-    const state = await pollSubmittedTask({ runId: run.id, sceneId: scene.id, taskId: scene.taskId! });
+    const state = await pollSubmittedTask({
+      runId: run.id,
+      sceneId: scene.id,
+      taskId: scene.taskId!,
+      billing,
+    });
     if (state === "failed") providerFailure = true;
     if (state === "waiting") providerWaiting = true;
   }
 
-  const finalScenes = await db.videoScene.findMany({
-    where: { projectId: project.id, id: { in: scopedSceneIds } },
-  });
-  const allVideosDone = finalScenes.every((scene) => Boolean(scene.videoUrl));
-  if (allVideosDone) {
-    const incompleteProjectScenes = await db.videoScene.count({
-      where: { projectId: project.id, videoUrl: null },
-    });
-    await Promise.all([
-      db.videoProject.update({
-        where: { id: project.id },
-        data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" },
-      }),
-      db.generationRun.update({
-        where: { id: run.id },
-        data: { status: "completed", activeKey: null, error: null },
-      }),
-    ]);
-    return;
-  }
+  if (await finishRunIfComplete({
+    runId: run.id,
+    projectId: project.id,
+    userId: run.userId,
+    scopedSceneIds,
+    reservationId: billing.reservationId,
+  })) return;
 
   if (providerFailure) {
     await markReconciliation(
       run.id,
       project.id,
-      "A submitted provider video task failed and requires reconciliation"
+      "A funded provider video task failed and requires reconciliation",
     );
     return;
   }
 
+  const finalScenes = await db.videoScene.findMany({
+    where: { projectId: project.id, id: { in: scopedSceneIds } },
+  });
   if (providerWaiting || finalScenes.some((scene) => !scene.videoUrl && scene.taskId)) {
     await db.generationRun.update({
       where: { id: run.id },
@@ -503,7 +597,7 @@ async function runForever(): Promise<void> {
     } catch (error) {
       console.error(
         `[generation-worker] ${runId ? `run=${runId} ` : ""}error`,
-        error instanceof Error ? error.message : "unknown error"
+        error instanceof Error ? error.message : "unknown error",
       );
       if (runId) {
         const run = await db.generationRun.findUnique({ where: { id: runId } }).catch(() => null);
@@ -511,7 +605,7 @@ async function runForever(): Promise<void> {
           await markReconciliation(
             run.id,
             run.projectId,
-            "Generation worker crashed while processing this durable run"
+            "Generation worker crashed while processing this durable run",
           ).catch(() => undefined);
         }
       }
