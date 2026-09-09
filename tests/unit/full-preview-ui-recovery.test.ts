@@ -20,8 +20,9 @@ describe("Full Preview UI recovery", () => {
 
   test("the review surface reports media failures and offers retry plus rebuild", () => {
     const dialog = source("src/components/FullPreviewDialog.tsx");
-    expect(dialog).toContain("onError={() => setMediaFailed(true)}");
-    expect(dialog).toContain("onLoadedData={() => setMediaFailed(false)}");
+    expect(dialog).toContain("onError={() => setFailedUrl(previewUrl)}");
+    expect(dialog).toContain("onLoadedData={() => setFailedUrl(null)}");
+    expect(dialog).toContain("failedUrl === previewUrl");
     expect(dialog).toContain("Retry Loading");
     expect(dialog).toContain("Rebuild Preview");
     expect(dialog).toContain("Your project scenes are unchanged");
