@@ -1,4 +1,6 @@
+import { db } from "@/lib/db";
 import {
+  BillingSafetyError,
   getCommercialPricingPolicy,
   quoteProviderCharge,
   type BillableOperation,
@@ -22,6 +24,48 @@ export interface ImmediateProviderLineInput {
   sceneId?: string | null;
 }
 
+interface ExistingReservationRow {
+  id: string;
+  userId: string;
+  quoteId: string;
+  referenceId: string | null;
+  operation: string;
+  status: string;
+}
+
+async function assertImmediateIdempotencyUnused(opts: {
+  userId: string;
+  referenceId: string;
+  operation: string;
+  idempotencyKey: string;
+}): Promise<void> {
+  const rows = await db.$queryRaw<ExistingReservationRow[]>`
+    SELECT "id", "userId", "quoteId", "referenceId", "operation", "status"
+    FROM "CreditReservation"
+    WHERE "idempotencyKey" = ${opts.idempotencyKey}
+    LIMIT 1
+  `;
+  const existing = rows[0];
+  if (!existing) return;
+  if (
+    existing.userId !== opts.userId ||
+    existing.referenceId !== opts.referenceId ||
+    existing.operation !== opts.operation
+  ) {
+    throw new BillingSafetyError(
+      "BILLING_IDEMPOTENCY_CONFLICT",
+      "This billing idempotency key belongs to a different provider operation.",
+    );
+  }
+  // Once a reservation exists we cannot prove, from an HTTP retry alone,
+  // whether the provider boundary was crossed before the previous request was
+  // interrupted. Never create a fresh quote/reservation or resubmit silently.
+  throw new BillingSafetyError(
+    "BILLING_REPLAY_REQUIRES_RECONCILIATION",
+    `This provider operation already has a ${existing.status} reservation and will not be submitted twice automatically.`,
+  );
+}
+
 export async function reserveImmediateProviderOperations(opts: {
   userId: string;
   projectId?: string | null;
@@ -31,6 +75,13 @@ export async function reserveImmediateProviderOperations(opts: {
   idempotencyKey: string;
 }) {
   if (opts.lines.length === 0) throw new Error("At least one provider billing line is required");
+  await assertImmediateIdempotencyUnused({
+    userId: opts.userId,
+    referenceId: opts.referenceId,
+    operation: opts.operation,
+    idempotencyKey: opts.idempotencyKey,
+  });
+
   const policy = await getCommercialPricingPolicy();
   const lines: BillingQuoteLine[] = [];
   for (const input of opts.lines) {
