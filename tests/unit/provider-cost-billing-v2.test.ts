@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { calculateCommercialCharge, type CommercialPricingPolicy } from "@/lib/provider-cost-billing";
 import { calculateCreditPackageEconomics } from "@/lib/package-billing-safety";
+import {
+  DEFAULT_ZAI_IMAGE_MODEL_ID,
+  resolveZaiImageBillingModel,
+  resolveZaiVideoBillingModel,
+} from "@/lib/zai-billing-models";
 
 const policy: CommercialPricingPolicy = {
   creditValueUsd: 0.01,
@@ -49,5 +54,40 @@ describe("credit package economic floor", () => {
     expect(economics.effectiveCredits).toBe(120);
     expect(economics.minimumPriceUsd).toBeCloseTo(1.20, 8);
     expect(economics.minimumPriceGhs).toBeCloseTo(15, 8);
+  });
+});
+
+describe("Z.ai billing model resolution", () => {
+  test("image billing uses the exact transport default and preserves configured overrides", () => {
+    const previous = process.env.ZAI_IMAGE_MODEL;
+    try {
+      delete process.env.ZAI_IMAGE_MODEL;
+      expect(resolveZaiImageBillingModel()).toBe(DEFAULT_ZAI_IMAGE_MODEL_ID);
+      process.env.ZAI_IMAGE_MODEL = "glm-image";
+      expect(resolveZaiImageBillingModel()).toBe("glm-image");
+      process.env.ZAI_IMAGE_MODEL = "unpriced-image-model";
+      expect(resolveZaiImageBillingModel()).toBe("unpriced-image-model");
+    } finally {
+      if (previous === undefined) delete process.env.ZAI_IMAGE_MODEL;
+      else process.env.ZAI_IMAGE_MODEL = previous;
+    }
+  });
+
+  test("video billing mirrors the transport override and fallback rules", () => {
+    const previous = process.env.ZAI_VIDEO_MODEL;
+    try {
+      delete process.env.ZAI_VIDEO_MODEL;
+      expect(resolveZaiVideoBillingModel("viduq1-text", false)).toBe("viduq1-text");
+      expect(resolveZaiVideoBillingModel("vidu2-image", false)).toBe("CogVideoX-3");
+
+      process.env.ZAI_VIDEO_MODEL = "vidu2-reference";
+      expect(resolveZaiVideoBillingModel("CogVideoX-3", false)).toBe("vidu2-reference");
+
+      process.env.ZAI_VIDEO_MODEL = "unknown-provider-model";
+      expect(resolveZaiVideoBillingModel("viduq1-text", false)).toBe("CogVideoX-3");
+    } finally {
+      if (previous === undefined) delete process.env.ZAI_VIDEO_MODEL;
+      else process.env.ZAI_VIDEO_MODEL = previous;
+    }
   });
 });
