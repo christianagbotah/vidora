@@ -27,9 +27,16 @@ export async function getAIProviderSettings(): Promise<AIProviderSettings> {
   const configured = (await getConfigValue("ai_tts_provider")).trim().toLowerCase();
   return {
     ...base,
+    // Billing v2 has a verified Qwen character-priced TTS catalog. On a clean
+    // install with no explicit admin setting, default to that priced provider
+    // instead of silently selecting legacy Z.ai TTS with unknown COGS. An
+    // explicit supported setting still wins and paid narration will fail closed
+    // later if that provider has no verified catalog.
     ttsProvider: configured === "qwen" || configured === "grok"
       ? configured
-      : base.ttsProvider,
+      : configured === "zai" || configured === "elevenlabs"
+        ? configured
+        : "qwen",
   };
 }
 
