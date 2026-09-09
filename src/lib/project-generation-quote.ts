@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { resolveModelForRequest } from "@/lib/video-models";
 import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel } from "@/lib/qwen-tts";
-import { narrationBillableTextChunks } from "@/lib/narration";
+import { narrationBillableTextChunks } from "@/lib/narration-billing";
 import { isSceneEligibleForNewGeneration } from "@/lib/generation-scope";
 import {
   BillingSafetyError,
