@@ -4,6 +4,7 @@ import { requireAuth } from "@/lib/project-auth";
 import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { saveGeneratedFile } from "@/lib/generated-store";
+import { resolveZaiImageBillingModel } from "@/lib/zai-billing-models";
 import {
   captureImmediateProviderOperation,
   reserveImmediateProviderOperation,
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
       userId: authResult.session.userId,
       referenceId: operationId,
       provider: "zai",
-      model: "glm-image",
+      model: resolveZaiImageBillingModel(),
       operation: "image_generation",
       quantity: 1,
       lineKey: `image:${operationId}`,
