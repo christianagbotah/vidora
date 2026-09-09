@@ -3,6 +3,7 @@ import { resolveModelForRequest } from "@/lib/video-models";
 import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel } from "@/lib/qwen-tts";
 import { narrationBillableTextChunks } from "@/lib/narration";
+import { isSceneEligibleForNewGeneration } from "@/lib/generation-scope";
 import {
   BillingSafetyError,
   getCommercialPricingPolicy,
@@ -26,6 +27,10 @@ interface QuoteProjectScene {
   videoUrl: string | null;
   dialogue: string | null;
   narrationUrl: string | null;
+  status: string;
+  taskId: string | null;
+  errorMessage: string | null;
+  updatedAt: Date;
 }
 
 function hasProviderReference(
@@ -46,7 +51,12 @@ function hasProviderReference(
   }
 }
 
-function line(label: string, lineKey: string, sceneId: string, charge: Awaited<ReturnType<typeof quoteProviderCharge>>): BillingQuoteLine {
+function line(
+  label: string,
+  lineKey: string,
+  sceneId: string,
+  charge: Awaited<ReturnType<typeof quoteProviderCharge>>,
+): BillingQuoteLine {
   return { ...charge, label, lineKey, sceneId };
 }
 
@@ -54,6 +64,7 @@ export async function buildProjectGenerationQuoteLines(opts: {
   projectId: string;
   userId: string;
   sceneId?: string | null;
+  sceneIds?: string[] | null;
   policy?: CommercialPricingPolicy;
 }): Promise<{ lines: BillingQuoteLine[]; policy: CommercialPricingPolicy; sceneCount: number }> {
   const project = await db.videoProject.findUnique({
@@ -71,12 +82,23 @@ export async function buildProjectGenerationQuoteLines(opts: {
     throw new Error("Scene not found in this project");
   }
 
+  const requestedIds = opts.sceneIds?.length ? new Set(opts.sceneIds) : null;
+  if (requestedIds) {
+    const projectIds = new Set(project.scenes.map((scene) => scene.id));
+    if ([...requestedIds].some((id) => !projectIds.has(id))) {
+      throw new Error("Generation quote contains a scene outside this project");
+    }
+  }
+
   const policy = opts.policy ?? await getCommercialPricingPolicy();
-  const pendingScenes = project.scenes.filter((scene) =>
-    !scene.videoUrl && (!opts.sceneId || scene.id === opts.sceneId),
-  );
+  const pendingScenes = project.scenes.filter((scene) => {
+    if (scene.videoUrl) return false;
+    if (opts.sceneId) return scene.id === opts.sceneId;
+    if (requestedIds) return requestedIds.has(scene.id);
+    return isSceneEligibleForNewGeneration(scene);
+  });
   if (pendingScenes.length === 0) {
-    throw new BillingSafetyError("NOTHING_TO_GENERATE", "The requested scene work is already complete.");
+    throw new BillingSafetyError("NOTHING_TO_GENERATE", "The requested scene work is already complete or is not eligible for a new provider submission.");
   }
 
   const lines: BillingQuoteLine[] = [];
