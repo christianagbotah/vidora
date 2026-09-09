@@ -3,10 +3,23 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";
-import { PRICING } from "@/lib/pricing";
-import { getEngineChargeInfo } from "@/lib/storefront";
-import { resolveModelForRequest } from "@/lib/video-models";
+import { refundTokens } from "@/lib/tokens";
+import { buildProjectGenerationQuoteLines } from "@/lib/project-generation-quote";
+import {
+  findReservationByReference,
+  getBillingQuote,
+  releaseReservationRemainder,
+  reserveBillingQuote,
+  type BillingQuoteLine,
+} from "@/lib/credit-reservations";
+import {
+  getGenerationRunBillingLink,
+  setGenerationRunBillingLink,
+} from "@/lib/generation-run-billing";
+import {
+  hasActiveLegacyGeneration,
+  isSceneEligibleForNewGeneration,
+} from "@/lib/generation-scope";
 import {
   canAutoReconcileReferenceDownloadFailure,
   canRecoverHeldProviderRun,
@@ -14,27 +27,21 @@ import {
 
 export const runtime = "nodejs";
 
-function hasProviderReference(
-  scene: { referenceImageUrl: string | null; characterIds: string | null },
-  characters: Array<{ id: string; imageUrl: string | null }>
-): boolean {
-  if (scene.referenceImageUrl && !scene.referenceImageUrl.startsWith("data:")) {
-    return true;
-  }
-  if (!scene.characterIds) return false;
-  try {
-    const parsed: unknown = JSON.parse(scene.characterIds);
-    if (!Array.isArray(parsed)) return false;
-    const ids = new Set(parsed.filter((id): id is string => typeof id === "string"));
-    return characters.some(
-      (character) =>
-        ids.has(character.id) &&
-        Boolean(character.imageUrl) &&
-        !character.imageUrl!.startsWith("data:")
-    );
-  } catch {
-    return false;
-  }
+function quoteLineSignature(lines: BillingQuoteLine[]): string {
+  return JSON.stringify(
+    [...lines]
+      .map((line) => ({
+        lineKey: line.lineKey,
+        provider: line.provider,
+        model: line.model,
+        operation: line.operation,
+        billingUnit: line.billingUnit,
+        quantity: line.quantity,
+        credits: line.credits,
+        pricingVersion: line.pricingVersion,
+      }))
+      .sort((a, b) => a.lineKey.localeCompare(b.lineKey)),
+  );
 }
 
 async function reconcileSafeReferenceDownloadFailure(opts: {
@@ -75,7 +82,18 @@ async function reconcileSafeReferenceDownloadFailure(opts: {
   }
 
   let refundTransactionId = run.refundTransactionId;
-  if (run.totalTokens > 0 && !refundTransactionId) {
+  const billing = await getGenerationRunBillingLink(run.id);
+  if (billing.creditReservationId && !refundTransactionId) {
+    const released = await releaseReservationRemainder({
+      reservationId: billing.creditReservationId,
+      userId,
+      reason: `Generation run ${run.id}: explicit reference image failure before provider task creation`,
+    });
+    if (released.creditsReleased > 0 || released.alreadyReleased) {
+      refundTransactionId = `reservation:${billing.creditReservationId}:released`;
+    }
+  } else if (run.totalTokens > 0 && !refundTransactionId) {
+    // Backward-compatible reconciliation for runs created before billing-v2.
     if (!run.chargeTransactionId) {
       return { reconciled: false, reason: "The previous generation charge could not be verified." };
     }
@@ -95,16 +113,11 @@ async function reconcileSafeReferenceDownloadFailure(opts: {
   }
 
   await db.$transaction(async (tx) => {
-    // Re-check the hold inside the transaction. Concurrent retry requests may
-    // both reach the idempotent refund above, but only the currently held run
-    // should mutate scene/project state.
     const held = await tx.generationRun.findUnique({
       where: { id: run.id },
       select: { activeKey: true, status: true },
     });
-    if (!held || held.activeKey !== run.activeKey || held.status !== "needs_reconciliation") {
-      return;
-    }
+    if (!held || held.activeKey !== run.activeKey || held.status !== "needs_reconciliation") return;
 
     await tx.generationRun.update({
       where: { id: run.id },
@@ -172,6 +185,11 @@ async function recoverHeldProviderRun(opts: {
     return { recovered: false, reason: "Generation ownership is inconsistent." };
   }
 
+  const billing = await getGenerationRunBillingLink(run.id);
+  if (!billing.creditReservationId && !run.chargeTransactionId) {
+    return { recovered: false, reason: "The previous generation has no verifiable prepaid funding." };
+  }
+
   const safety = canRecoverHeldProviderRun(run, project.scenes);
   if (!safety.safe) {
     return { recovered: false, reason: safety.reason || "Generation cannot be safely resumed automatically." };
@@ -187,9 +205,7 @@ async function recoverHeldProviderRun(opts: {
       held.activeKey !== run.activeKey ||
       held.status !== "needs_reconciliation" ||
       held.refundTransactionId
-    ) {
-      return false;
-    }
+    ) return false;
 
     if (safety.queueSceneIds.length > 0) {
       await tx.videoScene.updateMany({
@@ -207,8 +223,8 @@ async function recoverHeldProviderRun(opts: {
       data: {
         status: safety.preserveTaskSceneIds.length > 0 ? "waiting_provider" : "running",
         error: run.error
-          ? run.error + " [user retry: safely resumed with original Vidora token charge]"
-          : "User retry: safely resumed with original Vidora token charge",
+          ? `${run.error} [user retry: safely resumed with original prepaid funding]`
+          : "User retry: safely resumed with original prepaid funding",
       },
     });
     await tx.videoProject.update({
@@ -234,27 +250,73 @@ export async function POST(req: NextRequest) {
     if (!authResult.ok) return authResult.response;
     const userId = authResult.session.userId;
 
-    const { projectId, retry = false } = await req.json();
-    if (!projectId) return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+    const body = await req.json() as Record<string, unknown>;
+    const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
+    const retry = body.retry === true;
+    const quoteId = typeof body.quoteId === "string" ? body.quoteId.trim() : "";
+    if (!projectId) {
+      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
+    }
 
     let project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: { orderBy: { createdAt: "asc" } } },
+      include: {
+        scenes: { orderBy: { sceneNumber: "asc" } },
+        characters: { orderBy: { createdAt: "asc" } },
+      },
     });
     if (!project) return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
     if (!project.userId || project.userId !== userId) {
       return NextResponse.json({ success: false, error: "You don't have access to this project" }, { status: 403 });
     }
-    if (!project.scenes.length) return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
+    if (!project.scenes.length) {
+      return NextResponse.json({ success: false, error: "No scenes in project" }, { status: 400 });
+    }
 
     const activeKey = `project:${projectId}`;
     let previousChargeRefunded = false;
     const existingRun = await db.generationRun.findUnique({ where: { activeKey } });
     if (existingRun) {
+      const existingBilling = await getGenerationRunBillingLink(existingRun.id);
+
+      // Crash recovery: reservation succeeded but the process died before the
+      // durable run was flipped from queued -> running. Reattach and resume;
+      // never reserve/debit a second time.
+      if (existingRun.status === "queued") {
+        const reservation = existingBilling.creditReservationId
+          ? null
+          : await findReservationByReference(existingRun.id);
+        const reservationId = existingBilling.creditReservationId || reservation?.id || null;
+        if (reservationId) {
+          if (!existingBilling.creditReservationId) {
+            const quote = await getBillingQuote(reservation!.quoteId);
+            if (!quote) {
+              return NextResponse.json({ success: false, error: "Reserved generation quote is missing", reconciliationRequired: true }, { status: 409 });
+            }
+            await setGenerationRunBillingLink({
+              runId: existingRun.id,
+              billingQuoteId: quote.id,
+              creditReservationId: reservationId,
+            });
+          }
+          await db.generationRun.update({ where: { id: existingRun.id }, data: { status: "running" } });
+          return NextResponse.json({
+            success: true,
+            alreadyRunning: true,
+            resumedPrepaidRun: true,
+            generationRunId: existingRun.id,
+            message: "Recovered a prepaid generation run after an interrupted handoff.",
+          });
+        }
+        return NextResponse.json({
+          success: false,
+          error: "An interrupted generation run has no verifiable credit reservation. Provider execution remains blocked.",
+          reconciliationRequired: true,
+          generationRunId: existingRun.id,
+        }, { status: 409 });
+      }
+
       if (existingRun.status === "needs_reconciliation") {
-        // First handle the narrow pre-submission reference-image failure. No
-        // provider task exists in this case, so the old Vidora charge is
-        // refunded exactly once before a fresh run is created and charged.
         const referenceResult = await reconcileSafeReferenceDownloadFailure({
           run: existingRun,
           project,
@@ -273,9 +335,6 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
           }
         } else if (retry) {
-          // For persisted provider task IDs, retry/resume the SAME GenerationRun
-          // and reuse its original Vidora token charge. In-flight task IDs are
-          // only polled; definitively failed task IDs are the only ones reset.
           const recovery = await recoverHeldProviderRun({
             run: existingRun,
             project,
@@ -315,6 +374,14 @@ export async function POST(req: NextRequest) {
           }, { status: 409 });
         }
       } else {
+        if (!existingBilling.creditReservationId && !existingRun.chargeTransactionId) {
+          return NextResponse.json({
+            success: false,
+            error: "Generation run is not backed by a verifiable prepaid reservation.",
+            reconciliationRequired: true,
+            generationRunId: existingRun.id,
+          }, { status: 409 });
+        }
         return NextResponse.json({
           success: true,
           message: "Generation already in progress.",
@@ -324,59 +391,60 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const QUEUED_STALE_MS = 5 * 60_000;
-    const scenesToProcess = project.scenes.filter((s) => !s.videoUrl && (
-      s.status === "pending" ||
-      (s.status === "queued" && Date.now() - s.updatedAt.getTime() > QUEUED_STALE_MS) ||
-      (s.status === "generating" && !s.taskId) ||
-      (s.status === "failed" && s.errorMessage?.toLowerCase().includes("rate"))
-    ));
-    const legacyRunActive = project.scenes.some((s) =>
-      (s.status === "generating" && s.taskId) ||
-      (s.status === "queued" && !s.videoUrl && Date.now() - s.updatedAt.getTime() <= QUEUED_STALE_MS)
-    );
+    const scenesToProcess = project.scenes.filter((scene) => isSceneEligibleForNewGeneration(scene));
+    const legacyRunActive = project.scenes.some((scene) => hasActiveLegacyGeneration(scene));
 
     if (!scenesToProcess.length) {
-      if (legacyRunActive) return NextResponse.json({ success: true, message: "Generation already in progress.", sceneCount: 0, alreadyRunning: true });
-      await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
-      return NextResponse.json({ success: true, message: "All scenes already have videos.", sceneCount: project.scenes.length, alreadyDone: true });
-    }
-
-    const sceneCharges = await Promise.all(
-      scenesToProcess.map(async (scene) => {
-        const resolvedModel = resolveModelForRequest(
-          project.videoModel,
-          hasProviderReference(scene, project.characters)
-        );
-        const engineCharge = await getEngineChargeInfo(resolvedModel);
-        const needsThumbnail = !scene.imageUrl;
-        return {
-          sceneId: scene.id,
-          model: resolvedModel,
-          tokens: engineCharge.tokensPerClip + (needsThumbnail ? PRICING.image_gen.tokens : 0),
-          costUsd: engineCharge.costUsdPerClip + (needsThumbnail ? PRICING.image_gen.costUsd : 0),
-          needsThumbnail,
-        };
-      })
-    );
-    const totalTokensNeeded = sceneCharges.reduce((sum, charge) => sum + charge.tokens, 0);
-    const totalCostUsd = sceneCharges.reduce((sum, charge) => sum + charge.costUsd, 0);
-    const tokensPerScene = Math.ceil(totalTokensNeeded / scenesToProcess.length);
-    const costUsdPerScene = totalCostUsd / scenesToProcess.length;
-    const tokenCheck = await checkTokens(userId, totalTokensNeeded);
-    if (!tokenCheck.hasEnough) {
+      if (legacyRunActive) {
+        return NextResponse.json({ success: true, message: "Generation already in progress.", sceneCount: 0, alreadyRunning: true });
+      }
+      const incomplete = project.scenes.some((scene) => !scene.videoUrl);
+      if (!incomplete) {
+        await db.videoProject.update({ where: { id: projectId }, data: { status: "completed" } });
+        return NextResponse.json({ success: true, message: "All scenes already have videos.", sceneCount: project.scenes.length, alreadyDone: true });
+      }
       return NextResponse.json({
         success: false,
-        error: `Insufficient tokens. You need ${totalTokensNeeded} tokens but have ${tokenCheck.balance}.`,
-        tokensNeeded: totalTokensNeeded,
-        tokensAvailable: tokenCheck.balance,
-        costBreakdown: {
-          sceneCount: scenesToProcess.length,
-          thumbnailCount: sceneCharges.filter((charge) => charge.needsThumbnail).length,
-          totalTokens: totalTokensNeeded,
-        },
-      }, { status: 402 });
+        error: "No scene is currently eligible for a new provider submission. Resolve failed scenes before generating again.",
+        code: "NO_ELIGIBLE_SCENES",
+      }, { status: 409 });
     }
+
+    // A NEW paid run always requires explicit customer confirmation of a fresh
+    // quote. Retry/resume paths above reuse an already funded durable run.
+    if (!quoteId) {
+      return NextResponse.json({
+        success: false,
+        error: "Review and confirm the current generation cost before starting paid generation.",
+        code: "BILLING_QUOTE_REQUIRED",
+      }, { status: 409 });
+    }
+
+    const currentBilling = await buildProjectGenerationQuoteLines({
+      projectId,
+      userId,
+      sceneIds: scenesToProcess.map((scene) => scene.id),
+    });
+    const billingQuote = await getBillingQuote(quoteId);
+    if (
+      !billingQuote ||
+      billingQuote.userId !== userId ||
+      billingQuote.projectId !== projectId ||
+      billingQuote.status !== "open" ||
+      billingQuote.expiresAt.getTime() <= Date.now() ||
+      quoteLineSignature(billingQuote.breakdown) !== quoteLineSignature(currentBilling.lines)
+    ) {
+      return NextResponse.json({
+        success: false,
+        error: "The generation cost changed or the quote expired. Review the refreshed cost before generating.",
+        code: "BILLING_QUOTE_STALE",
+      }, { status: 409 });
+    }
+
+    const totalTokensNeeded = billingQuote.creditsRequired;
+    const totalCostUsd = billingQuote.providerCostUsd;
+    const tokensPerScene = Math.ceil(totalTokensNeeded / scenesToProcess.length);
+    const costUsdPerScene = totalCostUsd / scenesToProcess.length;
 
     let run;
     try {
@@ -395,41 +463,58 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const active = await db.generationRun.findUnique({ where: { activeKey } });
-        return NextResponse.json({ success: true, alreadyRunning: true, generationRunId: active?.id, message: "Generation already in progress." });
+        return NextResponse.json({
+          success: true,
+          alreadyRunning: true,
+          generationRunId: active?.id,
+          message: "Generation already in progress.",
+        });
       }
       throw error;
     }
 
-    const deduction = await deductTokensForOperation({
-      userId,
-      operation: "video_gen",
-      description: `Generate ${scenesToProcess.length} scenes for "${project.title}"`,
-      referenceId: projectId,
-      idempotencyKey: `generation:${run.id}:charge`,
-      customTokens: totalTokensNeeded,
-      customCostUsd: totalCostUsd,
-    });
-    if (!deduction.success) {
+    let reserved;
+    try {
+      reserved = await reserveBillingQuote({
+        quoteId: billingQuote.id,
+        userId,
+        referenceId: run.id,
+        idempotencyKey: `generation:${run.id}:reservation`,
+      });
+      await setGenerationRunBillingLink({
+        runId: run.id,
+        billingQuoteId: billingQuote.id,
+        creditReservationId: reserved.reservation.id,
+      });
+
+      // The worker only claims status=running/waiting_provider. Queue scene
+      // state first, then flip the run to running as the final durable handoff.
+      await db.$transaction(async (tx) => {
+        await tx.videoScene.updateMany({
+          where: { projectId, id: { in: scenesToProcess.map((scene) => scene.id) } },
+          data: { status: "queued", taskId: null, errorMessage: null },
+        });
+        await tx.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
+        await tx.generationRun.update({ where: { id: run.id }, data: { status: "running", error: null } });
+      });
+    } catch (error) {
+      if (reserved?.reservation.id) {
+        await releaseReservationRemainder({
+          reservationId: reserved.reservation.id,
+          userId,
+          reason: `Generation run ${run.id} failed before durable worker handoff`,
+        }).catch(() => undefined);
+      }
       await db.generationRun.update({
         where: { id: run.id },
-        data: { status: "failed", activeKey: null, error: deduction.error || "Token charge failed" },
+        data: { status: "failed", activeKey: null, error: error instanceof Error ? error.message : "Credit reservation failed" },
       }).catch(() => undefined);
-      return NextResponse.json({ success: false, error: deduction.error || "Failed to process tokens" }, { status: 402 });
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : "Could not reserve generation credits",
+        code: "CREDIT_RESERVATION_FAILED",
+      }, { status: 402 });
     }
-
-    await db.generationRun.update({
-      where: { id: run.id },
-      data: { status: "running", chargeTransactionId: deduction.transactionId || null },
-    });
-    await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });
-
-    for (const scene of scenesToProcess) {
-      await db.videoScene.update({ where: { id: scene.id }, data: { status: "queued", taskId: null, errorMessage: null } });
-    }
-
-    // Durable handoff: the PostgreSQL-backed generation worker claims this
-    // GenerationRun and performs all provider submission/polling outside the
-    // Next.js process. A web restart after this response cannot lose the job.
 
     return NextResponse.json({
       success: true,
@@ -437,8 +522,9 @@ export async function POST(req: NextRequest) {
       generationRunId: run.id,
       sceneCount: scenesToProcess.length,
       totalScenes: project.scenes.length,
-      tokensCharged: totalTokensNeeded,
-      remainingTokens: deduction.remainingTokens,
+      tokensCharged: 0,
+      creditsReserved: totalTokensNeeded,
+      remainingTokens: reserved.wallet.availableCredits,
       refundedAndRecharged: previousChargeRefunded || undefined,
     });
   } catch (error) {
