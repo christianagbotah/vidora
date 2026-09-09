@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS "ProviderPrice" (
   "effectiveUntil" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "ProviderPrice_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "ProviderPrice_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "ProviderPrice_unitPriceUsd_nonnegative" CHECK ("unitPriceUsd" >= 0),
+  CONSTRAINT "ProviderPrice_unitsPerPrice_positive" CHECK ("unitsPerPrice" > 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "ProviderPrice_provider_model_operation_key"
@@ -43,7 +45,11 @@ CREATE TABLE IF NOT EXISTS "CommercialPricingPolicy" (
   "quoteTtlMinutes" INTEGER NOT NULL DEFAULT 15,
   "billingEnabled" BOOLEAN NOT NULL DEFAULT TRUE,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "CommercialPricingPolicy_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "CommercialPricingPolicy_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "CommercialPricingPolicy_creditValue_positive" CHECK ("creditValueUsd" > 0),
+  CONSTRAINT "CommercialPricingPolicy_minimumCharge_positive" CHECK ("minimumChargeCredits" > 0),
+  CONSTRAINT "CommercialPricingPolicy_priceAge_positive" CHECK ("priceMaxAgeHours" > 0),
+  CONSTRAINT "CommercialPricingPolicy_quoteTtl_positive" CHECK ("quoteTtlMinutes" > 0)
 );
 
 INSERT INTO "CommercialPricingPolicy" ("id") VALUES ('default')
@@ -65,7 +71,9 @@ CREATE TABLE IF NOT EXISTS "BillingQuote" (
   "expiresAt" TIMESTAMP(3) NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "BillingQuote_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "BillingQuote_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "BillingQuote_costs_nonnegative" CHECK ("providerCostUsd" >= 0 AND "bufferedCostUsd" >= 0 AND "customerPriceUsd" >= 0),
+  CONSTRAINT "BillingQuote_credits_positive" CHECK ("creditsRequired" > 0)
 );
 CREATE INDEX IF NOT EXISTS "BillingQuote_userId_createdAt_idx" ON "BillingQuote"("userId", "createdAt");
 CREATE INDEX IF NOT EXISTS "BillingQuote_projectId_createdAt_idx" ON "BillingQuote"("projectId", "createdAt");
@@ -85,7 +93,11 @@ CREATE TABLE IF NOT EXISTS "CreditReservation" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "CreditReservation_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "CreditReservation_quoteId_fkey" FOREIGN KEY ("quoteId") REFERENCES "BillingQuote"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  CONSTRAINT "CreditReservation_quoteId_fkey" FOREIGN KEY ("quoteId") REFERENCES "BillingQuote"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT "CreditReservation_amounts_valid" CHECK (
+    "reservedCredits" > 0 AND "capturedCredits" >= 0 AND "releasedCredits" >= 0
+    AND "capturedCredits" + "releasedCredits" <= "reservedCredits"
+  )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "CreditReservation_quoteId_key" ON "CreditReservation"("quoteId");
 CREATE UNIQUE INDEX IF NOT EXISTS "CreditReservation_idempotencyKey_key" ON "CreditReservation"("idempotencyKey");
@@ -117,7 +129,11 @@ CREATE TABLE IF NOT EXISTS "ProviderUsageLedger" (
   "completedAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT "ProviderUsageLedger_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "ProviderUsageLedger_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "ProviderUsageLedger_quantity_positive" CHECK ("quantity" > 0),
+  CONSTRAINT "ProviderUsageLedger_values_nonnegative" CHECK (
+    "providerCostUsd" >= 0 AND "customerCredits" > 0 AND "customerValueUsd" >= 0
+  )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "ProviderUsageLedger_idempotencyKey_key" ON "ProviderUsageLedger"("idempotencyKey");
 CREATE INDEX IF NOT EXISTS "ProviderUsageLedger_userId_createdAt_idx" ON "ProviderUsageLedger"("userId", "createdAt");
@@ -133,6 +149,7 @@ INSERT INTO "ProviderPrice" ("id","provider","model","operation","billingUnit","
 ('zai-vidu2-reference-video-20260909','zai','vidu2-reference','video_generation','request',0.40,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-viduq1-text-video-20260909','zai','viduq1-text','video_generation','request',0.40,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-viduq1-image-video-20260909','zai','viduq1-image','video_generation','request',0.40,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
+('zai-cogview4-image-20260909','zai','cogview-4-250304','image_generation','image',0.01,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('zai-glm-image-20260909','zai','glm-image','image_generation','image',0.015,1,'https://docs.z.ai/guides/overview/pricing','zai-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('qwen-instruct-flash-tts-20260909','qwen','qwen3-tts-instruct-flash','tts','character',0.115,10000,'https://www.alibabacloud.com/help/en/model-studio/model-pricing','qwen-2026-09-09','2026-09-09T00:00:00.000Z'),
 ('qwen-flash-tts-20260909','qwen','qwen3-tts-flash','tts','character',0.10,10000,'https://www.alibabacloud.com/help/en/model-studio/model-pricing','qwen-2026-09-09','2026-09-09T00:00:00.000Z')
