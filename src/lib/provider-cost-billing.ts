@@ -1,8 +1,16 @@
 import { db } from "@/lib/db";
 
 export type BillableProvider = "zai" | "qwen";
-export type BillableOperation = "video_generation" | "image_generation" | "tts";
-export type BillingUnit = "request" | "image" | "character";
+export type BillableOperation =
+  | "video_generation"
+  | "image_generation"
+  | "tts"
+  | "text_input"
+  | "text_output"
+  | "vision_input"
+  | "vision_output"
+  | "asr";
+export type BillingUnit = "request" | "image" | "character" | "token" | "minute";
 
 export interface ProviderPriceSnapshot {
   provider: BillableProvider;
@@ -224,11 +232,24 @@ function asProvider(value: string): BillableProvider | null {
 }
 
 function asOperation(value: string): BillableOperation | null {
-  return value === "video_generation" || value === "image_generation" || value === "tts" ? value : null;
+  return new Set<BillableOperation>([
+    "video_generation",
+    "image_generation",
+    "tts",
+    "text_input",
+    "text_output",
+    "vision_input",
+    "vision_output",
+    "asr",
+  ]).has(value as BillableOperation)
+    ? value as BillableOperation
+    : null;
 }
 
 function asUnit(value: string): BillingUnit | null {
-  return value === "request" || value === "image" || value === "character" ? value : null;
+  return new Set<BillingUnit>(["request", "image", "character", "token", "minute"]).has(value as BillingUnit)
+    ? value as BillingUnit
+    : null;
 }
 
 export async function getProviderPrice(
