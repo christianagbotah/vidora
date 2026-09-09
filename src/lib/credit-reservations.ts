@@ -90,9 +90,24 @@ function parseQuote(row: QuoteRow): PersistedBillingQuote {
 }
 
 function operationType(line: BillingQuoteLine): string {
-  if (line.operation === "video_generation") return "video_gen";
-  if (line.operation === "image_generation") return "image_gen";
-  return "tts";
+  switch (line.operation) {
+    case "video_generation":
+      return "video_gen";
+    case "image_generation":
+      return "image_gen";
+    case "text_input":
+    case "text_output":
+      return "llm";
+    case "vision_input":
+    case "vision_output":
+      return "vision";
+    case "asr":
+      return "asr";
+    case "tts":
+      return "tts";
+    default:
+      return line.operation;
+  }
 }
 
 function validateQuoteLines(lines: BillingQuoteLine[]): void {
