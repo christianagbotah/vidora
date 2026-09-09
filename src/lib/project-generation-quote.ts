@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { resolveModelForRequest } from "@/lib/video-models";
 import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel } from "@/lib/qwen-tts";
-import { stripSpeakerAttributions } from "@/lib/narration";
+import { narrationBillableTextChunks } from "@/lib/narration";
 import {
   BillingSafetyError,
   getCommercialPricingPolicy,
@@ -53,6 +53,7 @@ function line(label: string, lineKey: string, sceneId: string, charge: Awaited<R
 export async function buildProjectGenerationQuoteLines(opts: {
   projectId: string;
   userId: string;
+  sceneId?: string | null;
   policy?: CommercialPricingPolicy;
 }): Promise<{ lines: BillingQuoteLine[]; policy: CommercialPricingPolicy; sceneCount: number }> {
   const project = await db.videoProject.findUnique({
@@ -66,10 +67,16 @@ export async function buildProjectGenerationQuoteLines(opts: {
     throw new Error("Project not found or not owned by the current user");
   }
 
+  if (opts.sceneId && !project.scenes.some((scene) => scene.id === opts.sceneId)) {
+    throw new Error("Scene not found in this project");
+  }
+
   const policy = opts.policy ?? await getCommercialPricingPolicy();
-  const pendingScenes = project.scenes.filter((scene) => !scene.videoUrl);
+  const pendingScenes = project.scenes.filter((scene) =>
+    !scene.videoUrl && (!opts.sceneId || scene.id === opts.sceneId),
+  );
   if (pendingScenes.length === 0) {
-    throw new BillingSafetyError("NOTHING_TO_GENERATE", "Every scene already has a generated video.");
+    throw new BillingSafetyError("NOTHING_TO_GENERATE", "The requested scene work is already complete.");
   }
 
   const lines: BillingQuoteLine[] = [];
@@ -82,12 +89,7 @@ export async function buildProjectGenerationQuoteLines(opts: {
       quantity: 1,
       policy,
     });
-    lines.push(line(
-      `Scene ${scene.sceneNumber} video`,
-      `video:${scene.id}`,
-      scene.id,
-      videoCharge,
-    ));
+    lines.push(line(`Scene ${scene.sceneNumber} video`, `video:${scene.id}`, scene.id, videoCharge));
 
     if (!scene.imageUrl) {
       const imageCharge = await quoteProviderCharge({
@@ -97,18 +99,10 @@ export async function buildProjectGenerationQuoteLines(opts: {
         quantity: 1,
         policy,
       });
-      lines.push(line(
-        `Scene ${scene.sceneNumber} thumbnail`,
-        `thumbnail:${scene.id}`,
-        scene.id,
-        imageCharge,
-      ));
+      lines.push(line(`Scene ${scene.sceneNumber} thumbnail`, `thumbnail:${scene.id}`, scene.id, imageCharge));
     }
   }
 
-  // Automatic narration runs after a scene video completes. Reserve its COGS
-  // now so a user cannot fund the video call while leaving Vidora exposed to
-  // unfunded Qwen speech calls moments later.
   const narrationScenes = pendingScenes.filter((scene) =>
     !scene.narrationUrl && Boolean(scene.dialogue?.trim()),
   );
@@ -122,23 +116,23 @@ export async function buildProjectGenerationQuoteLines(opts: {
     }
     const qwenModel = resolveQwenTtsModel(providerSettings.ttsModel);
     for (const scene of narrationScenes) {
-      // Speaker labels are not sent as speech. Quoting the cleaned spoken text
-      // keeps the reservation aligned to Qwen's character-based billing unit.
-      const spoken = stripSpeakerAttributions(scene.dialogue || "");
-      const quantity = Math.max(1, spoken.length);
-      const ttsCharge = await quoteProviderCharge({
-        provider: "qwen",
-        model: qwenModel,
-        operation: "tts",
-        quantity,
-        policy,
-      });
-      lines.push(line(
-        `Scene ${scene.sceneNumber} Qwen narration (${quantity} chars)`,
-        `tts:${scene.id}`,
-        scene.id,
-        ttsCharge,
-      ));
+      const chunks = narrationBillableTextChunks(scene.dialogue || "");
+      for (let index = 0; index < chunks.length; index += 1) {
+        const quantity = Math.max(1, chunks[index].length);
+        const ttsCharge = await quoteProviderCharge({
+          provider: "qwen",
+          model: qwenModel,
+          operation: "tts",
+          quantity,
+          policy,
+        });
+        lines.push(line(
+          `Scene ${scene.sceneNumber} Qwen narration part ${index + 1} (${quantity} chars)`,
+          `tts:${scene.id}:${index}`,
+          scene.id,
+          ttsCharge,
+        ));
+      }
     }
   }
 
@@ -148,6 +142,7 @@ export async function buildProjectGenerationQuoteLines(opts: {
 export async function createProjectGenerationQuote(opts: {
   projectId: string;
   userId: string;
+  sceneId?: string | null;
 }): Promise<{
   quote: PersistedBillingQuote;
   wallet: WalletSummary;
@@ -157,7 +152,7 @@ export async function createProjectGenerationQuote(opts: {
   const quote = await createBillingQuote({
     userId: opts.userId,
     projectId: opts.projectId,
-    operation: "project_generation",
+    operation: opts.sceneId ? "scene_generation" : "project_generation",
     lines,
     policy,
   });
