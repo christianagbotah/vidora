@@ -4,15 +4,18 @@ import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { saveGeneratedFile } from "@/lib/generated-store";
 import { buildCharacterPortraitPrompt, portraitImageSizeForAspect } from "@/lib/image-prompt";
+import {
+  captureImmediateProviderOperation,
+  reserveImmediateProviderOperation,
+} from "@/lib/immediate-provider-billing";
 
 export const runtime = "nodejs";
 
 export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string; characterId: string }> }
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string; characterId: string }> },
 ) {
   let authResult: Awaited<ReturnType<typeof requireProjectAccess>> | null = null;
   try {
@@ -26,7 +29,7 @@ export async function POST(
     if (!character) {
       return NextResponse.json(
         { success: false, error: "Character not found in this project" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
@@ -42,23 +45,29 @@ export async function POST(
         description: character.description,
         stylePrompt: character.stylePrompt,
       },
-      project?.style
+      project?.style,
     );
 
     const operationId = crypto.randomUUID();
-    const deduction = await deductTokensForOperation({
+    const billing = await reserveImmediateProviderOperation({
       userId: authResult.session.userId,
-      operation: "image_gen",
-      description: `Generate project character image: ${character.name}`,
+      projectId: id,
       referenceId: characterId,
-      idempotencyKey: `character-image:${characterId}:${operationId}`,
+      provider: "zai",
+      model: "glm-image",
+      operation: "image_generation",
+      quantity: 1,
+      lineKey: `character-image:${characterId}:${operationId}`,
+      label: `Project character image: ${character.name}`,
+      sceneId: null,
+      idempotencyKey: `character-image:${characterId}:${operationId}:reservation`,
     });
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
-    }
+    const capture = await captureImmediateProviderOperation({
+      reservationId: billing.reservation.id,
+      lineKey: billing.line.lineKey,
+      userId: authResult.session.userId,
+      projectId: id,
+    });
 
     const imageBase64 = await zai.generateImage({
       prompt: portraitPrompt,
@@ -72,7 +81,7 @@ export async function POST(
 
     const imageUrl = await saveGeneratedFile(
       `characters/char_${characterId.slice(0, 8)}_${Date.now()}.png`,
-      Buffer.from(imageBase64, "base64")
+      Buffer.from(imageBase64, "base64"),
     );
     const updated = await db.character.update({
       where: { id: characterId },
@@ -83,15 +92,14 @@ export async function POST(
       success: true,
       character: updated,
       imageUrl,
-      tokensCharged: deduction.alreadyApplied ? 0 : 1,
-      remainingTokens: deduction.remainingTokens,
+      tokensCharged: capture.alreadyCaptured ? 0 : capture.creditsCaptured,
+      remainingTokens: billing.wallet.availableCredits,
     });
   } catch (error) {
     console.error(
       "Failed to generate character image:",
-      error instanceof Error ? error.message : "unknown error"
+      error instanceof Error ? error.message : "unknown error",
     );
-    // Do not auto-refund provider operations on ambiguous failures.
     return zaiErrorResponse(error, {
       session: authResult?.ok ? authResult.session : null,
       logLabel: "character-image",
