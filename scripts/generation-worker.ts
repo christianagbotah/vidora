@@ -4,14 +4,22 @@ import { friendlySceneError } from "@/lib/zai-errors";
 import { saveGeneratedFile } from "@/lib/generated-store";
 import { persistProviderVideo } from "@/lib/provider-video-storage";
 import { toProviderFetchUrl } from "@/lib/provider-media-access";
-import { resolveModelForRequest } from "@/lib/video-models";
 import { ensureReferenceAspect } from "@/lib/aspect-normalize";
 import { autoNarrateScene } from "@/lib/narration";
 import {
   captureReservedQuoteLine,
   releaseReservationRemainder,
+  type BillingQuoteLine,
 } from "@/lib/credit-reservations";
 import { getGenerationRunBillingLink } from "@/lib/generation-run-billing";
+import {
+  getReservedQuoteLines,
+  requireReservedQuoteLine,
+} from "@/lib/reserved-quote";
+import {
+  resolveZaiImageBillingModel,
+  resolveZaiVideoBillingModel,
+} from "@/lib/zai-billing-models";
 import {
   buildSceneImagePrompt,
   buildSceneVideoPrompt,
@@ -43,6 +51,7 @@ interface RunBillingContext {
   userId: string;
   projectId: string;
   reservationId: string;
+  quoteLines: BillingQuoteLine[];
 }
 
 function sleep(ms: number) {
@@ -194,7 +203,17 @@ async function submitSceneTask(opts: {
     characters: ctx.characters,
     linkedCharacterIds: scene.characterIds,
   });
-  const model = resolveModelForRequest(ctx.videoModel, Boolean(referenceImage));
+  const videoLine = requireReservedQuoteLine(billing.quoteLines, {
+    lineKey: `video:${scene.id}`,
+    provider: "zai",
+    operation: "video_generation",
+  });
+  const effectiveModel = resolveZaiVideoBillingModel(videoLine.model, Boolean(referenceImage));
+  if (effectiveModel !== videoLine.model) {
+    throw new Error(
+      `Video provider model changed after reservation (${videoLine.model} -> ${effectiveModel}); a fresh quote is required`,
+    );
+  }
 
   // Capture the already-reserved commercial line BEFORE the paid submission.
   // If the process dies after this point but before taskId persistence, the
@@ -216,7 +235,7 @@ async function submitSceneTask(opts: {
     quality: "quality",
     withAudio: true,
     ...(referenceImage ? { imageUrl: referenceImage } : {}),
-    model,
+    model: videoLine.model,
     aspectRatio: ctx.aspectRatio,
     style: ctx.style,
     retry: {
@@ -257,6 +276,17 @@ async function ensureThumbnail(opts: {
       characters: ctx.characters,
       linkedCharacterIds: scene.characterIds,
     });
+    const imageLine = requireReservedQuoteLine(billing.quoteLines, {
+      lineKey: `thumbnail:${scene.id}`,
+      provider: "zai",
+      operation: "image_generation",
+    });
+    const effectiveImageModel = resolveZaiImageBillingModel();
+    if (effectiveImageModel !== imageLine.model) {
+      throw new Error(
+        `Image provider model changed after reservation (${imageLine.model} -> ${effectiveImageModel}); a fresh quote is required`,
+      );
+    }
 
     // Same fail-closed rule as video submission: the provider call is only
     // crossed after its quote line has been funded and captured.
@@ -436,10 +466,12 @@ async function processRun(runId: string): Promise<void> {
     await markReconciliation(run.id, run.projectId, "Generation run ownership/project state is inconsistent");
     return;
   }
+  const quoteLines = await getReservedQuoteLines(billingLink.creditReservationId, run.userId);
   const billing: RunBillingContext = {
     userId: run.userId,
     projectId: project.id,
     reservationId: billingLink.creditReservationId,
+    quoteLines,
   };
 
   let persistedSceneIds: string[] = [];
