@@ -330,7 +330,7 @@ model ProjectTemplate {
   sceneTemplates     String   @default("[]") @db.Text
   characterTemplates String   @default("[]") @db.Text
   isFeatured         Boolean  @default(false)
-  isActive           Boolean  @default(true)
+  isActive            Boolean  @default(true)
   usageCount         Int      @default(0)
   sortOrder          Int      @default(0)
   createdBy          String?
@@ -434,6 +434,8 @@ model GenerationRun {
   costUsdPerScene      Float
   chargeTransactionId  String?
   refundTransactionId  String?
+  billingQuoteId       String?
+  creditReservationId  String?
   error                String?      @db.Text
   createdAt            DateTime     @default(now())
   updatedAt            DateTime     @updatedAt
@@ -441,4 +443,114 @@ model GenerationRun {
   @@index([projectId, createdAt])
   @@index([targetSceneId])
   @@index([status, updatedAt])
+}
+
+model ProviderPrice {
+  id             String   @id
+  provider       String
+  model          String
+  operation      String
+  billingUnit    String
+  unitPriceUsd   Float
+  unitsPerPrice  Float    @default(1)
+  sourceUrl      String   @db.Text
+  pricingVersion String
+  active         Boolean  @default(true)
+  verifiedAt     DateTime
+  effectiveFrom  DateTime @default(now())
+  effectiveUntil DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([provider, model, operation])
+  @@index([active, verifiedAt])
+}
+
+model CommercialPricingPolicy {
+  id                       String   @id @default("default")
+  creditValueUsd           Float    @default(0.01)
+  targetGrossMarginPct     Float    @default(0.35)
+  providerSafetyBufferPct  Float    @default(0.05)
+  fxSafetyBufferPct        Float    @default(0.05)
+  gatewayFeeReservePct     Float    @default(0.03)
+  infrastructureReservePct Float    @default(0.03)
+  minimumChargeCredits     Int      @default(1)
+  priceMaxAgeHours         Int      @default(1080)
+  quoteTtlMinutes          Int      @default(15)
+  billingEnabled           Boolean  @default(true)
+  updatedAt                DateTime @updatedAt
+}
+
+model BillingQuote {
+  id               String             @id
+  userId           String
+  projectId        String?
+  operation        String
+  status           String             @default("open")
+  pricingVersion   String
+  providerCostUsd  Float
+  bufferedCostUsd  Float
+  customerPriceUsd Float
+  creditsRequired  Int
+  breakdown        String             @db.Text
+  policySnapshot   String             @db.Text
+  expiresAt        DateTime
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  reservation      CreditReservation?
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([status, expiresAt])
+}
+
+model CreditReservation {
+  id              String       @id
+  userId          String
+  quoteId         String       @unique
+  quote           BillingQuote @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  referenceId     String?
+  operation       String
+  reservedCredits Int
+  capturedCredits Int          @default(0)
+  releasedCredits Int          @default(0)
+  status          String       @default("reserved")
+  idempotencyKey  String       @unique
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([userId, status])
+  @@index([referenceId])
+}
+
+model ProviderUsageLedger {
+  id               String   @id
+  userId           String
+  projectId        String?
+  sceneId          String?
+  generationRunId  String?
+  reservationId    String?
+  provider         String
+  model            String
+  operation        String
+  billingUnit      String
+  quantity         Float
+  providerCostUsd  Float
+  customerCredits  Int
+  customerValueUsd Float
+  grossProfitUsd   Float
+  grossMarginPct   Float
+  providerTaskId   String?
+  pricingVersion   String
+  status           String   @default("captured")
+  idempotencyKey   String   @unique
+  submittedAt      DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([provider, model])
+  @@index([generationRunId])
 }
