@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { saveGeneratedFile } from "@/lib/generated-store";
+import {
+  captureImmediateProviderOperation,
+  reserveImmediateProviderOperation,
+} from "@/lib/immediate-provider-billing";
 
 export const runtime = "nodejs";
 
@@ -28,35 +31,30 @@ export async function POST(req: NextRequest) {
     const size = typeof body.size === "string" ? body.size : "";
 
     if (!prompt) {
-      return NextResponse.json(
-        { success: false, error: "Prompt is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
     }
     if (prompt.length > 4_000) {
-      return NextResponse.json(
-        { success: false, error: "Prompt is too long" },
-        { status: 413 }
-      );
+      return NextResponse.json({ success: false, error: "Prompt is too long" }, { status: 413 });
     }
 
-    const imageSize = (SUPPORTED_SIZES as readonly string[]).includes(size)
-      ? size
-      : "1344x768";
+    const imageSize = (SUPPORTED_SIZES as readonly string[]).includes(size) ? size : "1344x768";
     const operationId = crypto.randomUUID();
-    const deduction = await deductTokensForOperation({
+    const billing = await reserveImmediateProviderOperation({
       userId: authResult.session.userId,
-      operation: "image_gen",
-      description: "Generate standalone scene image",
       referenceId: operationId,
-      idempotencyKey: `scene-image:${operationId}`,
+      provider: "zai",
+      model: "glm-image",
+      operation: "image_generation",
+      quantity: 1,
+      lineKey: `image:${operationId}`,
+      label: "Standalone AI scene image",
+      idempotencyKey: `scene-image:${operationId}:reservation`,
     });
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
-    }
+    const capture = await captureImmediateProviderOperation({
+      reservationId: billing.reservation.id,
+      lineKey: billing.line.lineKey,
+      userId: authResult.session.userId,
+    });
 
     const imageBase64 = await zai.generateImage({
       prompt,
@@ -65,17 +63,18 @@ export async function POST(req: NextRequest) {
     });
     const imageUrl = await saveGeneratedFile(
       `users/${authResult.session.userId}/scene_${Date.now()}_${operationId.slice(0, 8)}.png`,
-      Buffer.from(imageBase64, "base64")
+      Buffer.from(imageBase64, "base64"),
     );
 
     return NextResponse.json({
       success: true,
       imageUrl,
-      tokensCharged: deduction.alreadyApplied ? 0 : 1,
-      remainingTokens: deduction.remainingTokens,
+      tokensCharged: capture.alreadyCaptured ? 0 : capture.creditsCaptured,
+      remainingTokens: billing.wallet.availableCredits,
     });
   } catch (error) {
-    // Do not automatically refund ambiguous provider failures.
+    // Provider failures after capture are intentionally not auto-refunded:
+    // timeout/network outcomes may be ambiguous and a retry could duplicate COGS.
     return zaiErrorResponse(error, {
       session: authResult.session,
       logLabel: "generate-scene",
