@@ -32,6 +32,10 @@ import {
   type BillingQuoteLine,
 } from "@/lib/credit-reservations";
 import {
+  getReservedQuoteLines,
+  requireReservedQuoteLine,
+} from "@/lib/reserved-quote";
+import {
   narrationBillableTextChunks,
   parseNarrationTextSegments,
 } from "@/lib/narration-billing";
@@ -286,6 +290,65 @@ async function buildNarrationQuoteLines(opts: {
   return { lines, policy };
 }
 
+async function providerModelForNarration(opts: {
+  sceneId: string;
+  userId: string;
+  chunks: PlannedSpeechChunk[];
+  billingReservationId?: string;
+}): Promise<string> {
+  if (opts.billingReservationId) {
+    const lines = await getReservedQuoteLines(opts.billingReservationId, opts.userId);
+    const sceneTtsLines = lines.filter(
+      (line) => line.sceneId === opts.sceneId && line.provider === "qwen" && line.operation === "tts",
+    );
+    if (sceneTtsLines.length !== opts.chunks.length) {
+      throw new BillingSafetyError(
+        "TTS_QUOTE_SCOPE_CHANGED",
+        "The prepaid narration quote no longer matches the current speech chunks. Request a fresh generation quote before submitting provider work.",
+      );
+    }
+
+    let model = "";
+    for (let index = 0; index < opts.chunks.length; index += 1) {
+      const line = requireReservedQuoteLine(lines, {
+        lineKey: `tts:${opts.sceneId}:${index}`,
+        provider: "qwen",
+        operation: "tts",
+      });
+      const expectedQuantity = Math.max(1, opts.chunks[index].text.length);
+      if (Math.abs(line.quantity - expectedQuantity) > 1e-9) {
+        throw new BillingSafetyError(
+          "TTS_QUOTE_QUANTITY_CHANGED",
+          `Narration part ${index + 1} changed after the quote was reserved. A fresh quote is required.`,
+        );
+      }
+      if (!model) model = line.model;
+      if (line.model !== model) {
+        throw new BillingSafetyError(
+          "TTS_QUOTE_MODEL_INCONSISTENT",
+          "The prepaid narration quote contains inconsistent Qwen models.",
+        );
+      }
+    }
+    if (!model || resolveQwenTtsModel(model) !== model) {
+      throw new BillingSafetyError(
+        "TTS_QUOTE_MODEL_UNSAFE",
+        "The prepaid Qwen model would be rewritten by the provider transport. A fresh verified quote is required.",
+      );
+    }
+    return model;
+  }
+
+  const providerSettings = await getAIProviderSettings();
+  if (providerSettings.ttsProvider !== "qwen") {
+    throw new BillingSafetyError(
+      "UNPRICED_TTS_PROVIDER",
+      `Narration provider ${providerSettings.ttsProvider} is not enabled for paid billing. Configure Qwen TTS before generating narration.`,
+    );
+  }
+  return resolveQwenTtsModel(providerSettings.ttsModel);
+}
+
 export async function generateSceneNarration(opts: {
   sceneId: string;
   text: string;
@@ -323,14 +386,6 @@ export async function generateSceneNarration(opts: {
   if (!opts.text.trim()) throw new Error("No speakable text");
   if (opts.text.length > 12_000) throw new Error("Narration text is too long");
 
-  const providerSettings = await getAIProviderSettings();
-  if (providerSettings.ttsProvider !== "qwen") {
-    throw new BillingSafetyError(
-      "UNPRICED_TTS_PROVIDER",
-      `Narration provider ${providerSettings.ttsProvider} is not enabled for paid billing. Configure Qwen TTS before generating narration.`,
-    );
-  }
-  const providerModel = resolveQwenTtsModel(providerSettings.ttsModel);
   const chunks = await buildSpeechPlan({
     text: opts.text,
     defaultVoice,
@@ -338,6 +393,12 @@ export async function generateSceneNarration(opts: {
     profile,
   });
   if (chunks.length === 0) throw new Error("No speakable dialogue was found");
+  const providerModel = await providerModelForNarration({
+    sceneId: scene.id,
+    userId,
+    chunks,
+    billingReservationId: opts.billingReservationId,
+  });
 
   const fingerprint = narrationFingerprint({
     sceneId: scene.id,
@@ -454,6 +515,12 @@ export async function generateSceneNarration(opts: {
         speed,
         model: providerModel,
       });
+      if (speech.model !== providerModel) {
+        throw new BillingSafetyError(
+          "TTS_EXECUTION_MODEL_DRIFT",
+          "Qwen execution model did not match the prepaid billing model.",
+        );
+      }
       const chunkFilename = narrationChunkFilename(scene.id, fingerprint, index, speech.extension);
       chunkPaths.push(writeAudioFile(chunkFilename, speech.buffer));
     }
