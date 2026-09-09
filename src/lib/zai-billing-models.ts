@@ -5,8 +5,40 @@ import {
   type VideoModelId,
 } from "@/lib/video-models";
 
+/** Current public Z.ai model ids with verified prices in the billing catalog. */
+export const DEFAULT_ZAI_TEXT_MODEL_ID = "glm-4.7";
+export const DEFAULT_ZAI_VISION_MODEL_ID = "glm-4.6v";
+export const DEFAULT_ZAI_ASR_MODEL_ID = "glm-asr-2512";
+
 /** Must stay aligned with the public image API model used by src/lib/zai.ts. */
 export const DEFAULT_ZAI_IMAGE_MODEL_ID = "cogview-4-250304";
+
+/**
+ * Resolve the exact text model sent by direct Z.ai chat calls. A configured
+ * model is preserved even when it is unknown so the verified provider-price
+ * lookup can fail closed before provider spend.
+ */
+export function resolveZaiTextBillingModel(requestedModel?: string | null): string {
+  const requested = (requestedModel || "").trim();
+  const configured = (process.env.ZAI_CHAT_MODEL || "").trim();
+  return requested || configured || DEFAULT_ZAI_TEXT_MODEL_ID;
+}
+
+/**
+ * Resolve the exact multimodal model sent by Z.ai vision calls. Do not fall
+ * back to the text-model environment variable: a text-only model may be valid
+ * for chat but invalid/unpriced for video or image understanding.
+ */
+export function resolveZaiVisionBillingModel(requestedModel?: string | null): string {
+  const requested = (requestedModel || "").trim();
+  const configured = (process.env.ZAI_VISION_MODEL || "").trim();
+  return requested || configured || DEFAULT_ZAI_VISION_MODEL_ID;
+}
+
+export function resolveZaiAsrBillingModel(): string {
+  const configured = (process.env.ZAI_ASR_MODEL || "").trim();
+  return configured || DEFAULT_ZAI_ASR_MODEL_ID;
+}
 
 /**
  * Resolve the exact image model the provider transport will send. Unknown
