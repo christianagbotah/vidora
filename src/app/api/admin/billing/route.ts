@@ -136,10 +136,11 @@ async function updateProviderPrice(input: Record<string, unknown>): Promise<void
   }
   if (parsedSource.protocol !== "https:") throw new Error("Provider pricing source must use HTTPS");
 
-  const today = new Date().toISOString().slice(0, 10);
-  const pricingVersion = requestedVersion || `${provider}-${today}`;
-  if (pricingVersion.length > 160) throw new Error("Pricing version is too long");
   const verifiedAt = new Date();
+  const versionPrefix = requestedVersion || provider;
+  const versionStamp = verifiedAt.toISOString().replace(/\D/g, "").slice(0, 14);
+  const pricingVersion = `${versionPrefix}-${versionStamp}-${crypto.randomUUID().slice(0, 8)}`;
+  if (pricingVersion.length > 160) throw new Error("Pricing version is too long");
   const id = crypto.randomUUID();
 
   await db.$executeRaw`
