@@ -1,9 +1,12 @@
 import { db } from "@/lib/db";
-import { resolveModelForRequest } from "@/lib/video-models";
 import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel } from "@/lib/qwen-tts";
 import { narrationBillableTextChunks } from "@/lib/narration-billing";
 import { isSceneEligibleForNewGeneration } from "@/lib/generation-scope";
+import {
+  resolveZaiImageBillingModel,
+  resolveZaiVideoBillingModel,
+} from "@/lib/zai-billing-models";
 import {
   BillingSafetyError,
   getCommercialPricingPolicy,
@@ -98,12 +101,19 @@ export async function buildProjectGenerationQuoteLines(opts: {
     return isSceneEligibleForNewGeneration(scene);
   });
   if (pendingScenes.length === 0) {
-    throw new BillingSafetyError("NOTHING_TO_GENERATE", "The requested scene work is already complete or is not eligible for a new provider submission.");
+    throw new BillingSafetyError(
+      "NOTHING_TO_GENERATE",
+      "The requested scene work is already complete or is not eligible for a new provider submission.",
+    );
   }
 
   const lines: BillingQuoteLine[] = [];
+  const imageModel = resolveZaiImageBillingModel();
   for (const scene of pendingScenes) {
-    const model = resolveModelForRequest(project.videoModel, hasProviderReference(scene, project.characters));
+    const model = resolveZaiVideoBillingModel(
+      project.videoModel,
+      hasProviderReference(scene, project.characters),
+    );
     const videoCharge = await quoteProviderCharge({
       provider: "zai",
       model,
@@ -116,7 +126,7 @@ export async function buildProjectGenerationQuoteLines(opts: {
     if (!scene.imageUrl) {
       const imageCharge = await quoteProviderCharge({
         provider: "zai",
-        model: "glm-image",
+        model: imageModel,
         operation: "image_generation",
         quantity: 1,
         policy,
