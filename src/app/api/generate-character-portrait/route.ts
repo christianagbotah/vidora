@@ -4,6 +4,7 @@ import { requireAuth } from "@/lib/project-auth";
 import { generateImage } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { portraitImageSizeForAspect } from "@/lib/image-prompt";
+import { resolveZaiImageBillingModel } from "@/lib/zai-billing-models";
 import {
   captureImmediateProviderOperation,
   reserveImmediateProviderOperation,
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
       userId: authResult.session.userId,
       referenceId: taskId,
       provider: "zai",
-      model: "glm-image",
+      model: resolveZaiImageBillingModel(),
       operation: "image_generation",
       quantity: 1,
       lineKey: `portrait:${taskId}`,
