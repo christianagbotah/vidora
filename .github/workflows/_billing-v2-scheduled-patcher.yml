@@ -1,0 +1,39 @@
+name: Billing v2 scheduled patch executor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  apply-once:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: billing/provider-cost-backed-v2
+          fetch-depth: 0
+      - name: Apply core recipe once
+        run: |
+          set -euo pipefail
+          if [[ ! -f .github/workflows/_temp-billing-v2-core-patch.yml ]]; then
+            echo "Core billing recipe already applied; nothing to do."
+            exit 0
+          fi
+          awk '
+            /python3 - <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/_temp-billing-v2-core-patch.yml > /tmp/apply-billing-v2.py
+          test -s /tmp/apply-billing-v2.py
+          python3 /tmp/apply-billing-v2.py
+          rm -f .github/workflows/_temp-billing-v2-core-patch.yml .github/workflows/_temp-billing-v2-pr-trigger.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Wire cost-backed reservations through provider execution"
+          git push origin HEAD:billing/provider-cost-backed-v2
+          git rev-parse HEAD
