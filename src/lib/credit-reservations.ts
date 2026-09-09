@@ -95,6 +95,32 @@ function operationType(line: BillingQuoteLine): string {
   return "tts";
 }
 
+function validateQuoteLines(lines: BillingQuoteLine[]): void {
+  if (lines.length === 0) throw new Error("Cannot create an empty billing quote");
+  const keys = new Set<string>();
+  for (const line of lines) {
+    if (!line.lineKey?.trim()) throw new Error("Billing quote line key is required");
+    if (keys.has(line.lineKey)) throw new Error(`Duplicate billing quote line key: ${line.lineKey}`);
+    keys.add(line.lineKey);
+    if (!Number.isSafeInteger(line.credits) || line.credits <= 0) {
+      throw new Error(`Billing quote line ${line.lineKey} has invalid credits`);
+    }
+    for (const [label, value] of [
+      ["provider cost", line.providerCostUsd],
+      ["buffered cost", line.bufferedCostUsd],
+      ["customer value", line.customerValueUsd],
+      ["quantity", line.quantity],
+    ] as const) {
+      if (!Number.isFinite(value) || value < 0 || (label === "quantity" && value <= 0)) {
+        throw new Error(`Billing quote line ${line.lineKey} has invalid ${label}`);
+      }
+    }
+    if (line.customerValueUsd + 1e-12 < line.bufferedCostUsd) {
+      throw new Error(`Billing quote line ${line.lineKey} would sell below buffered cost`);
+    }
+  }
+}
+
 export async function createBillingQuote(opts: {
   userId: string;
   projectId?: string | null;
@@ -102,7 +128,7 @@ export async function createBillingQuote(opts: {
   lines: BillingQuoteLine[];
   policy: CommercialPricingPolicy;
 }): Promise<PersistedBillingQuote> {
-  if (opts.lines.length === 0) throw new Error("Cannot create an empty billing quote");
+  validateQuoteLines(opts.lines);
   const id = crypto.randomUUID();
   const providerCostUsd = opts.lines.reduce((sum, line) => sum + line.providerCostUsd, 0);
   const bufferedCostUsd = opts.lines.reduce((sum, line) => sum + line.bufferedCostUsd, 0);
@@ -177,20 +203,34 @@ export async function reserveBillingQuote(opts: {
   idempotencyKey: string;
 }): Promise<{ reservation: CreditReservationSnapshot; wallet: WalletSummary; alreadyReserved: boolean }> {
   const reservation = await db.$transaction(async (tx) => {
-    const existing = await tx.$queryRaw<ReservationRow[]>`
+    // Fast replay path before acquiring the wallet row lock.
+    const beforeLock = await tx.$queryRaw<ReservationRow[]>`
       SELECT * FROM "CreditReservation" WHERE "idempotencyKey" = ${opts.idempotencyKey} LIMIT 1
     `;
-    if (existing[0]) {
-      if (existing[0].userId !== opts.userId || existing[0].quoteId !== opts.quoteId) {
+    if (beforeLock[0]) {
+      if (beforeLock[0].userId !== opts.userId || beforeLock[0].quoteId !== opts.quoteId) {
         throw new Error("Billing reservation idempotency key belongs to another operation");
       }
-      return { row: existing[0], alreadyReserved: true };
+      return { row: beforeLock[0], alreadyReserved: true };
     }
 
+    // Every reservation for one wallet serializes here. Re-check idempotency
+    // after the lock so two simultaneous copies of the same request converge
+    // on one reservation instead of racing into a unique-index error.
     const lockedUsers = await tx.$queryRaw<Array<{ id: string; tokens: number }>>`
       SELECT "id", "tokens" FROM "User" WHERE "id" = ${opts.userId} FOR UPDATE
     `;
     if (lockedUsers.length !== 1) throw new Error("User not found");
+
+    const afterLock = await tx.$queryRaw<ReservationRow[]>`
+      SELECT * FROM "CreditReservation" WHERE "idempotencyKey" = ${opts.idempotencyKey} LIMIT 1
+    `;
+    if (afterLock[0]) {
+      if (afterLock[0].userId !== opts.userId || afterLock[0].quoteId !== opts.quoteId) {
+        throw new Error("Billing reservation idempotency key belongs to another operation");
+      }
+      return { row: afterLock[0], alreadyReserved: true };
+    }
 
     const quoteRows = await tx.$queryRaw<QuoteRow[]>`
       SELECT * FROM "BillingQuote" WHERE "id" = ${opts.quoteId} FOR UPDATE
@@ -250,6 +290,7 @@ export async function findReservationByReference(referenceId: string): Promise<C
   const rows = await db.$queryRaw<ReservationRow[]>`
     SELECT * FROM "CreditReservation"
     WHERE "referenceId" = ${referenceId}
+      AND "status" IN ('reserved', 'partially_captured', 'captured')
     ORDER BY "createdAt" DESC
     LIMIT 1
   `;
@@ -323,7 +364,7 @@ export async function captureReservedQuoteLine(opts: {
     });
 
     const customerValueUsd = line.customerValueUsd;
-    const grossProfitUsd = customerValueUsd - line.providerCostUsd;
+    const grossProfitUsd = customerValueUsd - line.bufferedCostUsd;
     const grossMarginPct = customerValueUsd > 0 ? grossProfitUsd / customerValueUsd : 0;
     await tx.$executeRaw`
       INSERT INTO "ProviderUsageLedger" (
@@ -339,8 +380,6 @@ export async function captureReservedQuoteLine(opts: {
       )
     `;
 
-    // Keep the old transaction id available for audit interoperability through
-    // the usage ledger's deterministic idempotency linkage.
     void transaction;
     if (settled) {
       await tx.$executeRaw`
