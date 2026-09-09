@@ -27,8 +27,12 @@ function quoteLineSignature(lines: BillingQuoteLine[]): string {
         operation: line.operation,
         billingUnit: line.billingUnit,
         quantity: line.quantity,
+        providerCostUsd: line.providerCostUsd,
+        bufferedCostUsd: line.bufferedCostUsd,
+        customerValueUsd: line.customerValueUsd,
         credits: line.credits,
         pricingVersion: line.pricingVersion,
+        verifiedAt: line.verifiedAt,
       }))
       .sort((a, b) => a.lineKey.localeCompare(b.lineKey)),
   );
@@ -95,20 +99,48 @@ export async function POST(req: NextRequest) {
           ? null
           : await findReservationByReference(existingRun.id);
         const reservationId = link.creditReservationId || reservation?.id || null;
-        if (reservationId) {
-          if (!link.creditReservationId) {
-            const quote = await getBillingQuote(reservation!.quoteId);
-            if (!quote) {
-              return NextResponse.json({ success: false, error: "Reserved generation quote is missing", reconciliationRequired: true }, { status: 409 });
-            }
-            await setGenerationRunBillingLink({
-              runId: existingRun.id,
-              billingQuoteId: quote.id,
-              creditReservationId: reservationId,
-            });
-          }
-          await db.generationRun.update({ where: { id: existingRun.id }, data: { status: "running" } });
+        if (!reservationId) {
+          return NextResponse.json({
+            success: false,
+            error: "An interrupted scene generation has no verifiable prepaid reservation. Provider execution remains blocked.",
+            reconciliationRequired: true,
+            generationRunId: existingRun.id,
+          }, { status: 409 });
         }
+        if (!link.creditReservationId) {
+          const quote = await getBillingQuote(reservation!.quoteId);
+          if (!quote) {
+            return NextResponse.json({
+              success: false,
+              error: "Reserved generation quote is missing",
+              reconciliationRequired: true,
+              generationRunId: existingRun.id,
+            }, { status: 409 });
+          }
+          await setGenerationRunBillingLink({
+            runId: existingRun.id,
+            billingQuoteId: quote.id,
+            creditReservationId: reservationId,
+          });
+        }
+        await db.generationRun.update({ where: { id: existingRun.id }, data: { status: "running" } });
+        return NextResponse.json({
+          success: true,
+          alreadyRunning: true,
+          resumedPrepaidRun: true,
+          status: "generating",
+          generationRunId: existingRun.id,
+          message: "Recovered a prepaid scene generation after an interrupted handoff.",
+        });
+      }
+
+      if (!link.creditReservationId && !existingRun.chargeTransactionId) {
+        return NextResponse.json({
+          success: false,
+          error: "Generation run is not backed by verifiable prepaid funding.",
+          reconciliationRequired: true,
+          generationRunId: existingRun.id,
+        }, { status: 409 });
       }
       return NextResponse.json({
         success: true,
