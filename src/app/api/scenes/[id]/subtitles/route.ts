@@ -4,7 +4,11 @@ import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
+import { findReservationByReference } from "@/lib/credit-reservations";
+import {
+  captureMeteredZaiTextOperation,
+  reserveMeteredZaiTextOperation,
+} from "@/lib/zai-metered-billing";
 
 export const runtime = "nodejs";
 
@@ -27,7 +31,7 @@ function subtitleFingerprint(opts: {
 /**
  * POST /api/scenes/[id]/subtitles
  * Generate SRT subtitles from the scene narration/dialogue.
- * Provider work is authenticated and charged exactly once per logical input.
+ * Provider work is authenticated and cost-backed exactly once per logical input.
  */
 export async function POST(
   req: NextRequest,
@@ -75,8 +79,6 @@ export async function POST(
       );
     }
 
-    // A finished result for the same language is free to reuse and never
-    // crosses the provider boundary again.
     if (
       scene.subtitleStatus === "ready" &&
       scene.subtitleSrt &&
@@ -98,34 +100,40 @@ export async function POST(
       sourceText,
     });
     const operationKey = `subtitles:${userId}:${id}:${fingerprint}`;
-    const deduction = await deductTokensForOperation({
-      userId,
-      operation: "llm",
-      description: `Generate subtitles (${lang}) for scene ${scene.sceneNumber}`,
-      referenceId: id,
-      idempotencyKey: operationKey,
-    });
-
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
-    }
-
-    // If this logical provider attempt was already charged but no durable
-    // result exists, do not silently issue another uncharged provider call.
-    if (deduction.alreadyApplied) {
+    const prior = await findReservationByReference(operationKey);
+    if (prior) {
       return NextResponse.json(
         {
           success: false,
-          error: "This subtitle generation attempt is awaiting reconciliation. Change the source text/language or try again after the previous attempt is resolved.",
+          error: "This subtitle generation attempt is awaiting reconciliation. Change the source text/language or resolve the previous attempt before retrying.",
           replayed: true,
-          remainingTokens: deduction.remainingTokens,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
+
+    const systemPrompt = `You are a subtitle generator. Convert the user's narration text into SRT subtitle format. Each subtitle should be 5-8 words, displayed for 2-3 seconds. The total duration is ${scene.duration} seconds. Distribute subtitles evenly across the duration. Output ONLY valid SRT format, nothing else. No markdown fences, no explanations.\n\nSRT format example:\n1\n00:00:00,000 --> 00:00:02,500\nFirst few words here\n\n2\n00:00:02,500 --> 00:00:05,000\nNext few words here`;
+    const lineKeyPrefix = `${operationKey}:billing`;
+    const billing = await reserveMeteredZaiTextOperation({
+      userId,
+      projectId: scene.projectId,
+      sceneId: id,
+      referenceId: operationKey,
+      idempotencyKey: `${operationKey}:reservation`,
+      lineKeyPrefix,
+      label: `Generate subtitles (${lang}) for scene ${scene.sceneNumber}`,
+      systemPrompt,
+      userPrompt: sourceText,
+      maxOutputTokens: 4_000,
+      requireConfiguredPrimary: false,
+    });
+    const captures = await captureMeteredZaiTextOperation({
+      reservationId: billing.reservation.id,
+      lineKeyPrefix,
+      userId,
+      projectId: scene.projectId,
+      sceneId: id,
+    });
 
     await db.videoScene.update({
       where: { id },
@@ -134,8 +142,11 @@ export async function POST(
 
     try {
       const srtContent = await zai.chat({
-        systemPrompt: `You are a subtitle generator. Convert the user's narration text into SRT subtitle format. Each subtitle should be 5-8 words, displayed for 2-3 seconds. The total duration is ${scene.duration} seconds. Distribute subtitles evenly across the duration. Output ONLY valid SRT format, nothing else. No markdown fences, no explanations.\n\nSRT format example:\n1\n00:00:00,000 --> 00:00:02,500\nFirst few words here\n\n2\n00:00:02,500 --> 00:00:05,000\nNext few words here`,
+        systemPrompt,
         userPrompt: sourceText,
+        model: billing.model,
+        thinking: "disabled",
+        extra: { max_tokens: 4_000 },
         retry: { label: "subtitle generation", timeoutMs: 60_000, maxRetries: 2 },
       });
 
@@ -160,19 +171,22 @@ export async function POST(
         },
       });
 
+      const tokensCharged = captures.reduce(
+        (sum, capture) => sum + (capture.alreadyCaptured ? 0 : capture.creditsCaptured),
+        0,
+      );
       return NextResponse.json({
         success: true,
         srt,
         lang,
-        tokensCharged: 1,
-        remainingTokens: deduction.remainingTokens,
+        providerModel: billing.model,
+        tokensCharged,
+        remainingTokens: billing.wallet.availableCredits,
       });
     } catch (aiError) {
       await db.videoScene
         .update({ where: { id }, data: { subtitleStatus: "failed" } })
         .catch(() => undefined);
-      // Do not auto-refund ambiguous provider failures. The idempotency key
-      // prevents an uncharged duplicate provider attempt for the same input.
       return zaiErrorResponse(aiError, {
         session: authResult.session,
         logLabel: "subtitles",
@@ -190,7 +204,6 @@ export async function POST(
   }
 }
 
-/** Return the current subtitle SRT only to callers allowed to read the scene. */
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -228,7 +241,6 @@ export async function GET(
   }
 }
 
-/** Update subtitle settings/manual SRT only with scene write access. */
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
