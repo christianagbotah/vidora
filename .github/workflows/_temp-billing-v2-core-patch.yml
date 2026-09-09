@@ -1,0 +1,525 @@
+name: Apply Provider Cost Billing v2 core wiring
+
+on:
+  push:
+    branches:
+      - billing/provider-cost-backed-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: billing/provider-cost-backed-v2
+          fetch-depth: 0
+      - name: Patch billing core
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one anchor, found {count}')
+              return text.replace(old, new, 1)
+
+          # ── Prisma schema ─────────────────────────────────────────────
+          schema_path = Path('prisma/schema.prisma')
+          schema = schema_path.read_text()
+          schema = replace_once(
+              schema,
+              '  refundTransactionId  String?\n  error                String?      @db.Text',
+              '  refundTransactionId  String?\n  billingQuoteId       String?\n  creditReservationId  String?\n  error                String?      @db.Text',
+              'GenerationRun billing columns',
+          )
+          if 'model ProviderPrice {' not in schema:
+              schema += r'''
+
+model ProviderPrice {
+  id             String   @id
+  provider       String
+  model          String
+  operation      String
+  billingUnit    String
+  unitPriceUsd   Float
+  unitsPerPrice  Float    @default(1)
+  sourceUrl      String   @db.Text
+  pricingVersion String
+  active         Boolean  @default(true)
+  verifiedAt     DateTime
+  effectiveFrom  DateTime @default(now())
+  effectiveUntil DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([provider, model, operation])
+  @@index([active, verifiedAt])
+}
+
+model CommercialPricingPolicy {
+  id                         String   @id @default("default")
+  creditValueUsd             Float    @default(0.01)
+  targetGrossMarginPct       Float    @default(0.35)
+  providerSafetyBufferPct    Float    @default(0.05)
+  fxSafetyBufferPct          Float    @default(0.05)
+  gatewayFeeReservePct       Float    @default(0.03)
+  infrastructureReservePct   Float    @default(0.03)
+  minimumChargeCredits       Int      @default(1)
+  priceMaxAgeHours           Int      @default(1080)
+  quoteTtlMinutes            Int      @default(15)
+  billingEnabled             Boolean  @default(true)
+  updatedAt                  DateTime @updatedAt
+}
+
+model BillingQuote {
+  id               String   @id
+  userId           String
+  projectId        String?
+  operation        String
+  status           String   @default("open")
+  pricingVersion   String
+  providerCostUsd  Float
+  bufferedCostUsd  Float
+  customerPriceUsd Float
+  creditsRequired  Int
+  breakdown        String   @db.Text
+  policySnapshot   String   @db.Text
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([status, expiresAt])
+}
+
+model CreditReservation {
+  id               String   @id
+  userId           String
+  quoteId          String   @unique
+  referenceId      String?
+  operation        String
+  reservedCredits  Int
+  capturedCredits  Int      @default(0)
+  releasedCredits  Int      @default(0)
+  status           String   @default("reserved")
+  idempotencyKey   String   @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([referenceId])
+}
+
+model ProviderUsageLedger {
+  id                String   @id
+  userId            String
+  projectId         String?
+  sceneId           String?
+  generationRunId   String?
+  reservationId     String?
+  provider          String
+  model             String
+  operation         String
+  billingUnit       String
+  quantity          Float
+  providerCostUsd   Float
+  customerCredits   Int
+  customerValueUsd  Float
+  grossProfitUsd    Float
+  grossMarginPct    Float
+  providerTaskId    String?
+  pricingVersion    String
+  status            String   @default("captured")
+  idempotencyKey    String   @unique
+  submittedAt       DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([provider, model])
+  @@index([generationRunId])
+}
+'''
+          schema_path.write_text(schema)
+
+          # ── Generate-video API: quote + atomic reservation ─────────────
+          route_path = Path('src/app/api/generate-video/route.ts')
+          route = route_path.read_text()
+          route = route.replace('import { checkTokens, deductTokensForOperation, refundTokens } from "@/lib/tokens";\n', 'import { refundTokens } from "@/lib/tokens";\n')
+          route = route.replace('import { PRICING } from "@/lib/pricing";\n', '')
+          route = route.replace('import { getEngineChargeInfo } from "@/lib/storefront";\n', '')
+          route = route.replace('import { resolveModelForRequest } from "@/lib/video-models";\n', '')
+          insert_after = 'import { zaiErrorResponse } from "@/lib/zai-errors";\n'
+          billing_imports = '''import {\n  buildProjectGenerationQuoteLines,\n} from "@/lib/project-generation-quote";\nimport {\n  createBillingQuote,\n  getBillingQuote,\n  releaseReservationRemainder,\n  reserveBillingQuote,\n  type BillingQuoteLine,\n} from "@/lib/credit-reservations";\n'''
+          if billing_imports not in route:
+              route = replace_once(route, insert_after, insert_after + billing_imports, 'generate route billing imports')
+
+          start = route.find('function hasProviderReference(')
+          end = route.find('\nasync function reconcileSafeReferenceDownloadFailure', start)
+          if start >= 0 and end > start:
+              route = route[:start] + route[end+1:]
+
+          route = route.replace('    refundTransactionId: string | null;\n    error: string | null;', '    refundTransactionId: string | null;\n    creditReservationId: string | null;\n    error: string | null;')
+
+          old_refund = '''  let refundTransactionId = run.refundTransactionId;\n  if (run.totalTokens > 0 && !refundTransactionId) {'''
+          new_refund = '''  let refundTransactionId = run.refundTransactionId;\n  if (run.creditReservationId && !refundTransactionId) {\n    const released = await releaseReservationRemainder({\n      reservationId: run.creditReservationId,\n      userId,\n      reason: `Generation run ${run.id}: explicit pre-submission reference failure`,\n    });\n    if (released.creditsReleased > 0 || released.alreadyReleased) {\n      refundTransactionId = `reservation:${run.creditReservationId}:released`;\n    }\n  } else if (run.totalTokens > 0 && !refundTransactionId) {'''
+          route = replace_once(route, old_refund, new_refund, 'reservation reconciliation')
+
+          route = replace_once(
+              route,
+              '    const { projectId, retry = false } = await req.json();',
+              '    const { projectId, retry = false, quoteId } = await req.json();',
+              'quoteId request body',
+          )
+
+          charges_start = route.find('    const sceneCharges = await Promise.all(')
+          charges_end = route.find('\n    let run;', charges_start)
+          if charges_start < 0 or charges_end < 0:
+              raise SystemExit('generation pricing block anchors missing')
+          quote_block = r'''    const currentBilling = await buildProjectGenerationQuoteLines({ projectId, userId });
+    const billedSceneIds = new Set(
+      currentBilling.lines
+        .filter((line) => line.lineKey.startsWith("video:"))
+        .map((line) => line.sceneId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const processingSceneIds = new Set(scenesToProcess.map((scene) => scene.id));
+    if (
+      billedSceneIds.size !== processingSceneIds.size ||
+      [...processingSceneIds].some((sceneId) => !billedSceneIds.has(sceneId))
+    ) {
+      return NextResponse.json({
+        success: false,
+        error: "Project generation state changed while pricing. Refresh the project and request a new cost quote.",
+        code: "BILLING_SCOPE_CHANGED",
+      }, { status: 409 });
+    }
+
+    const lineSignature = (lines: BillingQuoteLine[]) => JSON.stringify(
+      [...lines]
+        .map((line) => ({
+          lineKey: line.lineKey,
+          provider: line.provider,
+          model: line.model,
+          operation: line.operation,
+          quantity: line.quantity,
+          credits: line.credits,
+          pricingVersion: line.pricingVersion,
+        }))
+        .sort((a, b) => a.lineKey.localeCompare(b.lineKey)),
+    );
+
+    let billingQuote;
+    if (typeof quoteId === "string" && quoteId.trim()) {
+      billingQuote = await getBillingQuote(quoteId.trim());
+      if (
+        !billingQuote ||
+        billingQuote.userId !== userId ||
+        billingQuote.projectId !== projectId ||
+        billingQuote.status !== "open" ||
+        billingQuote.expiresAt.getTime() <= Date.now() ||
+        lineSignature(billingQuote.breakdown) !== lineSignature(currentBilling.lines)
+      ) {
+        return NextResponse.json({
+          success: false,
+          error: "The generation price changed or expired. Review the refreshed cost before generating.",
+          code: "BILLING_QUOTE_STALE",
+        }, { status: 409 });
+      }
+    } else {
+      billingQuote = await createBillingQuote({
+        userId,
+        projectId,
+        operation: "project_generation",
+        lines: currentBilling.lines,
+        policy: currentBilling.policy,
+      });
+    }
+
+    const totalTokensNeeded = billingQuote.creditsRequired;
+    const totalCostUsd = billingQuote.providerCostUsd;
+    const tokensPerScene = Math.ceil(totalTokensNeeded / scenesToProcess.length);
+    const costUsdPerScene = totalCostUsd / scenesToProcess.length;
+'''
+          route = route[:charges_start] + quote_block + route[charges_end:]
+
+          route = replace_once(
+              route,
+              '          costUsdPerScene,\n        },',
+              '          costUsdPerScene,\n          billingQuoteId: billingQuote.id,\n        },',
+              'GenerationRun quote link',
+          )
+
+          deduction_start = route.find('    const deduction = await deductTokensForOperation({')
+          deduction_end_marker = '    await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });'
+          deduction_end = route.find(deduction_end_marker, deduction_start)
+          if deduction_start < 0 or deduction_end < 0:
+              raise SystemExit('generation deduction block anchors missing')
+          deduction_end += len(deduction_end_marker)
+          reserve_block = r'''    let reservationResult;
+    try {
+      reservationResult = await reserveBillingQuote({
+        quoteId: billingQuote.id,
+        userId,
+        referenceId: run.id,
+        idempotencyKey: `generation:${run.id}:reservation`,
+      });
+    } catch (error) {
+      await db.generationRun.update({
+        where: { id: run.id },
+        data: { status: "failed", activeKey: null, error: error instanceof Error ? error.message : "Credit reservation failed" },
+      }).catch(() => undefined);
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : "Could not reserve generation credits",
+        code: "CREDIT_RESERVATION_FAILED",
+      }, { status: 402 });
+    }
+
+    await db.generationRun.update({
+      where: { id: run.id },
+      data: {
+        status: "running",
+        billingQuoteId: billingQuote.id,
+        creditReservationId: reservationResult.reservation.id,
+      },
+    });
+    await db.videoProject.update({ where: { id: projectId }, data: { status: "generating" } });'''
+          route = route[:deduction_start] + reserve_block + route[deduction_end:]
+          route = route.replace('      tokensCharged: totalTokensNeeded,\n      remainingTokens: deduction.remainingTokens,', '      tokensCharged: 0,\n      creditsReserved: totalTokensNeeded,\n      remainingTokens: reservationResult.wallet.availableCredits,')
+          route_path.write_text(route)
+
+          # ── Durable generation worker: capture only accepted provider work ──
+          worker_path = Path('scripts/generation-worker.ts')
+          worker = worker_path.read_text()
+          worker = replace_once(
+              worker,
+              'import { autoNarrateScene } from "@/lib/narration";\n',
+              'import { autoNarrateScene } from "@/lib/narration";\nimport { captureReservedQuoteLine, releaseReservationRemainder } from "@/lib/credit-reservations";\n',
+              'worker billing import',
+          )
+          worker = replace_once(
+              worker,
+              '    videoModel: string | null;\n  };\n}): Promise<string> {',
+              '    videoModel: string | null;\n  };\n  billing: { userId: string; projectId: string; reservationId: string };\n}): Promise<string> {',
+              'submit billing parameter',
+          )
+          worker = replace_once(
+              worker,
+              '  const { runId, scene, videoSize, origin, ctx } = opts;',
+              '  const { runId, scene, videoSize, origin, ctx, billing } = opts;',
+              'submit billing destructure',
+          )
+          worker = replace_once(
+              worker,
+              '''  await db.videoScene.update({\n    where: { id: scene.id },\n    data: { taskId, status: "generating", errorMessage: null },\n  });\n  await heartbeat(runId);'''.replace('\\n','\n'),
+              '''  await db.videoScene.update({\n    where: { id: scene.id },\n    data: { taskId, status: "generating", errorMessage: null },\n  });\n  await captureReservedQuoteLine({\n    reservationId: billing.reservationId,\n    lineKey: `video:${scene.id}`,\n    userId: billing.userId,\n    projectId: billing.projectId,\n    sceneId: scene.id,\n    generationRunId: runId,\n    providerTaskId: taskId,\n  });\n  await heartbeat(runId);'''.replace('\\n','\n'),
+              'video usage capture',
+          )
+          worker = replace_once(
+              worker,
+              '  ctx: { style: string; characters: CharacterLike[] };\n}): Promise<boolean> {',
+              '  ctx: { style: string; characters: CharacterLike[] };\n  billing: { userId: string; projectId: string; reservationId: string };\n}): Promise<boolean> {',
+              'thumbnail billing parameter',
+          )
+          worker = replace_once(
+              worker,
+              '  const { runId, scene, thumbSize, ctx } = opts;',
+              '  const { runId, scene, thumbSize, ctx, billing } = opts;',
+              'thumbnail billing destructure',
+          )
+          worker = replace_once(
+              worker,
+              '    const imageUrl = await saveGeneratedFile(',
+              '''    await captureReservedQuoteLine({\n      reservationId: billing.reservationId,\n      lineKey: `thumbnail:${scene.id}`,\n      userId: billing.userId,\n      projectId: billing.projectId,\n      sceneId: scene.id,\n      generationRunId: runId,\n    });\n    const imageUrl = await saveGeneratedFile('''.replace('\\n','\n'),
+              'thumbnail usage capture',
+          )
+          worker = replace_once(
+              worker,
+              '  taskId: string;\n}): Promise<"completed" | "waiting" | "failed"> {',
+              '  taskId: string;\n  billing: { userId: string; projectId: string; reservationId: string };\n}): Promise<"completed" | "waiting" | "failed"> {',
+              'poll billing parameter',
+          )
+          worker = replace_once(
+              worker,
+              '    void autoNarrateScene(opts.sceneId);',
+              '    await autoNarrateScene(opts.sceneId, { reservationId: opts.billing.reservationId, generationRunId: opts.runId });',
+              'await reserved narration',
+          )
+          worker = replace_once(
+              worker,
+              '''  const ambiguous = scenes.find((scene) => scene.status === "submitting" && !scene.taskId);''',
+              '''  const reservationId = run.creditReservationId;\n  if (!reservationId) {\n    await markReconciliation(run.id, project.id, "Generation run has no prepaid credit reservation; provider execution is blocked");\n    return;\n  }\n\n  const billing = { userId: run.userId, projectId: project.id, reservationId };\n\n  const ambiguous = scenes.find((scene) => scene.status === "submitting" && !scene.taskId);'''.replace('\\n','\n'),
+              'worker reservation gate',
+          )
+          worker = replace_once(
+              worker,
+              '      await submitSceneTask({ runId: run.id, scene, videoSize, origin, ctx });',
+              '      await submitSceneTask({ runId: run.id, scene, videoSize, origin, ctx, billing });',
+              'submit billing call',
+          )
+          worker = replace_once(
+              worker,
+              '    await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx });',
+              '    await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx, billing });',
+              'thumbnail billing call',
+          )
+          worker = replace_once(
+              worker,
+              '    const state = await pollSubmittedTask({ runId: run.id, sceneId: scene.id, taskId: scene.taskId! });',
+              '    const state = await pollSubmittedTask({ runId: run.id, sceneId: scene.id, taskId: scene.taskId!, billing });',
+              'poll billing call',
+          )
+          worker = replace_once(
+              worker,
+              '''  if (allVideosDone) {\n    const incompleteProjectScenes = await db.videoScene.count({'''.replace('\\n','\n'),
+              '''  if (allVideosDone) {\n    const narrationPending = finalScenes.some((scene) => Boolean(scene.dialogue?.trim()) && !scene.narrationUrl);\n    if (!narrationPending) {\n      await releaseReservationRemainder({\n        reservationId,\n        userId: run.userId,\n        reason: `Generation run ${run.id} completed with no remaining provider work`,\n      });\n    }\n    const incompleteProjectScenes = await db.videoScene.count({'''.replace('\\n','\n'),
+              'completed reservation release',
+          )
+          worker_path.write_text(worker)
+
+          # ── Narration: Qwen character pricing + reserved project credit ──
+          narration_path = Path('src/lib/narration.ts')
+          narration = narration_path.read_text()
+          narration = narration.replace('import { PRICING } from "@/lib/pricing";\n', '')
+          narration = narration.replace('import { deductTokensForOperation } from "@/lib/tokens";\n', '')
+          narration = narration.replace('} from "@/lib/ai-provider-router";', '} from "@/lib/ai-provider-router-qwen";')
+          narration = replace_once(
+              narration,
+              'import path from "path";\n',
+              '''import path from "path";\nimport { resolveQwenTtsModel } from "@/lib/qwen-tts";\nimport { getCommercialPricingPolicy, quoteProviderCharge, BillingSafetyError } from "@/lib/provider-cost-billing";\nimport { createBillingQuote, reserveBillingQuote, captureReservedQuoteLine, type BillingQuoteLine } from "@/lib/credit-reservations";\n'''.replace('\\n','\n'),
+              'narration billing imports',
+          )
+          narration = replace_once(
+              narration,
+              '  style?: string;\n}): Promise<NarrationResult> {',
+              '  style?: string;\n  billingReservationId?: string;\n  generationRunId?: string;\n}): Promise<NarrationResult> {',
+              'narration billing options',
+          )
+          narration = replace_once(
+              narration,
+              '      project: { select: { userId: true } },',
+              '      project: { select: { id: true, userId: true } },',
+              'narration project id select',
+          )
+          old_provider = '''  const providerSettings = await getAIProviderSettings();\n  const providerModel = providerSettings.ttsProvider === "elevenlabs"\n    ? (providerSettings.ttsModel || "eleven_v3")\n    : (providerSettings.ttsModel || "zai-tts");'''.replace('\\n','\n')
+          new_provider = '''  const providerSettings = await getAIProviderSettings();\n  if (providerSettings.ttsProvider !== "qwen") {\n    throw new BillingSafetyError(\n      "UNPRICED_TTS_PROVIDER",\n      `Narration provider ${providerSettings.ttsProvider} is not enabled for cost-backed billing. Configure Qwen or add a verified provider price first.`,\n    );\n  }\n  const providerModel = resolveQwenTtsModel(providerSettings.ttsModel);'''.replace('\\n','\n')
+          narration = replace_once(narration, old_provider, new_provider, 'Qwen provider model')
+          narration = narration.replace('    providerVoiceConfig: providerSettings.ttsProvider === "elevenlabs"\n      ? {\n          default: providerSettings.elevenLabsDefaultVoiceId,\n          map: providerSettings.elevenLabsVoiceMap,\n        }\n      : null,', '    providerVoiceConfig: null,')
+          narration = replace_once(
+              narration,
+              '''  const operationKey = `tts:${userId}:${scene.id}:${fingerprint}`;\n  const tokensToCharge = chunks.length * PRICING.tts.tokens;\n  const costUsd = chunks.length * PRICING.tts.costUsd;'''.replace('\\n','\n'),
+              '''  const operationKey = `tts:${userId}:${scene.id}:${fingerprint}`;\n  const totalCharacters = chunks.reduce((sum, chunk) => sum + chunk.text.length, 0);\n  const policy = await getCommercialPricingPolicy();\n  const ttsCharge = await quoteProviderCharge({\n    provider: "qwen",\n    model: providerModel,\n    operation: "tts",\n    quantity: Math.max(1, totalCharacters),\n    policy,\n  });\n  const ttsLine: BillingQuoteLine = {\n    ...ttsCharge,\n    lineKey: `tts:${scene.id}`,\n    label: `Qwen narration (${Math.max(1, totalCharacters)} chars)`,\n    sceneId: scene.id,\n  };'''.replace('\\n','\n'),
+              'Qwen character charge',
+          )
+
+          deduction_start = narration.find('  const deduction = await deductTokensForOperation({')
+          existing_file_marker = '  if (audioFileExists(finalFilename)) {'
+          existing_file_pos = narration.find(existing_file_marker, deduction_start)
+          if deduction_start < 0 or existing_file_pos < 0:
+              raise SystemExit('narration legacy deduction block anchors missing')
+          reserve_code = r'''  let reservationId = opts.billingReservationId || "";
+  let availableCredits: number | undefined;
+  if (!reservationId) {
+    // Reuse a still-open project reservation after an interrupted automatic
+    // narration before selling the user the same reserved TTS line twice.
+    const reusable = await db.$queryRaw<Array<{ id: string; breakdown: string }>>`
+      SELECT r."id", q."breakdown"
+      FROM "CreditReservation" r
+      JOIN "BillingQuote" q ON q."id" = r."quoteId"
+      WHERE r."userId" = ${userId}
+        AND q."projectId" = ${scene.project.id}
+        AND r."status" IN ('reserved', 'partially_captured')
+      ORDER BY r."createdAt" DESC
+      LIMIT 10
+    `;
+    const matched = reusable.find((candidate) => {
+      try {
+        const lines = JSON.parse(candidate.breakdown) as Array<{ lineKey?: string }>;
+        return Array.isArray(lines) && lines.some((item) => item.lineKey === ttsLine.lineKey);
+      } catch {
+        return false;
+      }
+    });
+    if (matched) reservationId = matched.id;
+  }
+  if (!reservationId) {
+    const quote = await createBillingQuote({
+      userId,
+      projectId: scene.project.id,
+      operation: "tts",
+      lines: [ttsLine],
+      policy,
+    });
+    const reserved = await reserveBillingQuote({
+      quoteId: quote.id,
+      userId,
+      referenceId: scene.id,
+      idempotencyKey: `tts:${userId}:${scene.id}:${fingerprint}:reservation`,
+    });
+    reservationId = reserved.reservation.id;
+    availableCredits = reserved.wallet.availableCredits;
+  }
+  let capturedCredits = 0;
+'''
+          narration = narration[:deduction_start] + reserve_code + narration[existing_file_pos:]
+          narration = narration.replace('      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,\n      remainingTokens: deduction.remainingTokens,\n      transactionId: deduction.transactionId,', '      tokensCharged: 0,\n      remainingTokens: availableCredits,')
+          capture_anchor = '''      const speech = await synthesizeProviderSpeech({\n        input: chunks[i].text,'''.replace('\\n','\n')
+          # Capture the quoted TTS line immediately after the first successful
+          # provider response, never before crossing the provider boundary.
+          speech_end = '''        speed,\n      });'''.replace('\\n','\n')
+          full_speech = capture_anchor + narration.split(capture_anchor,1)[1].split(speech_end,1)[0] + speech_end if capture_anchor in narration else None
+          if full_speech is None:
+              raise SystemExit('narration speech call anchor missing')
+          replacement = full_speech + r'''
+      if (capturedCredits === 0) {
+        const captured = await captureReservedQuoteLine({
+          reservationId,
+          lineKey: ttsLine.lineKey,
+          userId,
+          projectId: scene.project.id,
+          sceneId: scene.id,
+          generationRunId: opts.generationRunId,
+        });
+        capturedCredits = captured.alreadyCaptured ? 0 : captured.creditsCaptured;
+      }'''
+          narration = replace_once(narration, full_speech, replacement, 'narration usage capture')
+          narration = narration.replace('      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,\n      remainingTokens: deduction.remainingTokens,\n      transactionId: deduction.transactionId,', '      tokensCharged: capturedCredits,\n      remainingTokens: availableCredits,')
+          narration = replace_once(
+              narration,
+              'export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResult> {',
+              'export async function autoNarrateScene(sceneId: string, billing?: { reservationId?: string; generationRunId?: string }): Promise<AutoNarrateResult> {',
+              'auto narration billing signature',
+          )
+          narration = replace_once(
+              narration,
+              '      style: scene.narrationStyle || undefined,\n    });',
+              '      style: scene.narrationStyle || undefined,\n      billingReservationId: billing?.reservationId,\n      generationRunId: billing?.generationRunId,\n    });',
+              'auto narration billing context',
+          )
+          narration_path.write_text(narration)
+          PY
+      - name: Validate patch structure
+        run: |
+          git diff --check
+          grep -q 'creditReservationId' prisma/schema.prisma
+          grep -q 'reserveBillingQuote' src/app/api/generate-video/route.ts
+          grep -q 'captureReservedQuoteLine' scripts/generation-worker.ts
+          grep -q 'ai-provider-router-qwen' src/lib/narration.ts
+      - name: Commit core wiring and remove helper workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/_temp-billing-v2-core-patch.yml
+          git add prisma/schema.prisma src/app/api/generate-video/route.ts scripts/generation-worker.ts src/lib/narration.ts
+          git diff --cached --check
+          git commit -m "Wire cost-backed reservations through provider execution"
+          git push origin HEAD:billing/provider-cost-backed-v2
