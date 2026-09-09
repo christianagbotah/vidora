@@ -122,8 +122,17 @@ async function updateProviderPrice(input: Record<string, unknown>): Promise<void
   const requestedVersion = text(input.pricingVersion);
 
   if (!new Set(["zai", "qwen"]).has(provider)) throw new Error("Unsupported provider price provider");
-  if (!new Set(["video_generation", "image_generation", "tts"]).has(operation)) throw new Error("Unsupported provider price operation");
-  if (!new Set(["request", "image", "character"]).has(billingUnit)) throw new Error("Unsupported provider billing unit");
+  if (!new Set([
+    "video_generation",
+    "image_generation",
+    "tts",
+    "text_input",
+    "text_output",
+    "vision_input",
+    "vision_output",
+    "asr",
+  ]).has(operation)) throw new Error("Unsupported provider price operation");
+  if (!new Set(["request", "image", "character", "token", "minute"]).has(billingUnit)) throw new Error("Unsupported provider billing unit");
   if (!model || model.length > 160) throw new Error("Provider model is required");
   if (!Number.isFinite(unitPriceUsd) || unitPriceUsd <= 0) throw new Error("Provider unit price must be greater than zero");
   if (!Number.isFinite(unitsPerPrice) || unitsPerPrice <= 0) throw new Error("Provider units-per-price must be greater than zero");
