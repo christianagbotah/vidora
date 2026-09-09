@@ -1,0 +1,38 @@
+name: Apply billing core patch on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'billing/provider-cost-backed-v2'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: billing/provider-cost-backed-v2
+          fetch-depth: 0
+      - name: Extract and run core patch
+        run: |
+          awk '
+            /python3 - <<.PY./ { capture=1; next }
+            capture && /^          PY$/ { exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/_temp-billing-v2-core-patch.yml > /tmp/apply-billing-v2.py
+          test -s /tmp/apply-billing-v2.py
+          python3 /tmp/apply-billing-v2.py
+          git diff --check
+      - name: Commit exact core patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/_temp-billing-v2-core-patch.yml .github/workflows/_temp-billing-v2-pr-trigger.yml
+          git add prisma/schema.prisma src/app/api/generate-video/route.ts scripts/generation-worker.ts src/lib/narration.ts
+          git diff --cached --check
+          git commit -m "Wire cost-backed reservations through provider execution"
+          git push origin HEAD:billing/provider-cost-backed-v2
