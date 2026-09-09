@@ -1,8 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { calculateCommercialCharge, DEFAULT_COMMERCIAL_PRICING_POLICY } from "@/lib/provider-cost-billing";
+import { calculateCommercialCharge, type CommercialPricingPolicy } from "@/lib/provider-cost-billing";
 import { calculateCreditPackageEconomics } from "@/lib/package-billing-safety";
 
-const policy = { ...DEFAULT_COMMERCIAL_PRICING_POLICY };
+const policy: CommercialPricingPolicy = {
+  creditValueUsd: 0.01,
+  targetGrossMarginPct: 0.35,
+  providerSafetyBufferPct: 0.05,
+  fxSafetyBufferPct: 0.05,
+  gatewayFeeReservePct: 0.03,
+  infrastructureReservePct: 0.03,
+  minimumChargeCredits: 1,
+  priceMaxAgeHours: 1080,
+  quoteTtlMinutes: 15,
+  billingEnabled: true,
+};
 
 describe("provider-cost-backed commercial pricing", () => {
   test("customer charge covers buffered COGS and configured margin", () => {
@@ -14,8 +25,8 @@ describe("provider-cost-backed commercial pricing", () => {
 
   test("rounds upward to whole credits instead of undercharging", () => {
     const charge = calculateCommercialCharge(0.115 / 10_000 * 563, policy);
-    expect(charge.credits).toBe(Math.ceil(charge.customerPriceUsdBeforeRounding / policy.creditValueUsd));
-    expect(charge.customerValueUsd).toBeGreaterThanOrEqual(charge.customerPriceUsdBeforeRounding);
+    expect(charge.credits).toBe(Math.ceil(charge.customerPriceUsd / policy.creditValueUsd));
+    expect(charge.customerValueUsd).toBeGreaterThanOrEqual(charge.customerPriceUsd);
   });
 
   test("unsafe margin policy fails closed", () => {
