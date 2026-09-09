@@ -3,56 +3,49 @@ import { db } from "@/lib/db";
 import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
-import { copyFile, unlink, writeFile } from "fs/promises";
+import { unlink, writeFile } from "fs/promises";
 import {
   DUBBING_LANGUAGES,
   DUBBING_LANGUAGE_GROUPS,
   getDubbingLanguage,
 } from "@/lib/dubbing-languages";
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
+import {
+  captureMeteredZaiTextOperation,
+  reserveMeteredZaiTextOperation,
+} from "@/lib/zai-metered-billing";
+import {
+  captureImmediateProviderOperation,
+  reserveImmediateProviderOperation,
+} from "@/lib/immediate-provider-billing";
+import { BillingSafetyError } from "@/lib/provider-cost-billing";
+import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
+import {
+  resolveQwenTtsModel,
+  splitQwenTtsInput,
+  synthesizeQwenTts,
+} from "@/lib/qwen-tts";
 
 export const runtime = "nodejs";
 const execFileAsync = promisify(execFile);
 
-function splitTextIntoChunks(text: string, maxLen = 900): string[] {
-  if (text.length <= maxLen) return [text];
-  const sentences = text.match(/[^.!?。！？]+[.!?。！？]+/g) || [text];
-  const chunks: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    if ((current + sentence).length <= maxLen) {
-      current += sentence;
-    } else {
-      if (current) chunks.push(current.trim());
-      current = sentence;
-    }
-  }
-  if (current) chunks.push(current.trim());
-  return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
-}
-
 async function concatAudioFiles(chunkPaths: string[], outputPath: string): Promise<boolean> {
-  if (chunkPaths.length === 1) {
-    try {
-      await copyFile(chunkPaths[0], outputPath);
-      return true;
-    } catch (err) {
-      console.error("[dubbing] single-chunk copy failed:", err);
-      return false;
-    }
-  }
+  if (chunkPaths.length === 0) return false;
 
   const listFile = outputPath + ".concat.txt";
   const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
   try {
     await writeFile(listFile, listContent, "utf8");
+    // Always normalize the final dubbing asset to PCM WAV. Qwen may return
+    // either MP3 or WAV, and copying a single MP3 into a .wav path would create
+    // a mislabeled media file. Transcoding also makes mixed chunk formats safe.
     await execFileAsync("ffmpeg", [
-      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
-    ], { timeout: 30_000 });
+      "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", listFile,
+      "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", outputPath,
+    ], { timeout: 60_000 });
     return true;
   } catch (err) {
     console.error("[dubbing] ffmpeg concat failed:", err);
@@ -111,26 +104,42 @@ export async function POST(
     }
 
     try {
+      let tokensCharged = 0;
       let cleanTranslation = translation.translatedText?.trim() || "";
       if (!cleanTranslation) {
-        const translationCharge = await deductTokensForOperation({
+        const systemPrompt = `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`;
+        const lineKeyPrefix = `dubbing:${translation.id}:translate`;
+        const translationBilling = await reserveMeteredZaiTextOperation({
           userId,
-          operation: "llm",
-          description: `Dubbing translation (${langName}) for scene ${scene.sceneNumber}`,
+          projectId: scene.projectId,
+          sceneId: id,
           referenceId: translation.id,
-          idempotencyKey: `dubbing:${translation.id}:translate`,
+          idempotencyKey: `${lineKeyPrefix}:reservation`,
+          lineKeyPrefix,
+          label: `Dubbing translation (${langName}) for scene ${scene.sceneNumber}`,
+          systemPrompt,
+          userPrompt: sourceText,
+          maxOutputTokens: 4_000,
+          requireConfiguredPrimary: false,
         });
-        if (!translationCharge.success) {
-          await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => undefined);
-          return NextResponse.json(
-            { success: false, error: translationCharge.error || "Insufficient tokens for translation" },
-            { status: 402 }
-          );
-        }
+        const captures = await captureMeteredZaiTextOperation({
+          reservationId: translationBilling.reservation.id,
+          lineKeyPrefix,
+          userId,
+          projectId: scene.projectId,
+          sceneId: id,
+        });
+        tokensCharged += captures.reduce(
+          (sum, capture) => sum + (capture.alreadyCaptured ? 0 : capture.creditsCaptured),
+          0,
+        );
 
         const translatedText = await zai.chat({
-          systemPrompt: `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`,
+          systemPrompt,
           userPrompt: sourceText,
+          model: translationBilling.model,
+          thinking: "disabled",
+          extra: { max_tokens: 4_000 },
           retry: { label: `translate to ${lang}`, timeoutMs: 30_000, maxRetries: 2 },
         });
 
@@ -157,54 +166,81 @@ export async function POST(
           translation: translatedOnly,
           translatedOnly: true,
           tokensChargedForVoice: 0,
+          tokensCharged,
         });
       }
 
-      const chunks = splitTextIntoChunks(cleanTranslation);
+      const providerSettings = await getAIProviderSettings();
+      if (providerSettings.ttsProvider !== "qwen") {
+        throw new BillingSafetyError(
+          "UNPRICED_DUBBING_TTS_PROVIDER",
+          `Dubbing TTS provider ${providerSettings.ttsProvider} does not have a verified Billing v2 catalog. Configure Qwen TTS before paid dubbing.`,
+        );
+      }
+      const qwenModel = resolveQwenTtsModel(providerSettings.ttsModel);
+      const chunks = splitQwenTtsInput(cleanTranslation);
+      if (chunks.length === 0) throw new Error("Translation produced no billable speech chunks");
+
       ensureAudioDir();
       const chunkPaths: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
-        const ttsCharge = await deductTokensForOperation({
+        const lineKey = `dubbing:${translation.id}:tts:${i}`;
+        const ttsBilling = await reserveImmediateProviderOperation({
           userId,
-          operation: "tts",
-          description: `Dubbing voice (${langName}) chunk ${i + 1}/${chunks.length} for scene ${scene.sceneNumber}`,
+          projectId: scene.projectId,
           referenceId: translation.id,
-          idempotencyKey: `dubbing:${translation.id}:tts:${i}`,
+          provider: "qwen",
+          model: qwenModel,
+          operation: "tts",
+          quantity: chunks[i].length,
+          lineKey,
+          label: `Dubbing voice (${langName}) chunk ${i + 1}/${chunks.length} for scene ${scene.sceneNumber}`,
+          sceneId: id,
+          idempotencyKey: `${lineKey}:reservation`,
         });
-        if (!ttsCharge.success) {
-          await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => undefined);
-          return NextResponse.json(
-            { success: false, error: ttsCharge.error || "Insufficient tokens for dubbing voice generation" },
-            { status: 402 }
-          );
-        }
+        const capture = await captureImmediateProviderOperation({
+          reservationId: ttsBilling.reservation.id,
+          lineKey,
+          userId,
+          projectId: scene.projectId,
+          sceneId: id,
+        });
+        tokensCharged += capture.alreadyCaptured ? 0 : capture.creditsCaptured;
 
-        const arrayBuffer = await zai.tts({
+        const speech = await synthesizeQwenTts({
           input: chunks[i],
           voice,
-          retry: { label: `tts ${lang} chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
+          language: lang,
+          model: qwenModel,
         });
-        const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.wav`;
-        chunkPaths.push(writeAudioFile(chunkFilename, buffer));
+        if (speech.model !== qwenModel) {
+          throw new Error("Qwen TTS provider model changed after billing reservation");
+        }
+        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.${speech.extension}`;
+        chunkPaths.push(writeAudioFile(chunkFilename, speech.buffer));
       }
 
       const finalFilename = `dub_${id}_${lang}_${Date.now()}.wav`;
       const finalPath = getAudioPath(finalFilename);
       const concatenated = await concatAudioFiles(chunkPaths, finalPath);
-      let narrationUrl: string;
-      if (concatenated) {
-        narrationUrl = `/api/audio/${finalFilename}`;
-        for (const p of chunkPaths) deleteAudioFile(path.basename(p));
-      } else {
-        narrationUrl = `/api/audio/${path.basename(chunkPaths[0])}`;
+      if (!concatenated) {
+        throw new Error("Failed to assemble dubbed audio after provider synthesis");
       }
+      const narrationUrl = `/api/audio/${finalFilename}`;
+      for (const p of chunkPaths) deleteAudioFile(path.basename(p));
 
       const updated = await db.sceneTranslation.update({
         where: { id: translation.id },
         data: { narrationUrl, voiceId: voice, status: "ready" },
       });
-      return NextResponse.json({ success: true, translation: updated, chunks: chunks.length });
+      return NextResponse.json({
+        success: true,
+        translation: updated,
+        chunks: chunks.length,
+        provider: "qwen",
+        providerModel: qwenModel,
+        tokensCharged,
+      });
     } catch (aiError) {
       await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => {});
       return zaiErrorResponse(aiError, { session: authResult.session, logLabel: "dubbing" });
