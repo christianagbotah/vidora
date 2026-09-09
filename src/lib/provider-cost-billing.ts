@@ -36,6 +36,9 @@ export interface CommercialCharge {
   infrastructureReserveUsd: number;
   gatewayFeeReserveUsd: number;
   bufferedCostUsd: number;
+  /** Commercial price before rounding up to whole Vidora credits. */
+  customerPriceUsdBeforeRounding: number;
+  /** Backward-compatible alias for the unrounded commercial price. */
   customerPriceUsd: number;
   credits: number;
   customerValueUsd: number;
@@ -61,7 +64,7 @@ export class BillingSafetyError extends Error {
   }
 }
 
-const DEFAULT_POLICY: CommercialPricingPolicy = {
+export const DEFAULT_COMMERCIAL_PRICING_POLICY: CommercialPricingPolicy = {
   // One Vidora credit is one US cent of customer-facing value. Provider COGS,
   // reserves and target margin determine how many credits an operation costs.
   creditValueUsd: 0.01,
@@ -78,6 +81,8 @@ const DEFAULT_POLICY: CommercialPricingPolicy = {
   quoteTtlMinutes: 15,
   billingEnabled: true,
 };
+
+const DEFAULT_POLICY = DEFAULT_COMMERCIAL_PRICING_POLICY;
 
 interface PolicyRow {
   creditValueUsd: number;
@@ -205,6 +210,7 @@ export function calculateCommercialCharge(
     infrastructureReserveUsd,
     gatewayFeeReserveUsd,
     bufferedCostUsd,
+    customerPriceUsdBeforeRounding: rawCustomerPriceUsd,
     customerPriceUsd: rawCustomerPriceUsd,
     credits,
     customerValueUsd,
