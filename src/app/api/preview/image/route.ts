@@ -6,7 +6,8 @@ import { zaiErrorResponse } from "@/lib/zai-errors";
 import { applyWatermark } from "@/lib/watermark";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { PRICING } from "@/lib/pricing";
+import { getCommercialPricingPolicy, quoteProviderCharge } from "@/lib/provider-cost-billing";
+import { resolveZaiImageBillingModel } from "@/lib/zai-billing-models";
 import { saveGeneratedFile } from "@/lib/generated-store";
 
 export const runtime = "nodejs";
@@ -35,6 +36,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  let imageCost;
+  try {
+    const policy = await getCommercialPricingPolicy();
+    imageCost = await quoteProviderCharge({
+      provider: "zai",
+      model: resolveZaiImageBillingModel(),
+      operation: "image_generation",
+      quantity: 1,
+      policy,
+    });
+  } catch (error) {
+    return zaiErrorResponse(error, {
+      session: authResult.session,
+      fallbackStatus: 409,
+      logLabel: "preview-image-price",
+    });
+  }
+
   const quota = await consumePreviewQuota(userId, "image");
   if (!quota.ok) {
     return NextResponse.json(
@@ -47,11 +66,11 @@ export async function POST(req: NextRequest) {
   await deductTokensForOperation({
     userId,
     operation: "preview_image",
-    description: "Free watermarked image preview provider attempt",
+    description: `Free watermarked image preview provider attempt (${imageCost.model})`,
     referenceId: attemptId,
     idempotencyKey: `preview-image:${attemptId}`,
     customTokens: 0,
-    customCostUsd: PRICING.preview_image.costUsd,
+    customCostUsd: imageCost.providerCostUsd,
   });
 
   const styledPrompt = `${prompt}. Visual style: ${style}, cinematic lighting, high quality, detailed.`;
@@ -78,8 +97,6 @@ export async function POST(req: NextRequest) {
   try {
     watermarkedBuffer = await applyWatermark(Buffer.from(imageBase64, "base64"));
   } catch {
-    // Provider spend already occurred; keep the quota consumed so the free-use
-    // budget remains bounded even if local post-processing fails.
     return NextResponse.json(
       {
         success: false,
@@ -96,6 +113,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     imageUrl: publicUrl,
+    providerModel: imageCost.model,
     watermarked: true,
     previewQuota: quota,
   });
