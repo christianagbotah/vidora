@@ -6,6 +6,10 @@ import {
   resolveZaiImageBillingModel,
   resolveZaiVideoBillingModel,
 } from "@/lib/zai-billing-models";
+import { estimateTextInputTokenCeiling } from "@/lib/zai-metered-billing";
+import { resolveQwenTtsModel } from "@/lib/qwen-tts";
+import { requireReservedQuoteLine } from "@/lib/reserved-quote";
+import type { BillingQuoteLine } from "@/lib/credit-reservations";
 
 const policy: CommercialPricingPolicy = {
   creditValueUsd: 0.01,
@@ -89,5 +93,42 @@ describe("Z.ai billing model resolution", () => {
       if (previous === undefined) delete process.env.ZAI_VIDEO_MODEL;
       else process.env.ZAI_VIDEO_MODEL = previous;
     }
+  });
+});
+
+describe("metered provider safeguards", () => {
+  test("text token preflight uses a conservative UTF-8 byte ceiling", () => {
+    expect(estimateTextInputTokenCeiling("abc")).toBe(3);
+    expect(estimateTextInputTokenCeiling("😀")).toBe(4);
+    expect(estimateTextInputTokenCeiling("x".repeat(200_000))).toBe(128_000);
+  });
+
+  test("legacy Qwen flash configuration resolves to the priced instruction model", () => {
+    expect(resolveQwenTtsModel("qwen3-tts-flash")).toBe("qwen3-tts-instruct-flash");
+    expect(resolveQwenTtsModel("qwen3-tts-instruct-flash")).toBe("qwen3-tts-instruct-flash");
+  });
+
+  test("reserved quote lookup requires the exact line/provider/operation", () => {
+    const line = {
+      lineKey: "video:scene-1",
+      provider: "zai",
+      model: "viduq1-text",
+      operation: "video_generation",
+    } as BillingQuoteLine;
+    expect(requireReservedQuoteLine([line], {
+      lineKey: "video:scene-1",
+      provider: "zai",
+      operation: "video_generation",
+    }).model).toBe("viduq1-text");
+    expect(() => requireReservedQuoteLine([line], {
+      lineKey: "video:scene-1",
+      provider: "zai",
+      operation: "image_generation",
+    })).toThrow();
+    expect(() => requireReservedQuoteLine([line], {
+      lineKey: "video:missing",
+      provider: "zai",
+      operation: "video_generation",
+    })).toThrow();
   });
 });
