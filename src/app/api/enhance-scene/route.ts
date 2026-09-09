@@ -1,12 +1,11 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
-import { zai, cleanLLMOutput } from "@/lib/zai";
+import { cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import {
-  captureMeteredZaiTextOperation,
-  reserveMeteredZaiTextOperation,
-} from "@/lib/zai-metered-billing";
+import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
+import { submitBilledZaiText } from "@/lib/zai-billed-client";
+import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
 
@@ -35,18 +34,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    if (!prompt) {
-      return NextResponse.json(
-        { success: false, error: "Prompt is required" },
-        { status: 400 }
-      );
-    }
-    if (prompt.length > 4_000) {
-      return NextResponse.json(
-        { success: false, error: "Prompt is too long" },
-        { status: 413 }
-      );
-    }
+    if (!prompt) return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
+    if (prompt.length > 4_000) return NextResponse.json({ success: false, error: "Prompt is too long" }, { status: 413 });
 
     const sceneIndex = Number.isFinite(Number(body.sceneIndex)) ? Number(body.sceneIndex) : 0;
     const totalScenes = Number.isFinite(Number(body.totalScenes)) ? Math.max(1, Number(body.totalScenes)) : 1;
@@ -62,16 +51,13 @@ export async function POST(req: NextRequest) {
       "Keep the prompt under 200 words.",
       "Return ONLY the enhanced prompt text, no explanations, quotes, or markdown.",
     ].join("\n");
-
     const userPrompt = [
       `Scene ${sceneIndex + 1} of ${totalScenes}`,
       `Style: ${style}`,
       mood ? `Desired Mood: ${mood}` : "",
       cameraMove ? `Camera: ${cameraMove}` : "Camera: choose the best movement for this scene",
       lighting ? `Lighting: ${lighting}` : "Lighting: choose the best lighting for this scene",
-      "",
-      "Original scene prompt:",
-      prompt,
+      "", "Original scene prompt:", prompt,
     ].filter(Boolean).join("\n");
 
     const operationId = crypto.randomUUID();
@@ -87,40 +73,45 @@ export async function POST(req: NextRequest) {
       maxOutputTokens: 800,
       requireConfiguredPrimary: false,
     });
-    const captures = await captureMeteredZaiTextOperation({
-      reservationId: billing.reservation.id,
-      lineKeyPrefix,
-      userId: authResult.session.userId,
-    });
 
-    const raw = await zai.chat({
+    const result = await submitBilledZaiText({
+      model: billing.model,
       systemPrompt,
       userPrompt,
-      model: billing.model,
+      maxOutputTokens: 800,
       thinking: "disabled",
-      extra: { max_tokens: 800 },
-      retry: { label: "AI Director prompt enhancement", timeoutMs: 45_000, maxRetries: 3 },
+      timeoutMs: 45_000,
     });
-    const enhancedPrompt = cleanLLMOutput(raw) || prompt;
+    if (!result.usage) {
+      throw new Error("Z.ai returned no usage metadata; the prepaid reserve is held for reconciliation rather than guessing the charge");
+    }
+    const inputCapture = await captureActualMeteredLine({
+      reservationId: billing.reservation.id,
+      lineKey: `${lineKeyPrefix}:input`,
+      userId: authResult.session.userId,
+      actualQuantity: result.usage.inputTokens,
+    });
+    const outputCapture = await captureActualMeteredLine({
+      reservationId: billing.reservation.id,
+      lineKey: `${lineKeyPrefix}:output`,
+      userId: authResult.session.userId,
+      actualQuantity: result.usage.outputTokens,
+    });
+    const finalized = await finalizeMeteredReservation({
+      reservationId: billing.reservation.id,
+      userId: authResult.session.userId,
+      reason: "AI Director actual Z.ai token usage settled",
+    });
 
+    const enhancedPrompt = cleanLLMOutput(result.content) || prompt;
     let aiMood = mood || "cinematic";
     let aiCamera = cameraMove || "tracking shot";
     let aiLighting = lighting || "golden hour";
     const lower = enhancedPrompt.toLowerCase();
-    for (const value of MOODS) {
-      if (lower.includes(value)) { aiMood = value; break; }
-    }
-    for (const value of CAMERA_MOVES) {
-      if (lower.includes(value)) { aiCamera = value; break; }
-    }
-    for (const value of LIGHTING) {
-      if (lower.includes(value)) { aiLighting = value; break; }
-    }
+    for (const value of MOODS) if (lower.includes(value)) { aiMood = value; break; }
+    for (const value of CAMERA_MOVES) if (lower.includes(value)) { aiCamera = value; break; }
+    for (const value of LIGHTING) if (lower.includes(value)) { aiLighting = value; break; }
 
-    const tokensCharged = captures.reduce(
-      (sum, capture) => sum + (capture.alreadyCaptured ? 0 : capture.creditsCaptured),
-      0,
-    );
     return NextResponse.json({
       success: true,
       enhancedPrompt,
@@ -128,22 +119,15 @@ export async function POST(req: NextRequest) {
       cameraMove: aiCamera,
       lighting: aiLighting,
       providerModel: billing.model,
-      tokensCharged,
-      remainingTokens: billing.wallet.availableCredits,
+      tokensCharged: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
+      creditsReleased: finalized.creditsReleased,
+      remainingTokens: finalized.wallet.availableCredits,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
-      session: authResult.session,
-      logLabel: "enhance-scene",
-    });
+    return zaiErrorResponse(error, { session: authResult.session, logLabel: "enhance-scene" });
   }
 }
 
 export async function GET() {
-  return NextResponse.json({
-    success: true,
-    cameraMoves: CAMERA_MOVES,
-    moods: MOODS,
-    lighting: LIGHTING,
-  });
+  return NextResponse.json({ success: true, cameraMoves: CAMERA_MOVES, moods: MOODS, lighting: LIGHTING });
 }
