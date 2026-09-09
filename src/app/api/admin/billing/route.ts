@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -55,9 +56,6 @@ async function billingSummary() {
   const reservedCredits = Number(reservations[0]?.credits ?? 0);
   const outstandingCredits = availableCredits + reservedCredits;
   const outstandingFaceValueUsd = outstandingCredits * policy.creditValueUsd;
-  // This is a conservative funding target for provider COGS, not an account
-  // balance fetched from Z.ai/Qwen. It reflects the fraction of outstanding
-  // customer value that is not allocated to gross margin or gateway reserve.
   const providerReserveRequiredUsd = Math.max(
     0,
     outstandingFaceValueUsd * (1 - policy.targetGrossMarginPct - policy.gatewayFeeReservePct),
@@ -92,24 +90,87 @@ async function billingSummary() {
   };
 }
 
+async function statePayload() {
+  const [policy, providerPrices, summary] = await Promise.all([
+    getCommercialPricingPolicy(),
+    listProviderPrices(),
+    billingSummary(),
+  ]);
+  return {
+    success: true,
+    policy,
+    providerPrices: providerPrices.map((price) => ({
+      ...price,
+      verifiedAt: price.verifiedAt.toISOString(),
+    })),
+    summary,
+  };
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+async function updateProviderPrice(input: Record<string, unknown>): Promise<void> {
+  const provider = text(input.provider);
+  const model = text(input.model);
+  const operation = text(input.operation);
+  const billingUnit = text(input.billingUnit);
+  const unitPriceUsd = Number(input.unitPriceUsd);
+  const unitsPerPrice = Number(input.unitsPerPrice);
+  const sourceUrl = text(input.sourceUrl);
+  const requestedVersion = text(input.pricingVersion);
+
+  if (!new Set(["zai", "qwen"]).has(provider)) throw new Error("Unsupported provider price provider");
+  if (!new Set(["video_generation", "image_generation", "tts"]).has(operation)) throw new Error("Unsupported provider price operation");
+  if (!new Set(["request", "image", "character"]).has(billingUnit)) throw new Error("Unsupported provider billing unit");
+  if (!model || model.length > 160) throw new Error("Provider model is required");
+  if (!Number.isFinite(unitPriceUsd) || unitPriceUsd <= 0) throw new Error("Provider unit price must be greater than zero");
+  if (!Number.isFinite(unitsPerPrice) || unitsPerPrice <= 0) throw new Error("Provider units-per-price must be greater than zero");
+
+  let parsedSource: URL;
+  try {
+    parsedSource = new URL(sourceUrl);
+  } catch {
+    throw new Error("Provider pricing source must be a valid URL");
+  }
+  if (parsedSource.protocol !== "https:") throw new Error("Provider pricing source must use HTTPS");
+
+  const today = new Date().toISOString().slice(0, 10);
+  const pricingVersion = requestedVersion || `${provider}-${today}`;
+  if (pricingVersion.length > 160) throw new Error("Pricing version is too long");
+  const verifiedAt = new Date();
+  const id = crypto.randomUUID();
+
+  await db.$executeRaw`
+    INSERT INTO "ProviderPrice" (
+      "id", "provider", "model", "operation", "billingUnit", "unitPriceUsd",
+      "unitsPerPrice", "sourceUrl", "pricingVersion", "active", "verifiedAt",
+      "effectiveFrom", "effectiveUntil", "createdAt", "updatedAt"
+    ) VALUES (
+      ${id}, ${provider}, ${model}, ${operation}, ${billingUnit}, ${unitPriceUsd},
+      ${unitsPerPrice}, ${sourceUrl}, ${pricingVersion}, TRUE, ${verifiedAt},
+      CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )
+    ON CONFLICT ("provider", "model", "operation") DO UPDATE SET
+      "billingUnit" = EXCLUDED."billingUnit",
+      "unitPriceUsd" = EXCLUDED."unitPriceUsd",
+      "unitsPerPrice" = EXCLUDED."unitsPerPrice",
+      "sourceUrl" = EXCLUDED."sourceUrl",
+      "pricingVersion" = EXCLUDED."pricingVersion",
+      "active" = TRUE,
+      "verifiedAt" = EXCLUDED."verifiedAt",
+      "effectiveFrom" = CURRENT_TIMESTAMP,
+      "effectiveUntil" = NULL,
+      "updatedAt" = CURRENT_TIMESTAMP
+  `;
+}
+
 export async function GET() {
   const auth = await requireAdmin();
   if (!auth.ok) return auth.response;
   try {
-    const [policy, providerPrices, summary] = await Promise.all([
-      getCommercialPricingPolicy(),
-      listProviderPrices(),
-      billingSummary(),
-    ]);
-    return NextResponse.json({
-      success: true,
-      policy,
-      providerPrices: providerPrices.map((price) => ({
-        ...price,
-        verifiedAt: price.verifiedAt.toISOString(),
-      })),
-      summary,
-    });
+    return NextResponse.json(await statePayload());
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Billing state unavailable" }, { status: 500 });
   }
@@ -120,6 +181,12 @@ export async function PUT(req: NextRequest) {
   if (!auth.ok) return auth.response;
   try {
     const body = await req.json() as Record<string, unknown>;
+
+    if (body.providerPrice && typeof body.providerPrice === "object" && !Array.isArray(body.providerPrice)) {
+      await updateProviderPrice(body.providerPrice as Record<string, unknown>);
+      return NextResponse.json(await statePayload());
+    }
+
     const current = await getCommercialPricingPolicy();
     const candidate = normalizeBillingPolicy({
       ...current,
@@ -132,7 +199,7 @@ export async function PUT(req: NextRequest) {
       minimumChargeCredits: body.minimumChargeCredits === undefined ? current.minimumChargeCredits : Number(body.minimumChargeCredits),
       priceMaxAgeHours: body.priceMaxAgeHours === undefined ? current.priceMaxAgeHours : Number(body.priceMaxAgeHours),
       quoteTtlMinutes: body.quoteTtlMinutes === undefined ? current.quoteTtlMinutes : Number(body.quoteTtlMinutes),
-      billingEnabled: body.billingEnabled === undefined ? current.billingEnabled : Boolean(body.billingEnabled),
+      billingEnabled: body.billingEnabled === undefined ? current.billingEnabled : body.billingEnabled === true,
     });
     if (candidate.targetGrossMarginPct + candidate.gatewayFeeReservePct >= 0.95) {
       return NextResponse.json({ success: false, error: "Margin plus gateway reserve is unsafe" }, { status: 400 });
@@ -171,8 +238,8 @@ export async function PUT(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ success: true, policy: await getCommercialPricingPolicy(), summary: await billingSummary() });
+    return NextResponse.json(await statePayload());
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Could not update billing policy" }, { status: 500 });
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Could not update billing configuration" }, { status: 400 });
   }
 }
