@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, Download, Eye, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,16 +29,15 @@ export function FullPreviewDialog({
   onRebuild,
   onProceedToExport,
 }: FullPreviewDialogProps) {
-  const [mediaFailed, setMediaFailed] = useState(false);
+  // Associate a media failure with the URL that actually failed. When a
+  // rebuilt preview supplies a new URL, recovery is automatic without a
+  // state-reset effect (and without an extra cascading render).
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [reloadAttempt, setReloadAttempt] = useState(0);
-
-  useEffect(() => {
-    setMediaFailed(false);
-    setReloadAttempt(0);
-  }, [previewUrl, open]);
+  const mediaFailed = Boolean(previewUrl && failedUrl === previewUrl);
 
   const retryMedia = () => {
-    setMediaFailed(false);
+    setFailedUrl(null);
     setReloadAttempt((value) => value + 1);
   };
 
@@ -67,8 +66,8 @@ export function FullPreviewDialog({
                 autoPlay
                 preload="metadata"
                 className="max-h-[65vh] w-full bg-black object-contain"
-                onLoadedData={() => setMediaFailed(false)}
-                onError={() => setMediaFailed(true)}
+                onLoadedData={() => setFailedUrl(null)}
+                onError={() => setFailedUrl(previewUrl)}
               />
             </div>
           ) : (
