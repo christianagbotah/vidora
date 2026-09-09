@@ -1,7 +1,10 @@
 import { db } from "../src/lib/db";
 import {
+  resolveZaiAsrBillingModel,
   resolveZaiImageBillingModel,
+  resolveZaiTextBillingModel,
   resolveZaiVideoBillingModel,
+  resolveZaiVisionBillingModel,
 } from "../src/lib/zai-billing-models";
 
 interface ColumnRow { column_name: string }
@@ -105,9 +108,22 @@ async function main(): Promise<void> {
   // Static catalog coverage plus the exact environment-selected Z.ai models.
   // These mirror provider transport resolution so a production override cannot
   // silently cross an unpriced API boundary after deployment.
+  const configuredTextModel = resolveZaiTextBillingModel();
+  const configuredVisionModel = resolveZaiVisionBillingModel();
+  const configuredAsrModel = resolveZaiAsrBillingModel();
   const configuredImageModel = resolveZaiImageBillingModel();
   const configuredVideoModel = resolveZaiVideoBillingModel(null, false);
   const requiredPrices = [
+    'zai:glm-4.7:text_input',
+    'zai:glm-4.7:text_output',
+    'zai:glm-4.6v:vision_input',
+    'zai:glm-4.6v:vision_output',
+    'zai:glm-asr-2512:asr',
+    `zai:${configuredTextModel}:text_input`,
+    `zai:${configuredTextModel}:text_output`,
+    `zai:${configuredVisionModel}:vision_input`,
+    `zai:${configuredVisionModel}:vision_output`,
+    `zai:${configuredAsrModel}:asr`,
     'zai:CogVideoX-3:video_generation',
     'zai:vidu2-image:video_generation',
     'zai:vidu2-reference:video_generation',
