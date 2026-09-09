@@ -27,5 +27,7 @@ describe("Full Preview UI recovery", () => {
     expect(dialog).toContain("Rebuild Preview");
     expect(dialog).toContain("Your project scenes are unchanged");
     expect(dialog).toContain("disabled={!previewUrl || mediaFailed || isRebuilding}");
+    expect(dialog).not.toContain("useEffect(");
+    expect(dialog).not.toContain("setMediaFailed(false)");
   });
 });
