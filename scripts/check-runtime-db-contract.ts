@@ -1,4 +1,6 @@
 import { db } from "../src/lib/db";
+import { getAIProviderSettings } from "../src/lib/ai-provider-router-qwen";
+import { resolveQwenTtsModel } from "../src/lib/qwen-tts";
 import {
   resolveZaiAsrBillingModel,
   resolveZaiImageBillingModel,
@@ -105,14 +107,23 @@ async function main(): Promise<void> {
     .filter((row) => Number(row.unitPriceUsd) > 0 && Number(row.unitsPerPrice) > 0)
     .map((row) => `${row.provider}:${row.model}:${row.operation}`));
 
-  // Static catalog coverage plus the exact environment-selected Z.ai models.
-  // These mirror provider transport resolution so a production override cannot
-  // silently cross an unpriced API boundary after deployment.
-  const configuredTextModel = resolveZaiTextBillingModel();
+  // Resolve the same DB-backed provider settings used by runtime. Environment
+  // validation alone is insufficient because Admin can select a different text
+  // or TTS model without changing the process environment.
+  const providerSettings = await getAIProviderSettings();
+  if (providerSettings.textProvider !== 'zai') {
+    throw new Error(`Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai`);
+  }
+  if (providerSettings.ttsProvider !== 'qwen') {
+    throw new Error(`Runtime DB contract failed: paid narration provider ${providerSettings.ttsProvider} has no verified Billing v2 catalog; configure Qwen`);
+  }
+
+  const configuredTextModel = resolveZaiTextBillingModel(providerSettings.textModel);
   const configuredVisionModel = resolveZaiVisionBillingModel();
   const configuredAsrModel = resolveZaiAsrBillingModel();
   const configuredImageModel = resolveZaiImageBillingModel();
   const configuredVideoModel = resolveZaiVideoBillingModel(null, false);
+  const configuredQwenModel = resolveQwenTtsModel(providerSettings.ttsModel);
   const requiredPrices = [
     'zai:glm-4.7:text_input',
     'zai:glm-4.7:text_output',
@@ -134,7 +145,7 @@ async function main(): Promise<void> {
     `zai:${configuredImageModel}:image_generation`,
     `zai:${configuredVideoModel}:video_generation`,
     'qwen:qwen3-tts-instruct-flash:tts',
-    'qwen:qwen3-tts-flash:tts',
+    `qwen:${configuredQwenModel}:tts`,
   ];
   const missingPrices = [...new Set(requiredPrices)].filter((key) => !priceKeys.has(key));
   if (missingPrices.length) {
