@@ -1,0 +1,31 @@
+name: Apply provider billing guardrails
+
+on:
+  push:
+    branches:
+      - billing/provider-cost-guardrails
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: billing/provider-cost-guardrails
+          fetch-depth: 0
+      - name: Apply billing source patch
+        run: python3 scripts/_apply-provider-billing-guardrails.py
+      - name: Commit patch and remove helpers
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/_apply-provider-billing-guardrails.py
+          git rm .github/workflows/_temp-provider-billing-patch.yml
+          git add src tests
+          git diff --cached --check
+          git commit -m "Enforce provider-cost billing floors"
+          git push origin HEAD:billing/provider-cost-guardrails
