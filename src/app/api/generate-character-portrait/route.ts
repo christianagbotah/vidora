@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { generateImage } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { portraitImageSizeForAspect } from "@/lib/image-prompt";
+import {
+  captureImmediateProviderOperation,
+  reserveImmediateProviderOperation,
+} from "@/lib/immediate-provider-billing";
 import { taskStore } from "./task-store";
 
 export const runtime = "nodejs";
@@ -39,33 +42,30 @@ export async function POST(req: NextRequest) {
     const aspectRatio = typeof body.aspectRatio === "string" ? body.aspectRatio : undefined;
 
     if (!name) {
-      return NextResponse.json(
-        { success: false, error: "Character name is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "Character name is required" }, { status: 400 });
     }
     if (name.length > 120 || description.length > 4_000) {
-      return NextResponse.json(
-        { success: false, error: "Character input is too long" },
-        { status: 413 }
-      );
+      return NextResponse.json({ success: false, error: "Character input is too long" }, { status: 413 });
     }
 
     const taskId = crypto.randomUUID();
     const prompt = buildPortraitPrompt(name, description, role, style);
-    const deduction = await deductTokensForOperation({
+    const billing = await reserveImmediateProviderOperation({
       userId: authResult.session.userId,
-      operation: "image_gen",
-      description: `Generate character portrait: ${name}`,
       referenceId: taskId,
-      idempotencyKey: `portrait:${taskId}:image`,
+      provider: "zai",
+      model: "glm-image",
+      operation: "image_generation",
+      quantity: 1,
+      lineKey: `portrait:${taskId}`,
+      label: `Character portrait: ${name}`,
+      idempotencyKey: `portrait:${taskId}:reservation`,
     });
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
-    }
+    const capture = await captureImmediateProviderOperation({
+      reservationId: billing.reservation.id,
+      lineKey: billing.line.lineKey,
+      userId: authResult.session.userId,
+    });
 
     taskStore.set(taskId, {
       userId: authResult.session.userId,
@@ -95,10 +95,9 @@ export async function POST(req: NextRequest) {
           task.status = "failed";
           task.error = "Portrait generation failed";
         }
-        // No automatic refund: provider failures/timeouts can be ambiguous.
         console.error(
-          `[character-portrait] Task ${taskId} failed:`,
-          error instanceof Error ? error.message : "unknown error"
+          `[character-portrait] Task ${taskId} failed after prepaid provider boundary:`,
+          error instanceof Error ? error.message : "unknown error",
         );
       }
     })();
@@ -106,13 +105,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       taskId,
-      tokensCharged: deduction.alreadyApplied ? 0 : 1,
-      remainingTokens: deduction.remainingTokens,
+      tokensCharged: capture.alreadyCaptured ? 0 : capture.creditsCaptured,
+      remainingTokens: billing.wallet.availableCredits,
     });
   } catch (error) {
     console.error(
       "[character-portrait] Failed to start generation:",
-      error instanceof Error ? error.message : "unknown error"
+      error instanceof Error ? error.message : "unknown error",
     );
     return zaiErrorResponse(error, {
       session: authResult.session,
