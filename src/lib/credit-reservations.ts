@@ -257,6 +257,36 @@ export async function reserveBillingQuote(opts: {
       await tx.$executeRaw`UPDATE "BillingQuote" SET "status" = 'expired', "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${opts.quoteId}`;
       throw new Error("Billing quote expired; request a fresh cost quote");
     }
+
+    const quote = parseQuote(quoteRow);
+    validateQuoteLines(quote.breakdown);
+    // Close the re-pricing TOCTOU window at the actual money-moving boundary.
+    // FOR SHARE serializes this reservation against Admin's ProviderPrice
+    // upsert: if repricing commits first we see the new version and reject;
+    // if reservation locks first, that price remains authoritative until the
+    // reservation transaction commits.
+    const lockedPriceKeys = new Set<string>();
+    for (const line of quote.breakdown) {
+      const key = `${line.provider}\u0000${line.model}\u0000${line.operation}`;
+      if (lockedPriceKeys.has(key)) continue;
+      lockedPriceKeys.add(key);
+      const current = await tx.$queryRaw<Array<{ pricingVersion: string }>>`
+        SELECT "pricingVersion"
+        FROM "ProviderPrice"
+        WHERE "provider" = ${line.provider}
+          AND "model" = ${line.model}
+          AND "operation" = ${line.operation}
+          AND "active" = TRUE
+          AND "effectiveFrom" <= CURRENT_TIMESTAMP
+          AND ("effectiveUntil" IS NULL OR "effectiveUntil" > CURRENT_TIMESTAMP)
+        LIMIT 1
+        FOR SHARE
+      `;
+      if (!current[0] || current[0].pricingVersion !== line.pricingVersion) {
+        throw new Error("Provider pricing changed after this quote was issued; request a fresh cost quote");
+      }
+    }
+
     if (lockedUsers[0].tokens < quoteRow.creditsRequired) {
       throw new Error(`Insufficient credits. Need ${quoteRow.creditsRequired}, have ${lockedUsers[0].tokens}`);
     }
@@ -327,8 +357,8 @@ export async function captureReservedQuoteLine(opts: {
     `;
     const reservation = reservations[0];
     if (!reservation || reservation.userId !== opts.userId) throw new Error("Credit reservation not found");
-    if (!['reserved', 'partially_captured'].includes(reservation.status)) {
-      if (reservation.status === 'captured') {
+    if (!["reserved", "partially_captured"].includes(reservation.status)) {
+      if (reservation.status === "captured") {
         const existing = await tx.$queryRaw<Array<{ customerCredits: number }>>`
           SELECT "customerCredits" FROM "ProviderUsageLedger"
           WHERE "idempotencyKey" = ${`reservation:${opts.reservationId}:line:${opts.lineKey}`}
@@ -360,7 +390,7 @@ export async function captureReservedQuoteLine(opts: {
     await tx.$executeRaw`
       UPDATE "CreditReservation"
       SET "capturedCredits" = ${newCaptured},
-          "status" = ${settled ? 'captured' : 'partially_captured'},
+          "status" = ${settled ? "captured" : "partially_captured"},
           "updatedAt" = CURRENT_TIMESTAMP
       WHERE "id" = ${reservation.id}
     `;
@@ -432,7 +462,7 @@ export async function releaseReservationRemainder(opts: {
       WHERE "id" = ${reservation.id}
     `;
     await tx.$executeRaw`
-      UPDATE "BillingQuote" SET "status" = ${reservation.capturedCredits > 0 ? 'partially_consumed' : 'released'}, "updatedAt" = CURRENT_TIMESTAMP
+      UPDATE "BillingQuote" SET "status" = ${reservation.capturedCredits > 0 ? "partially_consumed" : "released"}, "updatedAt" = CURRENT_TIMESTAMP
       WHERE "id" = ${reservation.quoteId}
     `;
     await tx.tokenTransaction.create({
