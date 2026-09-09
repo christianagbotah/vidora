@@ -1,9 +1,14 @@
 import { db } from "../src/lib/db";
+import {
+  resolveZaiImageBillingModel,
+  resolveZaiVideoBillingModel,
+} from "../src/lib/zai-billing-models";
 
 interface ColumnRow { column_name: string }
 interface IndexRow { indexname: string; indexdef: string }
 interface TableRow { table_name: string }
 interface ProviderPriceRow { provider: string; model: string; operation: string; unitPriceUsd: number; unitsPerPrice: number; active: boolean }
+interface PolicyRow { id: string; creditValueUsd: number; billingEnabled: boolean }
 
 function hasUniqueIndex(indexes: IndexRow[], column: string): boolean {
   const needle = `(\"${column.toLowerCase()}\")`;
@@ -66,6 +71,9 @@ async function main(): Promise<void> {
     SELECT indexname, indexdef FROM pg_indexes
     WHERE schemaname = 'public' AND tablename = 'CreditReservation'
   `;
+  if (!hasUniqueIndex(reservationIndexes, 'quoteid')) {
+    throw new Error('Runtime DB contract failed: CreditReservation.quoteId must be unique');
+  }
   if (!hasUniqueIndex(reservationIndexes, 'idempotencykey')) {
     throw new Error('Runtime DB contract failed: CreditReservation.idempotencyKey must be unique');
   }
@@ -78,6 +86,14 @@ async function main(): Promise<void> {
     throw new Error('Runtime DB contract failed: ProviderUsageLedger.idempotencyKey must be unique');
   }
 
+  const policies = await db.$queryRaw<PolicyRow[]>`
+    SELECT "id", "creditValueUsd", "billingEnabled"
+    FROM "CommercialPricingPolicy" WHERE "id" = 'default' LIMIT 1
+  `;
+  if (!policies[0] || !Number.isFinite(Number(policies[0].creditValueUsd)) || Number(policies[0].creditValueUsd) <= 0) {
+    throw new Error('Runtime DB contract failed: default commercial pricing policy is missing or invalid');
+  }
+
   const prices = await db.$queryRaw<ProviderPriceRow[]>`
     SELECT "provider", "model", "operation", "unitPriceUsd", "unitsPerPrice", "active"
     FROM "ProviderPrice" WHERE "active" = TRUE
@@ -85,22 +101,31 @@ async function main(): Promise<void> {
   const priceKeys = new Set(prices
     .filter((row) => Number(row.unitPriceUsd) > 0 && Number(row.unitsPerPrice) > 0)
     .map((row) => `${row.provider}:${row.model}:${row.operation}`));
+
+  // Static catalog coverage plus the exact environment-selected Z.ai models.
+  // These mirror provider transport resolution so a production override cannot
+  // silently cross an unpriced API boundary after deployment.
+  const configuredImageModel = resolveZaiImageBillingModel();
+  const configuredVideoModel = resolveZaiVideoBillingModel(null, false);
   const requiredPrices = [
     'zai:CogVideoX-3:video_generation',
     'zai:vidu2-image:video_generation',
     'zai:vidu2-reference:video_generation',
     'zai:viduq1-text:video_generation',
     'zai:viduq1-image:video_generation',
+    'zai:cogview-4-250304:image_generation',
     'zai:glm-image:image_generation',
+    `zai:${configuredImageModel}:image_generation`,
+    `zai:${configuredVideoModel}:video_generation`,
     'qwen:qwen3-tts-instruct-flash:tts',
     'qwen:qwen3-tts-flash:tts',
   ];
-  const missingPrices = requiredPrices.filter((key) => !priceKeys.has(key));
+  const missingPrices = [...new Set(requiredPrices)].filter((key) => !priceKeys.has(key));
   if (missingPrices.length) {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider-cost billing contract verified)');
+  console.log('Runtime DB contract: OK (durable media lock + exact provider-cost billing contract verified)');
 }
 
 main()
