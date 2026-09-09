@@ -82,4 +82,32 @@ describe("credit reservation concurrency", () => {
     `;
     expect(Number(rows[0]?.reserved ?? 0)).toBe(40);
   });
+
+  test("simultaneous duplicate requests converge on one reservation and one wallet debit", async () => {
+    await db.user.update({ where: { id: userId }, data: { tokens: { increment: 50 } } });
+    const quote = await createBillingQuote({
+      userId,
+      operation: "project_generation",
+      lines: [line("same-request")],
+      policy,
+    });
+    const idempotencyKey = `${userId}:same-request`;
+
+    const [first, second] = await Promise.all([
+      reserveBillingQuote({ quoteId: quote.id, userId, referenceId: "same-run", idempotencyKey }),
+      reserveBillingQuote({ quoteId: quote.id, userId, referenceId: "same-run", idempotencyKey }),
+    ]);
+
+    expect(first.reservation.id).toBe(second.reservation.id);
+    expect([first.alreadyReserved, second.alreadyReserved].filter(Boolean).length).toBe(1);
+
+    const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { tokens: true } });
+    expect(user.tokens).toBe(20);
+    const rows = await db.$queryRaw<Array<{ count: bigint | number; reserved: bigint | number }>>`
+      SELECT COUNT(*) AS count, COALESCE(SUM("reservedCredits"), 0) AS reserved
+      FROM "CreditReservation" WHERE "idempotencyKey" = ${idempotencyKey}
+    `;
+    expect(Number(rows[0]?.count ?? 0)).toBe(1);
+    expect(Number(rows[0]?.reserved ?? 0)).toBe(40);
+  });
 });
