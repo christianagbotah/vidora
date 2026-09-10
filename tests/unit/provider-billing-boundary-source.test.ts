@@ -104,4 +104,16 @@ describe("customer provider billing boundaries", () => {
     expect(narration).toContain("model: providerModel");
     expect(narration).toContain("TTS_EXECUTION_MODEL_DRIFT");
   });
+
+  test("Billing v2 keeps the five-cent credit denomination immutable", () => {
+    const route = readFileSync(path.join(ROOT, "src", "app", "api", "admin", "billing", "route.ts"), "utf8");
+    const page = readFileSync(path.join(ROOT, "src", "app", "admin", "billing", "page.tsx"), "utf8");
+    const policy = readFileSync(path.join(ROOT, "src", "lib", "provider-cost-billing.ts"), "utf8");
+    expect(route).toContain("LOCKED_CREDIT_VALUE_USD = 0.05");
+    expect(route).toContain("CREDIT_DENOMINATION_LOCKED");
+    expect(route).toContain('"creditValueUsd" = ${LOCKED_CREDIT_VALUE_USD}');
+    expect(page).toContain("Credit denomination");
+    expect(page).not.toContain('numberField("creditValueUsd"');
+    expect(policy).toContain("creditValueUsd: 0.05");
+  });
 });
