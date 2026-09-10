@@ -22,6 +22,8 @@ interface ProviderPriceView {
 
 interface BillingState {
   success: boolean;
+  creditDenominationLocked: boolean;
+  lockedCreditValueUsd: number;
   policy: {
     creditValueUsd: number;
     targetGrossMarginPct: number;
@@ -93,7 +95,7 @@ export default function AdminBillingPage() {
     setError(null);
     try {
       const numericKeys = [
-        "creditValueUsd", "targetGrossMarginPct", "providerSafetyBufferPct", "fxSafetyBufferPct",
+        "targetGrossMarginPct", "providerSafetyBufferPct", "fxSafetyBufferPct",
         "gatewayFeeReservePct", "infrastructureReservePct", "minimumChargeCredits", "priceMaxAgeHours", "quoteTtlMinutes",
       ];
       const payload: Record<string, unknown> = { billingEnabled: Boolean(form.billingEnabled) };
@@ -181,8 +183,16 @@ export default function AdminBillingPage() {
             <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" />Commercial pricing policy</CardTitle></CardHeader>
             <CardContent className="space-y-5">
               <div className="flex items-center justify-between rounded-xl border p-3"><div><div className="font-semibold">Paid generation enabled</div><div className="text-xs text-muted-foreground">Kill switch: disabling this blocks new provider-backed quotes.</div></div><Switch checked={Boolean(form.billingEnabled)} onCheckedChange={(value) => setForm((prev) => ({ ...prev, billingEnabled: value }))} /></div>
+              <div className="rounded-xl border bg-muted/30 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-semibold">Credit denomination</div>
+                    <div className="text-xs text-muted-foreground">Locked in Billing v2 so credits already purchased cannot be silently revalued.</div>
+                  </div>
+                  <div className="font-mono text-lg font-bold">${state.lockedCreditValueUsd.toFixed(2)} / credit</div>
+                </div>
+              </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                {numberField("creditValueUsd", "Credit value (USD)", "0.001")}
                 {numberField("targetGrossMarginPct", "Target gross margin (0–1)", "0.01")}
                 {numberField("providerSafetyBufferPct", "Provider price buffer (0–1)", "0.01")}
                 {numberField("fxSafetyBufferPct", "FX reserve (0–1)", "0.01")}
