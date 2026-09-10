@@ -16,6 +16,10 @@ const PROVIDER_CALL_PATTERNS = [
   /\bsynthesizeProviderSpeech\s*\(/,
   /\bsynthesizeQwenTts\s*\(/,
   /\btranscribeWithPricedZaiAsr\s*\(/,
+  /\bsubmitBilledZaiText\s*\(/,
+  /\bsubmitBilledZaiVision\s*\(/,
+  /\bsubmitBilledZaiImage\s*\(/,
+  /\bsubmitBilledZaiVideo\s*\(/,
 ];
 
 const BILLING_GUARD_PATTERNS = [
@@ -57,7 +61,7 @@ function hasBillingGuard(source: string): boolean {
 }
 
 describe("customer provider billing boundaries", () => {
-  test("every non-admin API route with a direct provider call declares a Billing v2 guard", () => {
+  test("every non-admin API route with a provider submission declares a Billing v2 guard", () => {
     const offenders: string[] = [];
     for (const file of walkTsFiles(API_ROOT)) {
       if (isOperationalProbe(file)) continue;
@@ -71,12 +75,26 @@ describe("customer provider billing boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("generation worker loads and captures immutable prepaid quote lines before media submission", () => {
+  test("generation worker uses immutable prepaid lines and strict single-submit media transports", () => {
     const worker = readFileSync(path.join(ROOT, "scripts", "generation-worker.ts"), "utf8");
     expect(worker).toContain("getReservedQuoteLines");
     expect(worker).toContain("requireReservedQuoteLine");
     expect(worker).toContain("captureReservedQuoteLine");
+    expect(worker).toContain("submitBilledZaiVideo");
+    expect(worker).toContain("submitBilledZaiImage");
     expect(worker).toContain("model: videoLine.model");
+    expect(worker).not.toContain("zai.generateVideo(");
+    expect(worker).not.toContain("zai.generateImage(");
+  });
+
+  test("strict billed Z.ai client never exposes model fallback or paid submit retry knobs", () => {
+    const client = readFileSync(path.join(ROOT, "src", "lib", "zai-billed-client.ts"), "utf8");
+    expect(client).toContain("submitBilledZaiText");
+    expect(client).toContain("submitBilledZaiVision");
+    expect(client).toContain("submitBilledZaiImage");
+    expect(client).toContain("submitBilledZaiVideo");
+    expect(client).not.toContain("withRetry(");
+    expect(client).not.toContain("DEFAULT_VIDEO_MODEL_ID");
   });
 
   test("shared narration binds Qwen execution to the prepaid reservation model", () => {
