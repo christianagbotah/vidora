@@ -12,6 +12,9 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const LOCKED_CREDIT_VALUE_USD = 0.05;
+const CREDIT_VALUE_EPSILON = 1e-9;
+
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   const role = (session?.user as Record<string, unknown> | undefined)?.role;
@@ -99,6 +102,8 @@ async function statePayload() {
   return {
     success: true,
     policy,
+    creditDenominationLocked: true,
+    lockedCreditValueUsd: LOCKED_CREDIT_VALUE_USD,
     providerPrices: providerPrices.map((price) => ({
       ...price,
       verifiedAt: price.verifiedAt.toISOString(),
@@ -197,10 +202,21 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json(await statePayload());
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, "creditValueUsd")) {
+      const requestedCreditValue = Number(body.creditValueUsd);
+      if (!Number.isFinite(requestedCreditValue) || Math.abs(requestedCreditValue - LOCKED_CREDIT_VALUE_USD) > CREDIT_VALUE_EPSILON) {
+        return NextResponse.json({
+          success: false,
+          error: "Vidora credit value is locked at USD 0.05 in Billing v2. Revaluing existing credits requires an explicit wallet migration.",
+          code: "CREDIT_DENOMINATION_LOCKED",
+        }, { status: 409 });
+      }
+    }
+
     const current = await getCommercialPricingPolicy();
     const candidate = normalizeBillingPolicy({
       ...current,
-      creditValueUsd: body.creditValueUsd === undefined ? current.creditValueUsd : Number(body.creditValueUsd),
+      creditValueUsd: LOCKED_CREDIT_VALUE_USD,
       targetGrossMarginPct: body.targetGrossMarginPct === undefined ? current.targetGrossMarginPct : Number(body.targetGrossMarginPct),
       providerSafetyBufferPct: body.providerSafetyBufferPct === undefined ? current.providerSafetyBufferPct : Number(body.providerSafetyBufferPct),
       fxSafetyBufferPct: body.fxSafetyBufferPct === undefined ? current.fxSafetyBufferPct : Number(body.fxSafetyBufferPct),
@@ -218,7 +234,7 @@ export async function PUT(req: NextRequest) {
     await db.$executeRaw`
       UPDATE "CommercialPricingPolicy"
       SET
-        "creditValueUsd" = ${candidate.creditValueUsd},
+        "creditValueUsd" = ${LOCKED_CREDIT_VALUE_USD},
         "targetGrossMarginPct" = ${candidate.targetGrossMarginPct},
         "providerSafetyBufferPct" = ${candidate.providerSafetyBufferPct},
         "fxSafetyBufferPct" = ${candidate.fxSafetyBufferPct},
