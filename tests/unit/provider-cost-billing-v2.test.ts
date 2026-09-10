@@ -77,7 +77,7 @@ describe("Z.ai billing model resolution", () => {
     }
   });
 
-  test("video billing mirrors the transport override and fallback rules", () => {
+  test("video billing keeps overrides input-compatible and falls back safely", () => {
     const previous = process.env.ZAI_VIDEO_MODEL;
     try {
       delete process.env.ZAI_VIDEO_MODEL;
@@ -85,7 +85,8 @@ describe("Z.ai billing model resolution", () => {
       expect(resolveZaiVideoBillingModel("vidu2-image", false)).toBe("CogVideoX-3");
 
       process.env.ZAI_VIDEO_MODEL = "vidu2-reference";
-      expect(resolveZaiVideoBillingModel("CogVideoX-3", false)).toBe("vidu2-reference");
+      expect(resolveZaiVideoBillingModel("CogVideoX-3", false)).toBe("CogVideoX-3");
+      expect(resolveZaiVideoBillingModel("CogVideoX-3", true)).toBe("vidu2-reference");
 
       process.env.ZAI_VIDEO_MODEL = "unknown-provider-model";
       expect(resolveZaiVideoBillingModel("viduq1-text", false)).toBe("CogVideoX-3");
