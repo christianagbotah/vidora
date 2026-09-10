@@ -136,7 +136,10 @@ export function GenerationBillingGate() {
     const originalFetch = previousFetch.bind(window);
     originalFetchRef.current = originalFetch;
 
-    const gatedFetch: typeof window.fetch = async (input, init) => {
+    // Bun augments typeof fetch with a static preconnect property that browser
+    // window.fetch does not require for this callable request proxy. Keep the
+    // proxy typed to the browser call signature and cast only at assignment.
+    const gatedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = requestUrl(input);
       const method = String(init?.method || (typeof Request !== "undefined" && input instanceof Request ? input.method : "GET")).toUpperCase();
       const isGenerationEndpoint = url?.origin === window.location.origin
@@ -171,7 +174,7 @@ export function GenerationBillingGate() {
       });
     };
 
-    window.fetch = gatedFetch;
+    window.fetch = gatedFetch as typeof window.fetch;
     return () => {
       window.fetch = previousFetch;
       originalFetchRef.current = null;
