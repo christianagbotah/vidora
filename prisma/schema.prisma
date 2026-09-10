@@ -468,7 +468,7 @@ model ProviderPrice {
 
 model CommercialPricingPolicy {
   id                       String   @id @default("default")
-  creditValueUsd           Float    @default(0.01)
+  creditValueUsd           Float    @default(0.05)
   targetGrossMarginPct     Float    @default(0.35)
   providerSafetyBufferPct  Float    @default(0.05)
   fxSafetyBufferPct        Float    @default(0.05)
