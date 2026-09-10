@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { refundTokens } from "@/lib/tokens";
 import { buildProjectGenerationQuoteLines } from "@/lib/project-generation-quote";
 import {
@@ -509,11 +509,13 @@ export async function POST(req: NextRequest) {
         where: { id: run.id },
         data: { status: "failed", activeKey: null, error: error instanceof Error ? error.message : "Credit reservation failed" },
       }).catch(() => undefined);
-      return NextResponse.json({
-        success: false,
-        error: error instanceof Error ? error.message : "Could not reserve generation credits",
-        code: "CREDIT_RESERVATION_FAILED",
-      }, { status: 402 });
+      return providerBillingErrorResponse(error, {
+        session: authResult.session,
+        logLabel: "generate-video-reservation",
+        fallbackStatus: 500,
+        fallbackMessage: "Could not reserve generation credits. Refresh the cost and try again.",
+        fallbackCode: "CREDIT_RESERVATION_FAILED",
+      });
     }
 
     return NextResponse.json({
@@ -528,7 +530,7 @@ export async function POST(req: NextRequest) {
       refundedAndRecharged: previousChargeRefunded || undefined,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
+    return providerBillingErrorResponse(error, {
       session: authResult?.ok ? authResult.session : null,
       logLabel: "generate-video",
     });
