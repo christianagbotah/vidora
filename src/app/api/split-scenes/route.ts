@@ -15,10 +15,26 @@ export const runtime = "nodejs";
 const MAX_PROMPT_CHARS = 40_000;
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 
+function hasParseableSceneBody(value: string): boolean {
+  return value.replace(/\n{2,}/g, " ").trim().length > 10;
+}
+
+/**
+ * Keep this gate aligned with the legacy local parser's accepted scene shapes.
+ * The internal helper still contains a historical provider fallback, so the
+ * public route must only invoke it with input that will deterministically take
+ * the local parsing branch. Unstructured input is handled by the metered,
+ * exact-model Billing v2 provider path below.
+ */
 function isLocallyStructuredScript(prompt: string): boolean {
-  const explicitScenes = prompt.match(/(?:^|\n)\s*(?:🎬\s*)?Scene\s*\d+\s*[\-–—:]+/gim)?.length ?? 0;
+  const explicitPattern = /(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]+([^\n]*)\n([\s\S]*?)(?=(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]|Final\s*Screen|$)/gi;
+  const explicitScenes = [...prompt.matchAll(explicitPattern)]
+    .filter((match) => hasParseableSceneBody(match[2] || "")).length;
   if (explicitScenes >= 2) return true;
-  const numberedScenes = prompt.match(/(?:^|\n)\s*(?:🎬\s*)?\d+[.)]\s+/gm)?.length ?? 0;
+
+  const numberedPattern = /(?:^|\n)\s*(?:🎬)?\s*\d+[.)][\s]+([\s\S]*?)(?=(?:^|\n)\s*(?:🎬)?\s*\d+[.)]|$)/gi;
+  const numberedScenes = [...prompt.matchAll(numberedPattern)]
+    .filter((match) => hasParseableSceneBody(match[1] || "")).length;
   return numberedScenes >= 2;
 }
 
