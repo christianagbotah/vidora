@@ -43,7 +43,7 @@ async function billingSummary() {
         COALESCE(SUM("grossProfitUsd"), 0)::float8 AS profit,
         COUNT(*) AS calls
       FROM "ProviderUsageLedger"
-      WHERE "status" = 'captured'
+      WHERE "status" IN ('captured', 'settled_actual')
     `,
     db.payment.findMany({
       where: { status: "completed" },
