@@ -8,6 +8,7 @@ interface BillingErrorContext {
   logLabel?: string;
   fallbackStatus?: number;
   fallbackMessage?: string;
+  fallbackCode?: string;
 }
 
 interface BillingHttpShape {
@@ -124,7 +125,8 @@ export function providerBillingErrorResponse(
     error: shape?.message || context.fallbackMessage || "The AI operation could not be completed. Please try again later.",
   };
 
-  if (shape?.code) body.code = shape.code;
+  const responseCode = shape?.code || context.fallbackCode;
+  if (responseCode) body.code = responseCode;
   if (isAdmin) body.adminDetail = detail;
   console.error(`[${context.logLabel || "billing-error"}]`, detail);
 
