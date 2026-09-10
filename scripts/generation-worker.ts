@@ -26,6 +26,8 @@ const THUMB_SIZE_MAP: Record<string, string> = {
 
 const IDLE_MS = Math.max(1_000, Number(process.env.GENERATION_WORKER_IDLE_MS || 3_000));
 const SUBMISSION_SPACING_MS = Math.max(0, Number(process.env.GENERATION_SUBMISSION_SPACING_MS || 15_000));
+const PROVIDER_POLL_INTERVAL_MS = Math.max(5_000, Number(process.env.GENERATION_PROVIDER_POLL_MS || 15_000));
+const SINGLE_SCENE_PROVIDER_POLL_INTERVAL_MS = Math.max(5_000, Number(process.env.GENERATION_SINGLE_SCENE_PROVIDER_POLL_MS || 8_000));
 const PROCESSING_STALE_MINUTES = 5;
 let stopping = false;
 
@@ -215,8 +217,13 @@ async function pollSubmittedTask(opts: {
   sceneId: string;
   taskId: string;
   billing: RunBillingContext;
+  intervalMs?: number;
 }): Promise<"completed" | "waiting" | "failed"> {
-  const result = await zai.pollVideoTask({ taskId: opts.taskId, maxAttempts: 4, intervalMs: 15_000 });
+  const result = await zai.pollVideoTask({
+    taskId: opts.taskId,
+    maxAttempts: 4,
+    intervalMs: opts.intervalMs ?? PROVIDER_POLL_INTERVAL_MS,
+  });
   if (result.status === "success" && result.videoUrl) {
     let localVideoUrl: string;
     try {
@@ -397,8 +404,17 @@ async function processRun(runId: string): Promise<void> {
 
   let providerFailure = false;
   let providerWaiting = false;
+  const providerPollIntervalMs = run.targetSceneId
+    ? SINGLE_SCENE_PROVIDER_POLL_INTERVAL_MS
+    : PROVIDER_POLL_INTERVAL_MS;
   for (const scene of afterSubmission.filter((item) => !item.videoUrl && item.taskId)) {
-    const state = await pollSubmittedTask({ runId: run.id, sceneId: scene.id, taskId: scene.taskId!, billing });
+    const state = await pollSubmittedTask({
+      runId: run.id,
+      sceneId: scene.id,
+      taskId: scene.taskId!,
+      billing,
+      intervalMs: providerPollIntervalMs,
+    });
     if (state === "failed") providerFailure = true;
     if (state === "waiting") providerWaiting = true;
   }

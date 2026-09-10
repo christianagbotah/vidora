@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { GenerationCostDialog, type GenerationQuoteView } from "@/components/GenerationCostDialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAppStore } from "@/store/useAppStore";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -71,6 +72,10 @@ function replayRequest(
 
 export function GenerationBillingGate() {
   const { toast } = useToast();
+  const selectedProjectId = useAppStore(
+    (state) => state.currentProject?.id ?? state.persistedProjectId,
+  );
+  const selectedProjectIdRef = useRef<string | null>(selectedProjectId);
   const pendingRef = useRef<PendingGeneration | null>(null);
   const originalFetchRef = useRef<typeof window.fetch | null>(null);
   const [open, setOpen] = useState(false);
@@ -78,6 +83,10 @@ export function GenerationBillingGate() {
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [toppingUp, setToppingUp] = useState(false);
+
+  useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId;
+  }, [selectedProjectId]);
 
   const clearPending = () => {
     pendingRef.current = null;
@@ -99,7 +108,10 @@ export function GenerationBillingGate() {
     const originalFetch = originalFetchRef.current;
     if (!pending || !originalFetch) return;
 
-    const projectId = typeof pending.body.projectId === "string" ? pending.body.projectId.trim() : "";
+    const bodyProjectId = typeof pending.body.projectId === "string"
+      ? pending.body.projectId.trim()
+      : "";
+    const projectId = bodyProjectId || selectedProjectIdRef.current || "";
     const sceneId = typeof pending.body.sceneId === "string" ? pending.body.sceneId.trim() : "";
     if (!projectId) {
       failPending({ success: false, error: "Project ID is required before generation can be priced." }, 400);
