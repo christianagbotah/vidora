@@ -6,7 +6,7 @@ import type { CommercialPricingPolicy } from "@/lib/provider-cost-billing";
 
 const userId = `billing-ci-${crypto.randomUUID()}`;
 const policy: CommercialPricingPolicy = {
-  creditValueUsd: 0.01,
+  creditValueUsd: 0.05,
   targetGrossMarginPct: 0.35,
   providerSafetyBufferPct: 0.05,
   fxSafetyBufferPct: 0.05,
@@ -36,8 +36,9 @@ function line(key: string): BillingQuoteLine {
     infrastructureReserveUsd: 0.006,
     gatewayFeeReserveUsd: 0.012,
     bufferedCostUsd: 0.238,
-    customerPriceUsd: 0.4,
-    credits: 40,
+    customerPriceUsdBeforeRounding: 0.364516129,
+    customerPriceUsd: 0.364516129,
+    credits: 8,
     customerValueUsd: 0.4,
     estimatedGrossProfitUsd: 0.162,
     estimatedGrossMarginPct: 0.405,
@@ -54,12 +55,12 @@ afterAll(async () => {
 });
 
 describe("credit reservation concurrency", () => {
-  test("two simultaneous 40-credit reservations cannot spend a 50-credit wallet twice", async () => {
+  test("two simultaneous 8-credit reservations cannot spend a 10-credit wallet twice", async () => {
     await db.user.create({
       data: {
         id: userId,
         email: `${userId}@vidora.local`,
-        tokens: 50,
+        tokens: 10,
       },
     });
     const [quoteA, quoteB] = await Promise.all([
@@ -75,16 +76,16 @@ describe("credit reservation concurrency", () => {
     expect(results.filter((result) => result.status === "rejected").length).toBe(1);
 
     const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { tokens: true } });
-    expect(user.tokens).toBe(10);
+    expect(user.tokens).toBe(2);
     const rows = await db.$queryRaw<Array<{ reserved: bigint | number }>>`
       SELECT COALESCE(SUM("reservedCredits"), 0) AS reserved
       FROM "CreditReservation" WHERE "userId" = ${userId}
     `;
-    expect(Number(rows[0]?.reserved ?? 0)).toBe(40);
+    expect(Number(rows[0]?.reserved ?? 0)).toBe(8);
   });
 
   test("simultaneous duplicate requests converge on one reservation and one wallet debit", async () => {
-    await db.user.update({ where: { id: userId }, data: { tokens: { increment: 50 } } });
+    await db.user.update({ where: { id: userId }, data: { tokens: { increment: 10 } } });
     const quote = await createBillingQuote({
       userId,
       operation: "project_generation",
@@ -102,12 +103,12 @@ describe("credit reservation concurrency", () => {
     expect([first.alreadyReserved, second.alreadyReserved].filter(Boolean).length).toBe(1);
 
     const user = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { tokens: true } });
-    expect(user.tokens).toBe(20);
+    expect(user.tokens).toBe(4);
     const rows = await db.$queryRaw<Array<{ count: bigint | number; reserved: bigint | number }>>`
       SELECT COUNT(*) AS count, COALESCE(SUM("reservedCredits"), 0) AS reserved
       FROM "CreditReservation" WHERE "idempotencyKey" = ${idempotencyKey}
     `;
     expect(Number(rows[0]?.count ?? 0)).toBe(1);
-    expect(Number(rows[0]?.reserved ?? 0)).toBe(40);
+    expect(Number(rows[0]?.reserved ?? 0)).toBe(8);
   });
 });
