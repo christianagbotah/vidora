@@ -8,15 +8,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { transcribeWithPricedZaiAsr } from "@/lib/zai-asr";
-import {
-  reserveMeteredZaiAsrOperation,
-} from "@/lib/zai-metered-billing";
+import { reserveMeteredZaiAsrOperation } from "@/lib/zai-metered-billing";
 import { captureImmediateProviderOperation } from "@/lib/immediate-provider-billing";
+import { findReservationByReference } from "@/lib/credit-reservations";
 
 export const runtime = "nodejs";
-
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_SECONDS = 30;
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._:-]{8,128}$/;
 const execFileAsync = promisify(execFile);
 
 async function probeAudioDuration(buffer: Buffer): Promise<number> {
@@ -43,68 +42,49 @@ export async function POST(req: NextRequest) {
 
   try {
     const contentLength = Number(req.headers.get("content-length") || 0);
-    if (contentLength > MAX_AUDIO_BYTES + 1024 * 1024) {
-      return NextResponse.json(
-        { success: false, error: "Audio upload is too large" },
-        { status: 413 }
-      );
-    }
+    if (contentLength > MAX_AUDIO_BYTES + 1024 * 1024) return NextResponse.json({ success: false, error: "Audio upload is too large" }, { status: 413 });
 
     const formData = await req.formData();
     const audioFile = formData.get("audio");
-    if (!(audioFile instanceof File)) {
-      return NextResponse.json(
-        { success: false, error: "No audio file provided" },
-        { status: 400 }
-      );
-    }
-    if (audioFile.size <= 0 || audioFile.size > MAX_AUDIO_BYTES) {
-      return NextResponse.json(
-        { success: false, error: "Audio file must be between 1 byte and 25 MB" },
-        { status: 413 }
-      );
-    }
-    if (audioFile.type && !audioFile.type.toLowerCase().startsWith("audio/")) {
-      return NextResponse.json(
-        { success: false, error: "Unsupported audio file type" },
-        { status: 415 }
-      );
-    }
+    if (!(audioFile instanceof File)) return NextResponse.json({ success: false, error: "No audio file provided" }, { status: 400 });
+    if (audioFile.size <= 0 || audioFile.size > MAX_AUDIO_BYTES) return NextResponse.json({ success: false, error: "Audio file must be between 1 byte and 25 MB" }, { status: 413 });
+    if (audioFile.type && !audioFile.type.toLowerCase().startsWith("audio/")) return NextResponse.json({ success: false, error: "Unsupported audio file type" }, { status: 415 });
 
-    // Validate the documented GLM-ASR-2512 30-second limit before reserving
-    // customer credits or crossing the provider boundary.
     const bytes = Buffer.from(await audioFile.arrayBuffer());
     const durationSeconds = await probeAudioDuration(bytes);
-    if (durationSeconds > MAX_AUDIO_SECONDS + 0.05) {
-      return NextResponse.json(
-        { success: false, error: "Audio must be 30 seconds or shorter for transcription" },
-        { status: 413 },
-      );
+    if (durationSeconds > MAX_AUDIO_SECONDS + 0.05) return NextResponse.json({ success: false, error: "Audio must be 30 seconds or shorter for transcription" }, { status: 413 });
+
+    const supplied = req.headers.get("idempotency-key")?.trim() || "";
+    const requestKey = IDEMPOTENCY_KEY_RE.test(supplied) ? supplied : crypto.randomUUID();
+    const referenceId = `asr:${authResult.session.userId}:${requestKey}`;
+    if (supplied) {
+      const prior = await findReservationByReference(referenceId);
+      if (prior) {
+        return NextResponse.json({
+          success: false,
+          error: "This transcription request was already funded/submitted. Vidora will not submit it twice automatically.",
+          reconciliationRequired: true,
+        }, { status: 409 });
+      }
     }
 
-    const operationId = crypto.randomUUID();
-    const lineKey = `asr:${operationId}`;
+    const lineKey = `${referenceId}:provider`;
     const billing = await reserveMeteredZaiAsrOperation({
       userId: authResult.session.userId,
-      referenceId: operationId,
-      idempotencyKey: `asr:${operationId}:reservation`,
+      referenceId,
+      idempotencyKey: `${referenceId}:reservation`,
       lineKey,
       label: `Transcribe ${durationSeconds.toFixed(1)}s audio`,
       durationSeconds,
     });
+
+    const transcription = await transcribeWithPricedZaiAsr({ file: audioFile, timeoutMs: 120_000 });
+    if (transcription.model !== billing.model) throw new Error("ASR provider model changed after billing reservation");
     const capture = await captureImmediateProviderOperation({
       reservationId: billing.reservation.id,
       lineKey,
       userId: authResult.session.userId,
     });
-
-    const transcription = await transcribeWithPricedZaiAsr({
-      file: audioFile,
-      timeoutMs: 120_000,
-    });
-    if (transcription.model !== billing.model) {
-      throw new Error("ASR provider model changed after billing reservation");
-    }
 
     return NextResponse.json({
       success: true,
@@ -115,11 +95,6 @@ export async function POST(req: NextRequest) {
       remainingTokens: billing.wallet.availableCredits,
     });
   } catch (error) {
-    // Provider timeouts can be ambiguous; do not automatically release a
-    // transcription reservation after its provider line has been captured.
-    return zaiErrorResponse(error, {
-      session: authResult.session,
-      logLabel: "transcribe",
-    });
+    return zaiErrorResponse(error, { session: authResult.session, logLabel: "transcribe" });
   }
 }
