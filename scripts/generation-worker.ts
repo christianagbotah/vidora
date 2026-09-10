@@ -271,9 +271,9 @@ async function finishRunIfComplete(opts: {
 }): Promise<boolean> {
   const scoped = await db.videoScene.findMany({
     where: { projectId: opts.projectId, id: { in: opts.scopedSceneIds } },
-    select: { id: true, videoUrl: true, dialogue: true, narrationUrl: true },
+    select: { id: true, status: true, videoUrl: true, dialogue: true, narrationUrl: true },
   });
-  if (scoped.some((scene) => !scene.videoUrl)) return false;
+  if (scoped.some((scene) => scene.status !== "completed" || !scene.videoUrl)) return false;
 
   for (const scene of scoped) {
     if (!scene.dialogue?.trim() || scene.narrationUrl) continue;
@@ -294,7 +294,15 @@ async function finishRunIfComplete(opts: {
     reason: `Generation run ${opts.runId} completed; releasing provider work that was not consumed`,
   });
 
-  const incompleteProjectScenes = await db.videoScene.count({ where: { projectId: opts.projectId, videoUrl: null } });
+  const incompleteProjectScenes = await db.videoScene.count({
+    where: {
+      projectId: opts.projectId,
+      OR: [
+        { videoUrl: null },
+        { status: { not: "completed" } },
+      ],
+    },
+  });
   await Promise.all([
     db.videoProject.update({ where: { id: opts.projectId }, data: { status: incompleteProjectScenes === 0 ? "completed" : "generating" } }),
     db.generationRun.update({ where: { id: opts.runId }, data: { status: "completed", activeKey: null, error: null } }),
@@ -345,7 +353,7 @@ async function processRun(runId: string): Promise<void> {
   const scopedSceneIds = runScenes.map((scene) => scene.id);
   if (await finishRunIfComplete({ runId: run.id, projectId: project.id, userId: run.userId, scopedSceneIds, reservationId: billing.reservationId })) return;
 
-  const scenes = runScenes.filter((scene) => !scene.videoUrl);
+  const scenes = runScenes.filter((scene) => scene.status !== "completed" || !scene.videoUrl);
   const ambiguous = scenes.find((scene) => scene.status === "submitting" && !scene.taskId);
   if (ambiguous) {
     await markReconciliation(run.id, project.id, `Scene ${ambiguous.sceneNumber} was interrupted during a funded provider submission; automatic resubmission is blocked`);
@@ -387,7 +395,7 @@ async function processRun(runId: string): Promise<void> {
     where: { projectId: project.id, id: { in: scopedSceneIds } }, orderBy: { sceneNumber: "asc" },
   });
   for (const scene of afterSubmission.filter(
-    (item) => newlySubmittedSceneIds.has(item.id) && !item.videoUrl && item.taskId && !item.imageUrl,
+    (item) => newlySubmittedSceneIds.has(item.id) && item.taskId && !item.imageUrl,
   )) {
     try {
       await ensureThumbnail({ runId: run.id, scene, thumbSize, ctx, billing });
@@ -407,7 +415,7 @@ async function processRun(runId: string): Promise<void> {
   const providerPollIntervalMs = run.targetSceneId
     ? SINGLE_SCENE_PROVIDER_POLL_INTERVAL_MS
     : PROVIDER_POLL_INTERVAL_MS;
-  for (const scene of afterSubmission.filter((item) => !item.videoUrl && item.taskId)) {
+  for (const scene of afterSubmission.filter((item) => item.status !== "completed" && item.taskId)) {
     const state = await pollSubmittedTask({
       runId: run.id,
       sceneId: scene.id,
@@ -427,7 +435,7 @@ async function processRun(runId: string): Promise<void> {
   }
 
   const finalScenes = await db.videoScene.findMany({ where: { projectId: project.id, id: { in: scopedSceneIds } } });
-  if (providerWaiting || finalScenes.some((scene) => !scene.videoUrl && scene.taskId)) {
+  if (providerWaiting || finalScenes.some((scene) => scene.status !== "completed" && scene.taskId)) {
     await db.generationRun.update({ where: { id: run.id }, data: { status: "waiting_provider", error: null } });
     return;
   }
