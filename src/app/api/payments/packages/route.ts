@@ -5,17 +5,18 @@ import {
 } from "@/lib/pricing";
 import { getActivePackages } from "@/lib/token-packages";
 import { getChargeCurrency } from "@/lib/storefront";
-import { assertCreditPackageIsEconomicallySafe, getBillingGhsPerUsd } from "@/lib/package-billing-safety";
+import { calculateSafeCreditPackageCheckoutPrice, getBillingGhsPerUsd } from "@/lib/package-billing-safety";
 import { getCommercialPricingPolicy } from "@/lib/provider-cost-billing";
 
 /**
- * Returns purchaseable credit packages plus non-binding planning estimates.
+ * Returns purchasable credit packages plus non-binding planning estimates.
  *
- * Billing v2 intentionally fails closed here: a package that no longer covers
- * the configured credit value at the current persisted GHS/USD rate is hidden
- * from customers until an admin repairs its price/bonus. The authoritative
- * generation amount is always the project-specific cost quote shown immediately
- * before paid generation starts.
+ * Billing v2 reprices an active package upward when its stored price no longer
+ * covers all base + bonus credits at the current policy/FX rate. The same
+ * helper is used again at payment initialization, so the customer-visible
+ * amount and the gateway amount cannot drift below the live economic floor.
+ * The authoritative generation amount is always the project-specific cost
+ * quote shown immediately before paid generation starts.
  */
 export async function GET() {
   try {
@@ -26,25 +27,15 @@ export async function GET() {
       getBillingGhsPerUsd(),
     ]);
 
-    const safePackages = [] as typeof packages;
-    for (const pkg of packages) {
-      try {
-        await assertCreditPackageIsEconomicallySafe({
-          baseCredits: pkg.tokens,
-          bonusPct: pkg.bonusPct,
-          priceUsd: pkg.priceUSD,
-          priceGhs: pkg.priceGHS,
-        });
-        safePackages.push(pkg);
-      } catch (error) {
-        console.warn(
-          `[payments/packages] hiding economically unsafe package ${pkg.slug}:`,
-          error instanceof Error ? error.message : "billing safety check failed",
-        );
-      }
-    }
-
-    const packagesWithEstimates = safePackages.map((pkg) => {
+    const packagesWithEstimates = packages.map((pkg) => {
+      const safe = calculateSafeCreditPackageCheckoutPrice({
+        baseCredits: pkg.tokens,
+        bonusPct: pkg.bonusPct,
+        configuredPriceUsd: pkg.priceUSD,
+        configuredPriceGhs: pkg.priceGHS,
+        ghsPerUsd,
+        policy,
+      });
       const oneMinVideoCost = calculateProjectCost(6, {
         withNarration: true,
       }).totalTokens;
@@ -52,10 +43,17 @@ export async function GET() {
 
       return {
         ...pkg,
+        configuredPriceUSD: pkg.priceUSD,
+        configuredPriceGHS: pkg.priceGHS,
+        priceUSD: safe.checkoutPriceUsd,
+        priceGHS: safe.checkoutPriceGhs,
+        priceAdjustedForSafety: safe.repricedUsd || safe.repricedGhs,
+        minimumPriceUSD: safe.minimumPriceUsd,
+        minimumPriceGHS: safe.minimumPriceGhs,
         estimatedVideos: videosYouCanMake,
         perVideoCostGHS:
           videosYouCanMake > 0
-            ? (pkg.priceGHS / videosYouCanMake).toFixed(2)
+            ? (safe.checkoutPriceGhs / videosYouCanMake).toFixed(2)
             : null,
       };
     });
@@ -70,6 +68,7 @@ export async function GET() {
         ghsPerUsd,
         authoritativeQuoteRequired: true,
         samplesAreEstimates: true,
+        livePackageSafetyFloor: true,
         samples: [
           {
             label: "30-second video (3 scenes)",
