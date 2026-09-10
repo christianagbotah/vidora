@@ -12,7 +12,7 @@ import { requireReservedQuoteLine } from "@/lib/reserved-quote";
 import type { BillingQuoteLine } from "@/lib/credit-reservations";
 
 const policy: CommercialPricingPolicy = {
-  creditValueUsd: 0.01,
+  creditValueUsd: 0.05,
   targetGrossMarginPct: 0.35,
   providerSafetyBufferPct: 0.05,
   fxSafetyBufferPct: 0.05,
@@ -27,7 +27,7 @@ const policy: CommercialPricingPolicy = {
 describe("provider-cost-backed commercial pricing", () => {
   test("customer charge covers buffered COGS and configured margin", () => {
     const charge = calculateCommercialCharge(0.20, policy);
-    expect(charge.credits).toBeGreaterThan(20);
+    expect(charge.credits).toBe(8);
     expect(charge.customerValueUsd).toBeGreaterThan(charge.bufferedCostUsd);
     expect(charge.estimatedGrossMarginPct).toBeGreaterThanOrEqual(policy.targetGrossMarginPct - 0.02);
   });
@@ -56,8 +56,8 @@ describe("credit package economic floor", () => {
       policy,
     });
     expect(economics.effectiveCredits).toBe(120);
-    expect(economics.minimumPriceUsd).toBeCloseTo(1.20, 8);
-    expect(economics.minimumPriceGhs).toBeCloseTo(15, 8);
+    expect(economics.minimumPriceUsd).toBeCloseTo(6.00, 8);
+    expect(economics.minimumPriceGhs).toBeCloseTo(75, 8);
   });
 });
 
