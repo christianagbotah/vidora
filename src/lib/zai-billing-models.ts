@@ -1,6 +1,4 @@
 import {
-  DEFAULT_VIDEO_MODEL_ID,
-  getVideoModelInfo,
   resolveModelForRequest,
   type VideoModelId,
 } from "@/lib/video-models";
@@ -10,7 +8,7 @@ export const DEFAULT_ZAI_TEXT_MODEL_ID = "glm-4.7";
 export const DEFAULT_ZAI_VISION_MODEL_ID = "glm-4.6v";
 export const DEFAULT_ZAI_ASR_MODEL_ID = "glm-asr-2512";
 
-/** Must stay aligned with the public image API model used by src/lib/zai.ts. */
+/** Must stay aligned with the public image API model used by paid transport. */
 export const DEFAULT_ZAI_IMAGE_MODEL_ID = "cogview-4-250304";
 
 /**
@@ -51,15 +49,17 @@ export function resolveZaiImageBillingModel(): string {
 }
 
 /**
- * Mirror createVideoCompat's ZAI_VIDEO_MODEL override. A recognized operator
- * override wins over the project selection. An unknown override is handled by
- * the transport as CogVideoX-3, so billing must use that same fallback.
+ * Resolve the billable video model using the same input requirements as the
+ * scene pipeline. A deployment override takes precedence over the project
+ * choice, but it is still normalized for whether a usable reference image is
+ * present. This prevents quoting an image-only Vidu model for text-only work.
+ * Unknown overrides fail safely to the catalog's default through the shared
+ * request resolver.
  */
 export function resolveZaiVideoBillingModel(
   requestedModel: string | null | undefined,
   hasImage: boolean,
 ): VideoModelId {
   const forced = (process.env.ZAI_VIDEO_MODEL || "").trim();
-  if (forced) return getVideoModelInfo(forced)?.id ?? DEFAULT_VIDEO_MODEL_ID;
-  return resolveModelForRequest(requestedModel, hasImage);
+  return resolveModelForRequest(forced || requestedModel, hasImage);
 }
