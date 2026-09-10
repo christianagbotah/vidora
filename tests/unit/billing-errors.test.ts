@@ -49,11 +49,13 @@ describe("provider billing HTTP error boundary", () => {
       {
         fallbackStatus: 502,
         fallbackMessage: "The AI story director could not complete this request. Please try again later.",
+        fallbackCode: "AI_STORY_DIRECTOR_FAILED",
       },
     );
     const body = await bodyOf(response);
 
     expect(response.status).toBe(502);
+    expect(body.code).toBe("AI_STORY_DIRECTOR_FAILED");
     expect(body.error).toBe("The AI story director could not complete this request. Please try again later.");
     expect(JSON.stringify(body)).not.toContain("postgresql://");
     expect(body.adminDetail).toBeUndefined();
@@ -80,5 +82,17 @@ describe("provider billing HTTP error boundary", () => {
     expect(route).toContain("providerBillingErrorResponse(error");
     expect(route).toContain('logLabel: "split-scenes"');
     expect(route).not.toContain("`AI story director failed: ${error.message}`");
+  });
+
+  test("project generation never returns raw credit-reservation diagnostics", () => {
+    const route = readFileSync(
+      path.join(process.cwd(), "src", "app", "api", "generate-video", "route.ts"),
+      "utf8",
+    );
+
+    expect(route).toContain('logLabel: "generate-video-reservation"');
+    expect(route).toContain('fallbackCode: "CREDIT_RESERVATION_FAILED"');
+    expect(route).not.toContain('error: error instanceof Error ? error.message : "Could not reserve generation credits"');
+    expect(route).toContain('logLabel: "generate-video"');
   });
 });
