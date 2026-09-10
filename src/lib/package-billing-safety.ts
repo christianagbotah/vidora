@@ -8,6 +8,19 @@ export interface CreditPackageEconomics {
   ghsPerUsd: number;
 }
 
+export interface SafeCreditPackageCheckoutPrice extends CreditPackageEconomics {
+  configuredPriceUsd: number;
+  configuredPriceGhs: number;
+  checkoutPriceUsd: number;
+  checkoutPriceGhs: number;
+  repricedUsd: boolean;
+  repricedGhs: boolean;
+}
+
+function ceilCurrency(value: number): number {
+  return Math.ceil((value * 100) - 1e-9) / 100;
+}
+
 export function calculateCreditPackageEconomics(opts: {
   baseCredits: number;
   bonusPct: number;
@@ -30,6 +43,41 @@ export function calculateCreditPackageEconomics(opts: {
   };
 }
 
+export function calculateSafeCreditPackageCheckoutPrice(opts: {
+  baseCredits: number;
+  bonusPct: number;
+  configuredPriceUsd: number;
+  configuredPriceGhs: number;
+  ghsPerUsd: number;
+  policy: CommercialPricingPolicy;
+}): SafeCreditPackageCheckoutPrice {
+  if (!opts.policy.billingEnabled) {
+    throw new BillingSafetyError("BILLING_DISABLED", "Credit purchases are disabled while provider billing is paused.");
+  }
+  const economics = calculateCreditPackageEconomics(opts);
+  const configuredPriceUsd = Number(opts.configuredPriceUsd);
+  const configuredPriceGhs = Number(opts.configuredPriceGhs);
+  if (!Number.isFinite(configuredPriceUsd) || configuredPriceUsd < 0) {
+    throw new BillingSafetyError("INVALID_PACKAGE_PRICE_USD", "Package USD price is invalid.");
+  }
+  if (!Number.isFinite(configuredPriceGhs) || configuredPriceGhs < 0) {
+    throw new BillingSafetyError("INVALID_PACKAGE_PRICE_GHS", "Package GHS price is invalid.");
+  }
+  const floorUsd = ceilCurrency(economics.minimumPriceUsd);
+  const floorGhs = ceilCurrency(economics.minimumPriceGhs);
+  const checkoutPriceUsd = Math.max(ceilCurrency(configuredPriceUsd), floorUsd);
+  const checkoutPriceGhs = Math.max(ceilCurrency(configuredPriceGhs), floorGhs);
+  return {
+    ...economics,
+    configuredPriceUsd,
+    configuredPriceGhs,
+    checkoutPriceUsd,
+    checkoutPriceGhs,
+    repricedUsd: checkoutPriceUsd > configuredPriceUsd + 1e-9,
+    repricedGhs: checkoutPriceGhs > configuredPriceGhs + 1e-9,
+  };
+}
+
 export async function getBillingGhsPerUsd(): Promise<number> {
   const row = await db.systemConfig.findUnique({ where: { key: "exchange_rate_ghs_usd" } });
   const value = Number(row?.value);
@@ -42,36 +90,47 @@ export async function getBillingGhsPerUsd(): Promise<number> {
   return value;
 }
 
+export async function getSafeCreditPackageCheckoutPrice(opts: {
+  baseCredits: number;
+  bonusPct: number;
+  configuredPriceUsd: number;
+  configuredPriceGhs: number;
+}): Promise<SafeCreditPackageCheckoutPrice> {
+  const [policy, ghsPerUsd] = await Promise.all([
+    getCommercialPricingPolicy(),
+    getBillingGhsPerUsd(),
+  ]);
+  return calculateSafeCreditPackageCheckoutPrice({ ...opts, policy, ghsPerUsd });
+}
+
 export async function assertCreditPackageIsEconomicallySafe(opts: {
   baseCredits: number;
   bonusPct: number;
   priceUsd: number;
   priceGhs: number;
 }): Promise<CreditPackageEconomics> {
-  const [policy, ghsPerUsd] = await Promise.all([
-    getCommercialPricingPolicy(),
-    getBillingGhsPerUsd(),
-  ]);
-  if (!policy.billingEnabled) throw new BillingSafetyError("BILLING_DISABLED", "Credit purchases are disabled while provider billing is paused.");
-  const economics = calculateCreditPackageEconomics({
+  const safe = await getSafeCreditPackageCheckoutPrice({
     baseCredits: opts.baseCredits,
     bonusPct: opts.bonusPct,
-    ghsPerUsd,
-    policy,
+    configuredPriceUsd: opts.priceUsd,
+    configuredPriceGhs: opts.priceGhs,
   });
-  const priceUsd = Number(opts.priceUsd);
-  const priceGhs = Number(opts.priceGhs);
-  if (!Number.isFinite(priceUsd) || priceUsd + 1e-9 < economics.minimumPriceUsd) {
+  if (safe.repricedUsd) {
     throw new BillingSafetyError(
       "PACKAGE_UNDERPRICED_USD",
-      `Package would sell ${economics.effectiveCredits} credits below their $${economics.minimumPriceUsd.toFixed(2)} minimum value.`,
+      `Package would sell ${safe.effectiveCredits} credits below their $${safe.minimumPriceUsd.toFixed(2)} minimum value.`,
     );
   }
-  if (!Number.isFinite(priceGhs) || priceGhs + 1e-9 < economics.minimumPriceGhs) {
+  if (safe.repricedGhs) {
     throw new BillingSafetyError(
       "PACKAGE_UNDERPRICED_GHS",
-      `Package would sell ${economics.effectiveCredits} credits below their GH₵${economics.minimumPriceGhs.toFixed(2)} minimum value at the current exchange rate.`,
+      `Package would sell ${safe.effectiveCredits} credits below their GH₵${safe.minimumPriceGhs.toFixed(2)} minimum value at the current exchange rate.`,
     );
   }
-  return economics;
+  return {
+    effectiveCredits: safe.effectiveCredits,
+    minimumPriceUsd: safe.minimumPriceUsd,
+    minimumPriceGhs: safe.minimumPriceGhs,
+    ghsPerUsd: safe.ghsPerUsd,
+  };
 }
