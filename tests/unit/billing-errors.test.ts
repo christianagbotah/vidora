@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "fs";
+import path from "path";
 import { BillingSafetyError } from "@/lib/provider-cost-billing";
 import { providerBillingErrorResponse } from "@/lib/billing-errors";
 
@@ -30,7 +32,7 @@ describe("provider billing HTTP error boundary", () => {
     expect(body.error).toBe("You need 12 credits for this operation but currently have 4.");
   });
 
-  test("maps stale provider pricing to a fresh-quote conflict", async () => {
+  test("maps stale provider pricing to a safe service-unavailable response", async () => {
     const response = providerBillingErrorResponse(
       new BillingSafetyError("STALE_PROVIDER_PRICE", "secret provider/model diagnostic"),
     );
@@ -67,5 +69,16 @@ describe("provider billing HTTP error boundary", () => {
     expect(response.status).toBe(500);
     expect(body.error).toBe("The AI operation could not be completed. Please try again later.");
     expect(body.adminDetail).toBe("internal reconciliation diagnostic");
+  });
+
+  test("split-scenes routes funded failures through the safe billing boundary", () => {
+    const route = readFileSync(
+      path.join(process.cwd(), "src", "app", "api", "split-scenes", "route.ts"),
+      "utf8",
+    );
+
+    expect(route).toContain("providerBillingErrorResponse(error");
+    expect(route).toContain('logLabel: "split-scenes"');
+    expect(route).not.toContain("`AI story director failed: ${error.message}`");
   });
 });
