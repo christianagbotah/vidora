@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { findReservationByReference } from "@/lib/credit-reservations";
 import { buildProfessionalSceneDirectorPrompt } from "@/lib/ai-provider-router";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import {
   reserveMeteredZaiTextOperation,
   resolveConfiguredBillableZaiTextModel,
@@ -130,11 +131,12 @@ export async function POST(req: NextRequest) {
       });
       providerDirectedPrompt = cleanStructuredOutput(result.content);
     } catch (error) {
-      console.error("[split-scenes] funded provider-directed scene planning failed:", error);
-      return NextResponse.json({
-        success: false,
-        error: error instanceof Error ? `AI story director failed: ${error.message}` : "AI story director failed",
-      }, { status: 502 });
+      return providerBillingErrorResponse(error, {
+        session: authResult.session,
+        logLabel: "split-scenes",
+        fallbackStatus: 502,
+        fallbackMessage: "The AI story director could not complete this request. Please try again later.",
+      });
     }
 
     if (!isLocallyStructuredScript(providerDirectedPrompt)) {
