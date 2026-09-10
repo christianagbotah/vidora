@@ -45,9 +45,11 @@ function relative(file: string): string {
   return path.relative(ROOT, file).replace(/\\/g, "/");
 }
 
-function isOperationalProbe(file: string): boolean {
+function isCustomerApiRoute(file: string): boolean {
   const rel = relative(file);
-  return rel.includes("/api/admin/") || rel.includes("/api/health/");
+  return path.basename(file) === "route.ts"
+    && !rel.includes("/api/admin/")
+    && !rel.includes("/api/health/");
 }
 
 function directProviderCalls(source: string): string[] {
@@ -64,7 +66,10 @@ describe("customer provider billing boundaries", () => {
   test("every non-admin API route with a provider submission declares a Billing v2 guard", () => {
     const offenders: string[] = [];
     for (const file of walkTsFiles(API_ROOT)) {
-      if (isOperationalProbe(file)) continue;
+      // Next.js API endpoints are route.ts files. Internal helpers under the API
+      // tree are covered by the provider-boundary inventory; this assertion is
+      // deliberately about the customer-facing route that declares the guard.
+      if (!isCustomerApiRoute(file)) continue;
       const source = readFileSync(file, "utf8");
       const calls = directProviderCalls(source);
       if (calls.length === 0) continue;
@@ -73,6 +78,17 @@ describe("customer provider billing boundaries", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("split-scenes validates legacy local-parser compatibility before delegation", () => {
+    const route = readFileSync(path.join(ROOT, "src", "app", "api", "split-scenes", "route.ts"), "utf8");
+    expect(route).toContain("reserveMeteredZaiTextOperation");
+    expect(route).toContain("submitBilledZaiText");
+    expect(route).toContain("hasParseableSceneBody");
+    expect(route).toContain("const explicitPattern =");
+    expect(route).toContain("const numberedPattern =");
+    expect(route).toContain("if (!isLocallyStructuredScript(providerDirectedPrompt))");
+    expect(route).toContain("return runSplitScenes(forwarded)");
   });
 
   test("generation worker uses immutable prepaid lines and strict single-submit media transports", () => {
