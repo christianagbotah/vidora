@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { calculateCommercialCharge, type CommercialPricingPolicy } from "@/lib/provider-cost-billing";
-import { calculateCreditPackageEconomics } from "@/lib/package-billing-safety";
+import { calculateCreditPackageEconomics, calculateSafeCreditPackageCheckoutPrice } from "@/lib/package-billing-safety";
 import {
   DEFAULT_ZAI_IMAGE_MODEL_ID,
   resolveZaiImageBillingModel,
@@ -58,6 +58,22 @@ describe("credit package economic floor", () => {
     expect(economics.effectiveCredits).toBe(120);
     expect(economics.minimumPriceUsd).toBeCloseTo(6.00, 8);
     expect(economics.minimumPriceGhs).toBeCloseTo(75, 8);
+  });
+
+  test("legacy GHS package price is raised to the live floor while a safe USD price is preserved", () => {
+    const safe = calculateSafeCreditPackageCheckoutPrice({
+      baseCredits: 50,
+      bonusPct: 10,
+      configuredPriceUsd: 4.5,
+      configuredPriceGhs: 22,
+      ghsPerUsd: 12.5,
+      policy,
+    });
+    expect(safe.effectiveCredits).toBe(55);
+    expect(safe.checkoutPriceUsd).toBe(4.5);
+    expect(safe.checkoutPriceGhs).toBe(34.38);
+    expect(safe.repricedUsd).toBe(false);
+    expect(safe.repricedGhs).toBe(true);
   });
 });
 
