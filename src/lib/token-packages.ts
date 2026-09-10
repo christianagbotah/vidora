@@ -1,6 +1,9 @@
 import { db } from "@/lib/db";
 import { TOKEN_PACKAGES, getEffectiveTokens, type TokenPackage } from "@/lib/pricing";
-import { assertCreditPackageIsEconomicallySafe } from "@/lib/package-billing-safety";
+import {
+  assertCreditPackageIsEconomicallySafe,
+  getSafeCreditPackageCheckoutPrice,
+} from "@/lib/package-billing-safety";
 
 /**
  * ───────────────────────────────────────────────────────────────────────────
@@ -13,15 +16,17 @@ import { assertCreditPackageIsEconomicallySafe } from "@/lib/package-billing-saf
  *  and the admin CRUD (/api/admin/packages) go through.
  *
  *  ── Resilience ──
- *  • If the DB is unreachable or empty, we fall back to the hardcoded
- *    TOKEN_PACKAGES in pricing.ts so the storefront never breaks.
- *  • A 60-second in-memory cache keeps the public packages route fast —
- *    token packages change rarely, so we don't need to hit the DB on every
- *    page load. The cache is invalidated on any admin write.
+ *  • If the DB is unreachable or empty, the service can fall back to the
+ *    hardcoded package shapes in src/lib/pricing.ts.
+ *  • Fresh/default DB rows are seeded at the live billing safety floor so an
+ *    old GHS sticker price cannot prevent a clean installation from seeding.
+ *  • A 60-second in-memory cache keeps the public packages route fast.
  *
  *  ── Billing invariant ──
- *  • Every ACTIVE package must sell all base + bonus credits for at least the
- *    configured commercial value of those credits in both USD and GHS.
+ *  • New/edited ACTIVE package prices must already cover all base + bonus
+ *    credits in both USD and GHS.
+ *  • Existing legacy rows are additionally protected at storefront/checkout
+ *    by live upward repricing when FX or policy makes a stored price unsafe.
  *  • Inactive packages may be saved below the floor so an admin can disable
  *    or repair a legacy package without being locked out of the control plane.
  */
@@ -105,27 +110,30 @@ async function assertSafeIfActive(data: Pick<PackageInput, "tokens" | "bonusPct"
   });
 }
 
+async function safeDefaultPackages() {
+  return Promise.all(TOKEN_PACKAGES.map(async (pkg) => {
+    const safe = await getSafeCreditPackageCheckoutPrice({
+      baseCredits: pkg.tokens,
+      bonusPct: pkg.bonusPct,
+      configuredPriceUsd: pkg.priceUSD,
+      configuredPriceGhs: pkg.priceGHS,
+    });
+    return { pkg, safe };
+  }));
+}
+
 async function seedIfEmpty(): Promise<void> {
   const count = await db.tokenPackage.count();
   if (count > 0) return;
 
-  // Validate all defaults before writing any of them so an operator cannot end
-  // up with a partially seeded storefront when billing policy/FX has changed.
-  await Promise.all(TOKEN_PACKAGES.map((pkg) => assertSafeIfActive({
-    tokens: pkg.tokens,
-    bonusPct: pkg.bonusPct,
-    priceGHS: pkg.priceGHS,
-    priceUSD: pkg.priceUSD,
-    isActive: true,
-  })));
-
+  const defaults = await safeDefaultPackages();
   await db.tokenPackage.createMany({
-    data: TOKEN_PACKAGES.map((pkg, idx) => ({
+    data: defaults.map(({ pkg, safe }, idx) => ({
       slug: pkg.id,
       name: pkg.name,
       tokens: pkg.tokens,
-      priceGHS: pkg.priceGHS,
-      priceUSD: pkg.priceUSD,
+      priceGHS: safe.checkoutPriceGhs,
+      priceUSD: safe.checkoutPriceUsd,
       bonusPct: pkg.bonusPct,
       popular: pkg.popular,
       isActive: true,
@@ -305,8 +313,6 @@ export async function updatePackage(id: string, input: Partial<PackageInput>): P
     existingFeatures = [];
   }
 
-  // Merge before sanitizing. This makes the advertised partial-update contract
-  // real and prevents an omitted field from being rewritten to 0/false/empty.
   const data = sanitizeInput({
     slug: existing.slug,
     name: existing.name,
@@ -346,23 +352,17 @@ export async function deletePackage(id: string): Promise<void> {
 }
 
 export async function resetToDefaults(): Promise<DbTokenPackage[]> {
-  await Promise.all(TOKEN_PACKAGES.map((pkg) => assertSafeIfActive({
-    tokens: pkg.tokens,
-    bonusPct: pkg.bonusPct,
-    priceGHS: pkg.priceGHS,
-    priceUSD: pkg.priceUSD,
-    isActive: true,
-  })));
+  const defaults = await safeDefaultPackages();
 
   await db.$transaction(async (tx) => {
     await tx.tokenPackage.deleteMany({});
     await tx.tokenPackage.createMany({
-      data: TOKEN_PACKAGES.map((pkg, idx) => ({
+      data: defaults.map(({ pkg, safe }, idx) => ({
         slug: pkg.id,
         name: pkg.name,
         tokens: pkg.tokens,
-        priceGHS: pkg.priceGHS,
-        priceUSD: pkg.priceUSD,
+        priceGHS: safe.checkoutPriceGhs,
+        priceUSD: safe.checkoutPriceUsd,
         bonusPct: pkg.bonusPct,
         popular: pkg.popular,
         isActive: true,
