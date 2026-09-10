@@ -7,6 +7,11 @@ on:
     branches:
       - main
       - production-hardening/**
+  workflow_dispatch:
+  schedule:
+    # Recovery path: validate the default branch even when an integration-created
+    # push/PR event is suppressed before GitHub can enqueue the normal CI run.
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
