@@ -2,33 +2,61 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { requireSceneAccess } from "@/lib/project-auth";
-import { resolveModelForRequest } from "@/lib/video-models";
-import { getEngineChargeInfo } from "@/lib/storefront";
-import { PRICING } from "@/lib/pricing";
-import { deductTokensForOperation } from "@/lib/tokens";
+import { buildProjectGenerationQuoteLines } from "@/lib/project-generation-quote";
+import {
+  findReservationByReference,
+  getBillingQuote,
+  releaseReservationRemainder,
+  reserveBillingQuote,
+  type BillingQuoteLine,
+} from "@/lib/credit-reservations";
+import {
+  getGenerationRunBillingLink,
+  setGenerationRunBillingLink,
+} from "@/lib/generation-run-billing";
 
 export const runtime = "nodejs";
 
+function quoteLineSignature(lines: BillingQuoteLine[]): string {
+  return JSON.stringify(
+    [...lines]
+      .map((line) => ({
+        lineKey: line.lineKey,
+        provider: line.provider,
+        model: line.model,
+        operation: line.operation,
+        billingUnit: line.billingUnit,
+        quantity: line.quantity,
+        providerCostUsd: line.providerCostUsd,
+        bufferedCostUsd: line.bufferedCostUsd,
+        customerValueUsd: line.customerValueUsd,
+        credits: line.credits,
+        pricingVersion: line.pricingVersion,
+        verifiedAt: line.verifiedAt,
+      }))
+      .sort((a, b) => a.lineKey.localeCompare(b.lineKey)),
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const sceneId = typeof body.sceneId === "string" ? body.sceneId : "";
+    const body = await req.json() as Record<string, unknown>;
+    const sceneId = typeof body.sceneId === "string" ? body.sceneId.trim() : "";
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    const quoteId = typeof body.quoteId === "string" ? body.quoteId.trim() : "";
     if (!sceneId || !prompt) {
       return NextResponse.json(
         { success: false, error: "Prompt and sceneId are required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Authorization is anchored to the scene itself. A caller cannot bypass
-    // auth by omitting projectId or by pairing a scene with another project.
     const access = await requireSceneAccess(sceneId, true);
     if (!access.ok) return access.response;
     if (body.projectId && String(body.projectId) !== access.scene.projectId) {
       return NextResponse.json(
         { success: false, error: "Scene does not belong to the supplied project" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -37,7 +65,7 @@ export async function POST(req: NextRequest) {
     if (!userId || userId === "guest") {
       return NextResponse.json(
         { success: false, error: "Please sign in to generate video" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
@@ -53,7 +81,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
     }
 
-    // Do not submit a second provider task while a persisted task is active.
     if (scene.taskId && !scene.videoUrl && scene.status === "generating") {
       return NextResponse.json({
         success: true,
@@ -63,39 +90,102 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const activeKey = `project:${projectId}`;
+    const existingRun = await db.generationRun.findUnique({ where: { activeKey } });
+    if (existingRun) {
+      const link = await getGenerationRunBillingLink(existingRun.id);
+      if (existingRun.status === "queued") {
+        const reservation = link.creditReservationId
+          ? null
+          : await findReservationByReference(existingRun.id);
+        const reservationId = link.creditReservationId || reservation?.id || null;
+        if (!reservationId) {
+          return NextResponse.json({
+            success: false,
+            error: "An interrupted scene generation has no verifiable prepaid reservation. Provider execution remains blocked.",
+            reconciliationRequired: true,
+            generationRunId: existingRun.id,
+          }, { status: 409 });
+        }
+        if (!link.creditReservationId) {
+          const quote = await getBillingQuote(reservation!.quoteId);
+          if (!quote) {
+            return NextResponse.json({
+              success: false,
+              error: "Reserved generation quote is missing",
+              reconciliationRequired: true,
+              generationRunId: existingRun.id,
+            }, { status: 409 });
+          }
+          await setGenerationRunBillingLink({
+            runId: existingRun.id,
+            billingQuoteId: quote.id,
+            creditReservationId: reservationId,
+          });
+        }
+        await db.generationRun.update({ where: { id: existingRun.id }, data: { status: "running" } });
+        return NextResponse.json({
+          success: true,
+          alreadyRunning: true,
+          resumedPrepaidRun: true,
+          status: "generating",
+          generationRunId: existingRun.id,
+          message: "Recovered a prepaid scene generation after an interrupted handoff.",
+        });
+      }
+
+      if (!link.creditReservationId && !existingRun.chargeTransactionId) {
+        return NextResponse.json({
+          success: false,
+          error: "Generation run is not backed by verifiable prepaid funding.",
+          reconciliationRequired: true,
+          generationRunId: existingRun.id,
+        }, { status: 409 });
+      }
+      return NextResponse.json({
+        success: true,
+        alreadyRunning: true,
+        status: "generating",
+        generationRunId: existingRun.id,
+        message: "Generation is already in progress for this project.",
+      });
+    }
+
+    if (!quoteId) {
+      return NextResponse.json({
+        success: false,
+        error: "Review and confirm the current scene generation cost before regenerating.",
+        code: "BILLING_QUOTE_REQUIRED",
+      }, { status: 409 });
+    }
+
+    const currentBilling = await buildProjectGenerationQuoteLines({
+      projectId,
+      userId,
+      sceneId,
+    });
+    const billingQuote = await getBillingQuote(quoteId);
+    if (
+      !billingQuote ||
+      billingQuote.userId !== userId ||
+      billingQuote.projectId !== projectId ||
+      billingQuote.status !== "open" ||
+      billingQuote.expiresAt.getTime() <= Date.now() ||
+      quoteLineSignature(billingQuote.breakdown) !== quoteLineSignature(currentBilling.lines)
+    ) {
+      return NextResponse.json({
+        success: false,
+        error: "The scene generation cost changed or the quote expired. Review the refreshed cost before regenerating.",
+        code: "BILLING_QUOTE_STALE",
+      }, { status: 409 });
+    }
+
     const duration = Number.isFinite(Number(body.duration))
       ? Math.max(1, Math.min(30, Math.round(Number(body.duration))))
       : 10;
-    const videoModel = project.videoModel ?? null;
+    const creditsRequired = billingQuote.creditsRequired;
+    const costUsd = billingQuote.providerCostUsd;
 
-    let referenceImage: string | undefined;
-    if (scene.referenceImageUrl && !scene.referenceImageUrl.startsWith("data:")) {
-      referenceImage = scene.referenceImageUrl;
-    } else if (scene.characterIds) {
-      try {
-        const charIds: string[] = JSON.parse(scene.characterIds);
-        const pictured = project.characters
-          .filter((character) => charIds.includes(character.id) && character.imageUrl && !character.imageUrl.startsWith("data:"))
-          .sort((a, b) => {
-            const priority = (role?: string | null) => /protagonist|primary|main|subject/i.test(role || "") ? 1 : 0;
-            return priority(b.role) - priority(a.role);
-          });
-        if (pictured[0]?.imageUrl) referenceImage = pictured[0].imageUrl;
-      } catch {
-        // Malformed legacy characterIds should not weaken authorization/billing.
-      }
-    }
-
-    const resolvedModel = resolveModelForRequest(videoModel, Boolean(referenceImage));
-    const engineCharge = await getEngineChargeInfo(resolvedModel);
-    const needsThumbnail = !scene.imageUrl;
-    const tokensToCharge = engineCharge.tokensPerClip + (needsThumbnail ? PRICING.image_gen.tokens : 0);
-    const costUsd = engineCharge.costUsdPerClip + (needsThumbnail ? PRICING.image_gen.costUsd : 0);
-
-    // Use the same project-level active key as batch generation. This prevents
-    // a batch request and a single-scene request from charging/submitting work
-    // concurrently for the same project.
-    const activeKey = `project:${projectId}`;
     let run;
     try {
       run = await db.generationRun.create({
@@ -106,8 +196,8 @@ export async function POST(req: NextRequest) {
           sceneIds: JSON.stringify([sceneId]),
           activeKey,
           status: "queued",
-          totalTokens: tokensToCharge,
-          tokensPerScene: tokensToCharge,
+          totalTokens: creditsRequired,
+          tokensPerScene: creditsRequired,
           costUsdPerScene: costUsd,
         },
       });
@@ -125,65 +215,76 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    const deduction = await deductTokensForOperation({
-      userId,
-      operation: "video_gen",
-      description: `Generate scene ${scene.sceneNumber} for \"${project.title}\"`,
-      referenceId: sceneId,
-      idempotencyKey: `generation:${run.id}:charge`,
-      customTokens: tokensToCharge,
-      customCostUsd: costUsd,
-    });
-    if (!deduction.success) {
+    let reserved: Awaited<ReturnType<typeof reserveBillingQuote>> | undefined;
+    try {
+      reserved = await reserveBillingQuote({
+        quoteId: billingQuote.id,
+        userId,
+        referenceId: run.id,
+        idempotencyKey: `generation:${run.id}:reservation`,
+      });
+      await setGenerationRunBillingLink({
+        runId: run.id,
+        billingQuoteId: billingQuote.id,
+        creditReservationId: reserved.reservation.id,
+      });
+
+      await db.$transaction(async (tx) => {
+        await tx.videoScene.update({
+          where: { id: sceneId },
+          data: {
+            enhancedPrompt: prompt,
+            duration,
+            status: "queued",
+            taskId: null,
+            errorMessage: null,
+          },
+        });
+        await tx.videoProject.update({
+          where: { id: projectId },
+          data: { status: "generating" },
+        });
+        await tx.generationRun.update({
+          where: { id: run.id },
+          data: { status: "running", error: null },
+        });
+      });
+    } catch (error) {
+      if (reserved?.reservation.id) {
+        await releaseReservationRemainder({
+          reservationId: reserved.reservation.id,
+          userId,
+          reason: `Single-scene generation run ${run.id} failed before durable worker handoff`,
+        }).catch(() => undefined);
+      }
       await db.generationRun.update({
         where: { id: run.id },
-        data: { status: "failed", activeKey: null, error: deduction.error || "Token charge failed" },
+        data: { status: "failed", activeKey: null, error: error instanceof Error ? error.message : "Credit reservation failed" },
       }).catch(() => undefined);
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : "Could not reserve scene generation credits",
+        code: "CREDIT_RESERVATION_FAILED",
+      }, { status: 402 });
     }
 
-    await db.generationRun.update({
-      where: { id: run.id },
-      data: { status: "running", chargeTransactionId: deduction.transactionId || null },
-    });
-    await db.videoScene.update({
-      where: { id: sceneId },
-      data: {
-        enhancedPrompt: prompt,
-        duration,
-        status: "queued",
-        taskId: null,
-        errorMessage: null,
-      },
-    });
-    await db.videoProject.update({
-      where: { id: projectId },
-      data: { status: "generating" },
-    });
-
-
-    // Durable handoff: the shared generation worker owns all provider work.
-    // No video/image provider call occurs inside this Next.js request process.
     return NextResponse.json({
       success: true,
       status: "generating",
       generationRunId: run.id,
-      tokensCharged: tokensToCharge,
-      remainingTokens: deduction.remainingTokens,
+      tokensCharged: 0,
+      creditsReserved: creditsRequired,
+      remainingTokens: reserved.wallet.availableCredits,
       message: "Video generation started. This may take a few minutes.",
     });
   } catch (error) {
     console.error(
       "generate-video-scene:",
-      error instanceof Error ? error.message : "unknown error"
+      error instanceof Error ? error.message : "unknown error",
     );
     return NextResponse.json(
-      { success: false, error: "Failed to start generation" },
-      { status: 500 }
+      { success: false, error: error instanceof Error ? error.message : "Failed to start generation" },
+      { status: 500 },
     );
   }
 }
-

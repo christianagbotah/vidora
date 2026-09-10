@@ -1,5 +1,9 @@
 import { db } from "@/lib/db";
 import { TOKEN_PACKAGES, getEffectiveTokens, type TokenPackage } from "@/lib/pricing";
+import {
+  assertCreditPackageIsEconomicallySafe,
+  getSafeCreditPackageCheckoutPrice,
+} from "@/lib/package-billing-safety";
 
 /**
  * ───────────────────────────────────────────────────────────────────────────
@@ -12,15 +16,19 @@ import { TOKEN_PACKAGES, getEffectiveTokens, type TokenPackage } from "@/lib/pri
  *  and the admin CRUD (/api/admin/packages) go through.
  *
  *  ── Resilience ──
- *  • If the DB is unreachable or empty, we fall back to the hardcoded
- *    TOKEN_PACKAGES in pricing.ts so the storefront never breaks.
- *  • A 60-second in-memory cache keeps the public packages route fast —
- *    token packages change rarely, so we don't need to hit the DB on every
- *    page load. The cache is invalidated on any admin write.
+ *  • If the DB is unreachable or empty, the service can fall back to the
+ *    hardcoded package shapes in src/lib/pricing.ts.
+ *  • Fresh/default DB rows are seeded at the live billing safety floor so an
+ *    old GHS sticker price cannot prevent a clean installation from seeding.
+ *  • A 60-second in-memory cache keeps the public packages route fast.
  *
- *  ── Seeding ──
- *  On first access (DB has zero rows), we seed the DB with the hardcoded
- *    defaults so the admin starts from a known, sensible baseline.
+ *  ── Billing invariant ──
+ *  • New/edited ACTIVE package prices must already cover all base + bonus
+ *    credits in both USD and GHS.
+ *  • Existing legacy rows are additionally protected at storefront/checkout
+ *    by live upward repricing when FX or policy makes a stored price unsafe.
+ *  • Inactive packages may be saved below the floor so an admin can disable
+ *    or repair a legacy package without being locked out of the control plane.
  */
 
 export interface DbTokenPackage {
@@ -37,21 +45,17 @@ export interface DbTokenPackage {
   features: string[];
   createdAt: Date;
   updatedAt: Date;
-  // Derived (computed on read so admins see live numbers as they edit)
   effectiveTokens: number;
   effectiveTokenPriceGHS: number;
   effectiveTokenPriceUSD: number;
 }
 
-/** Shape returned to the public storefront (excludes internal fields). */
 export type PublicTokenPackage = DbTokenPackage;
 
-// ── In-memory cache ──
 let cache: { packages: DbTokenPackage[]; at: number } | null = null;
-const CACHE_TTL_MS = 60_000; // 60s
+const CACHE_TTL_MS = 60_000;
 
-/** Convert a DB row (with features as JSON string) to the API shape. */
-function rowToPackage(row: {
+interface TokenPackageRow {
   id: string;
   slug: string;
   name: string;
@@ -65,7 +69,9 @@ function rowToPackage(row: {
   features: string;
   createdAt: Date;
   updatedAt: Date;
-}): DbTokenPackage {
+}
+
+function rowToPackage(row: TokenPackageRow): DbTokenPackage {
   let features: string[] = [];
   try {
     const parsed = JSON.parse(row.features);
@@ -73,8 +79,7 @@ function rowToPackage(row: {
   } catch {
     features = [];
   }
-  const effectiveTokens =
-    row.tokens + Math.round((row.tokens * row.bonusPct) / 100);
+  const effectiveTokens = row.tokens + Math.round((row.tokens * row.bonusPct) / 100);
   return {
     id: row.id,
     slug: row.slug,
@@ -95,18 +100,40 @@ function rowToPackage(row: {
   };
 }
 
-/** Seed the DB with hardcoded defaults if it's empty. Runs once. */
+async function assertSafeIfActive(data: Pick<PackageInput, "tokens" | "bonusPct" | "priceGHS" | "priceUSD" | "isActive">): Promise<void> {
+  if (!data.isActive) return;
+  await assertCreditPackageIsEconomicallySafe({
+    baseCredits: data.tokens,
+    bonusPct: data.bonusPct,
+    priceUsd: data.priceUSD,
+    priceGhs: data.priceGHS,
+  });
+}
+
+async function safeDefaultPackages() {
+  return Promise.all(TOKEN_PACKAGES.map(async (pkg) => {
+    const safe = await getSafeCreditPackageCheckoutPrice({
+      baseCredits: pkg.tokens,
+      bonusPct: pkg.bonusPct,
+      configuredPriceUsd: pkg.priceUSD,
+      configuredPriceGhs: pkg.priceGHS,
+    });
+    return { pkg, safe };
+  }));
+}
+
 async function seedIfEmpty(): Promise<void> {
   const count = await db.tokenPackage.count();
   if (count > 0) return;
 
+  const defaults = await safeDefaultPackages();
   await db.tokenPackage.createMany({
-    data: TOKEN_PACKAGES.map((pkg, idx) => ({
-      slug: pkg.id, // "starter", "basic", etc.
+    data: defaults.map(({ pkg, safe }, idx) => ({
+      slug: pkg.id,
       name: pkg.name,
       tokens: pkg.tokens,
-      priceGHS: pkg.priceGHS,
-      priceUSD: pkg.priceUSD,
+      priceGHS: safe.checkoutPriceGhs,
+      priceUSD: safe.checkoutPriceUsd,
       bonusPct: pkg.bonusPct,
       popular: pkg.popular,
       isActive: true,
@@ -116,10 +143,6 @@ async function seedIfEmpty(): Promise<void> {
   });
 }
 
-/**
- * Get all packages (admin view — includes inactive ones).
- * Bypasses the cache so admins always see fresh data after edits.
- */
 export async function getAllPackagesForAdmin(): Promise<DbTokenPackage[]> {
   try {
     await seedIfEmpty();
@@ -129,7 +152,6 @@ export async function getAllPackagesForAdmin(): Promise<DbTokenPackage[]> {
     return rows.map(rowToPackage);
   } catch (err) {
     console.error("[token-packages] admin list failed, returning fallback:", err);
-    // Fallback: treat hardcoded list as admin-shape (all active)
     return TOKEN_PACKAGES.map((pkg, idx) => {
       const effective = getEffectiveTokens(pkg);
       return {
@@ -154,15 +176,8 @@ export async function getAllPackagesForAdmin(): Promise<DbTokenPackage[]> {
   }
 }
 
-/**
- * Get active packages for the public storefront (sorted, cached).
- * This is what /api/payments/packages calls.
- */
 export async function getActivePackages(): Promise<DbTokenPackage[]> {
-  // Cache hit?
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
-    return cache.packages;
-  }
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.packages;
 
   try {
     await seedIfEmpty();
@@ -175,7 +190,6 @@ export async function getActivePackages(): Promise<DbTokenPackage[]> {
     return packages;
   } catch (err) {
     console.error("[token-packages] public list failed, returning fallback:", err);
-    // Fallback to hardcoded defaults so the storefront never breaks
     return TOKEN_PACKAGES.map((pkg, idx) => {
       const effective = getEffectiveTokens(pkg);
       return {
@@ -200,19 +214,13 @@ export async function getActivePackages(): Promise<DbTokenPackage[]> {
   }
 }
 
-/** Invalidate the cache — call after any admin write. */
 export function invalidatePackageCache(): void {
   cache = null;
 }
 
-/** Find a single active package by slug (used by checkout). */
-export async function getPackageBySlug(
-  slug: string
-): Promise<DbTokenPackage | null> {
+export async function getPackageBySlug(slug: string): Promise<DbTokenPackage | null> {
   try {
-    const row = await db.tokenPackage.findFirst({
-      where: { slug, isActive: true },
-    });
+    const row = await db.tokenPackage.findFirst({ where: { slug, isActive: true } });
     if (!row) return null;
     return rowToPackage(row);
   } catch (err) {
@@ -241,8 +249,6 @@ export async function getPackageBySlug(
   }
 }
 
-// ── Admin write operations ──
-
 export interface PackageInput {
   slug: string;
   name: string;
@@ -265,18 +271,17 @@ function sanitizeInput(input: Partial<PackageInput>): PackageInput {
     priceUSD: Math.max(0, Number(input.priceUSD) || 0),
     bonusPct: Math.max(0, Math.min(100, Number(input.bonusPct) || 0)),
     popular: Boolean(input.popular),
-    isActive: input.isActive !== false, // default true
+    isActive: input.isActive !== false,
     sortOrder: Math.max(0, Math.floor(Number(input.sortOrder) || 0)),
     features: Array.isArray(input.features) ? input.features.map(String) : [],
   };
 }
 
-export async function createPackage(
-  input: Partial<PackageInput>
-): Promise<DbTokenPackage> {
+export async function createPackage(input: Partial<PackageInput>): Promise<DbTokenPackage> {
   const data = sanitizeInput(input);
   if (!data.slug) throw new Error("Slug is required");
   if (!data.name) throw new Error("Name is required");
+  await assertSafeIfActive(data);
 
   const row = await db.tokenPackage.create({
     data: {
@@ -296,17 +301,36 @@ export async function createPackage(
   return rowToPackage(row);
 }
 
-export async function updatePackage(
-  id: string,
-  input: Partial<PackageInput>
-): Promise<DbTokenPackage> {
-  const data = sanitizeInput(input);
+export async function updatePackage(id: string, input: Partial<PackageInput>): Promise<DbTokenPackage> {
+  const existing = await db.tokenPackage.findUnique({ where: { id } });
+  if (!existing) throw new Error("Package not found");
+
+  let existingFeatures: string[] = [];
+  try {
+    const parsed = JSON.parse(existing.features);
+    if (Array.isArray(parsed)) existingFeatures = parsed.map(String);
+  } catch {
+    existingFeatures = [];
+  }
+
+  const data = sanitizeInput({
+    slug: existing.slug,
+    name: existing.name,
+    tokens: existing.tokens,
+    priceGHS: existing.priceGHS,
+    priceUSD: existing.priceUSD,
+    bonusPct: existing.bonusPct,
+    popular: existing.popular,
+    isActive: existing.isActive,
+    sortOrder: existing.sortOrder,
+    features: existingFeatures,
+    ...input,
+  });
+  await assertSafeIfActive(data);
+
   const row = await db.tokenPackage.update({
     where: { id },
     data: {
-      // slug is intentionally NOT updatable here — it's the stable checkout
-      // reference. Admins can rename the display name; slug stays fixed so
-      // existing payment links don't break.
       name: data.name,
       tokens: data.tokens,
       priceGHS: data.priceGHS,
@@ -322,32 +346,33 @@ export async function updatePackage(
   return rowToPackage(row);
 }
 
-/** Hard delete (use sparingly — prefer `isActive: false`). */
 export async function deletePackage(id: string): Promise<void> {
   await db.tokenPackage.delete({ where: { id } });
   invalidatePackageCache();
 }
 
-/** Reset all packages to the hardcoded defaults (admin "Reset" button). */
 export async function resetToDefaults(): Promise<DbTokenPackage[]> {
-  await db.tokenPackage.deleteMany({});
-  await db.tokenPackage.createMany({
-    data: TOKEN_PACKAGES.map((pkg, idx) => ({
-      slug: pkg.id,
-      name: pkg.name,
-      tokens: pkg.tokens,
-      priceGHS: pkg.priceGHS,
-      priceUSD: pkg.priceUSD,
-      bonusPct: pkg.bonusPct,
-      popular: pkg.popular,
-      isActive: true,
-      sortOrder: idx,
-      features: JSON.stringify(pkg.features),
-    })),
+  const defaults = await safeDefaultPackages();
+
+  await db.$transaction(async (tx) => {
+    await tx.tokenPackage.deleteMany({});
+    await tx.tokenPackage.createMany({
+      data: defaults.map(({ pkg, safe }, idx) => ({
+        slug: pkg.id,
+        name: pkg.name,
+        tokens: pkg.tokens,
+        priceGHS: safe.checkoutPriceGhs,
+        priceUSD: safe.checkoutPriceUsd,
+        bonusPct: pkg.bonusPct,
+        popular: pkg.popular,
+        isActive: true,
+        sortOrder: idx,
+        features: JSON.stringify(pkg.features),
+      })),
+    });
   });
   invalidatePackageCache();
   return getAllPackagesForAdmin();
 }
 
-/** Type re-export for callers that already import from pricing.ts */
 export type { TokenPackage };

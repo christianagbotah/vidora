@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getActiveGateway } from "@/lib/payments";
 import { v4 as uuid } from "uuid";
 import { getActivePackages } from "@/lib/token-packages";
+import { getSafeCreditPackageCheckoutPrice } from "@/lib/package-billing-safety";
 
 export async function POST(req: NextRequest) {
   try {
@@ -40,8 +41,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Hubtel checkout is available in GHS only" }, { status: 400 });
     }
 
-    // Financial entitlement is derived exclusively from the server-side package.
-    const amount = currency === "USD" ? pkg.priceUSD : pkg.priceGHS;
+    // Recompute the live package floor at the money-moving boundary. This is
+    // intentionally independent of the storefront response so a stale browser,
+    // FX move, bonus edit or policy change can never underfund newly issued
+    // credits. The gateway always receives the higher of configured price and
+    // current safe floor.
+    const safePrice = await getSafeCreditPackageCheckoutPrice({
+      baseCredits: pkg.tokens,
+      bonusPct: pkg.bonusPct,
+      configuredPriceUsd: pkg.priceUSD,
+      configuredPriceGhs: pkg.priceGHS,
+    });
+    const amount = currency === "USD" ? safePrice.checkoutPriceUsd : safePrice.checkoutPriceGhs;
     if (!Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json({ success: false, error: "Package price is not configured" }, { status: 422 });
     }
@@ -60,6 +71,14 @@ export async function POST(req: NextRequest) {
       currency,
       gateway: gatewayName,
       packageUpdatedAt: pkg.updatedAt.toISOString(),
+      configuredPriceUsd: safePrice.configuredPriceUsd,
+      configuredPriceGhs: safePrice.configuredPriceGhs,
+      minimumPriceUsd: safePrice.minimumPriceUsd,
+      minimumPriceGhs: safePrice.minimumPriceGhs,
+      checkoutPriceUsd: safePrice.checkoutPriceUsd,
+      checkoutPriceGhs: safePrice.checkoutPriceGhs,
+      ghsPerUsd: safePrice.ghsPerUsd,
+      priceAdjustedForSafety: safePrice.repricedUsd || safePrice.repricedGhs,
     };
 
     const payment = await db.payment.create({
@@ -127,10 +146,11 @@ export async function POST(req: NextRequest) {
         baseTokens,
         bonusTokens,
         totalTokens: baseTokens + bonusTokens,
+        priceAdjustedForSafety: safePrice.repricedUsd || safePrice.repricedGhs,
       },
     });
   } catch (error) {
     console.error("Payment initialization error", error instanceof Error ? error.message : "unknown error");
-    return NextResponse.json({ success: false, error: "Payment initialization failed" }, { status: 500 });
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Payment initialization failed" }, { status: 422 });
   }
 }

@@ -5,7 +5,7 @@ import { zai } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { PRICING } from "@/lib/pricing";
+import { quoteFreeZaiTextAttempt } from "@/lib/zai-metered-billing";
 
 export const runtime = "nodejs";
 
@@ -75,14 +75,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const quota = await consumePreviewQuota(userId, "storyboard");
-    if (!quota.ok) {
-      return NextResponse.json(
-        { success: false, error: quota.reason, previewQuota: quota },
-        { status: 429 }
-      );
-    }
-
     const history: Array<{ role: string; content: string }> = Array.isArray(body.history)
       ? body.history
           .slice(-6)
@@ -101,26 +93,45 @@ export async function POST(req: NextRequest) {
           .join("\n")}\n\nUser's new message: ${message}`
       : message;
 
+    const cost = await quoteFreeZaiTextAttempt({
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt,
+      maxOutputTokens: 1_000,
+      requireConfiguredPrimary: false,
+    });
+
+    const quota = await consumePreviewQuota(userId, "storyboard");
+    if (!quota.ok) {
+      return NextResponse.json(
+        { success: false, error: quota.reason, previewQuota: quota },
+        { status: 429 }
+      );
+    }
+
     const attemptId = crypto.randomUUID();
     await deductTokensForOperation({
       userId,
       operation: "llm",
-      description: "Free Vidora assistant provider attempt",
+      description: `Free Vidora assistant provider attempt (${cost.model})`,
       referenceId: attemptId,
       idempotencyKey: `assistant:${attemptId}`,
       customTokens: 0,
-      customCostUsd: PRICING.llm.costUsd,
+      customCostUsd: cost.providerCostUsd,
     });
 
     const reply = await zai.chat({
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
+      model: cost.model,
+      thinking: "disabled",
+      extra: { max_tokens: 1_000 },
       retry: { label: "assistant chat", timeoutMs: 25_000, maxRetries: 2 },
     });
 
     return NextResponse.json({
       success: true,
       reply: reply.trim(),
+      providerModel: cost.model,
       previewQuota: quota,
     });
   } catch (error) {

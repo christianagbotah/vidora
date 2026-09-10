@@ -1,10 +1,12 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { zai, cleanLLMOutput } from "@/lib/zai";
+import { cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { deductTokensForOperation } from "@/lib/tokens";
+import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
+import { submitBilledZaiText } from "@/lib/zai-billed-client";
+import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
 
@@ -21,54 +23,18 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const projectId = typeof body.projectId === "string" ? body.projectId : "";
-    if (!projectId) {
-      return NextResponse.json(
-        { success: false, error: "Project ID required" },
-        { status: 400 }
-      );
-    }
+    if (!projectId) return NextResponse.json({ success: false, error: "Project ID required" }, { status: 400 });
 
-    // Privacy boundary first: never load or submit another user's scripts to
-    // the AI provider merely because a caller knows a project ID.
     authResult = await requireProjectAccess(projectId, false);
     if (!authResult.ok) return authResult.response;
 
     const project = await db.videoProject.findUnique({
       where: { id: projectId },
-      include: {
-        scenes: { orderBy: { sceneNumber: "asc" } },
-        characters: true,
-      },
+      include: { scenes: { orderBy: { sceneNumber: "asc" } }, characters: true },
     });
-    if (!project) {
-      return NextResponse.json(
-        { success: false, error: "Project not found" },
-        { status: 404 }
-      );
-    }
+    if (!project) return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
     if (project.scenes.length < 2) {
-      return NextResponse.json({
-        success: true,
-        issues: [],
-        message: "Need at least 2 scenes to check continuity",
-        score: 100,
-        tokensCharged: 0,
-      });
-    }
-
-    const operationId = crypto.randomUUID();
-    const deduction = await deductTokensForOperation({
-      userId: authResult.session.userId,
-      operation: "continuity_check",
-      description: `Continuity analysis for project \"${project.title}\"`,
-      referenceId: projectId,
-      idempotencyKey: `continuity:${projectId}:${operationId}`,
-    });
-    if (!deduction.success) {
-      return NextResponse.json(
-        { success: false, error: deduction.error || "Insufficient tokens" },
-        { status: 402 }
-      );
+      return NextResponse.json({ success: true, issues: [], message: "Need at least 2 scenes to check continuity", score: 100, tokensCharged: 0 });
     }
 
     const sceneSummary = project.scenes.map((scene, index) => ({
@@ -100,26 +66,58 @@ export async function POST(req: NextRequest) {
     ].join("\n");
     const userPrompt = `Project: ${project.title}\nStyle: ${project.style}\n\nScenes:\n${JSON.stringify(sceneSummary)}\n\nCharacters:\n${JSON.stringify(charSummary)}`;
 
-    const raw = await zai.chat({
+    const operationId = crypto.randomUUID();
+    const lineKeyPrefix = `continuity:${projectId}:${operationId}`;
+    const billing = await reserveMeteredZaiTextOperation({
+      userId: authResult.session.userId,
+      projectId,
+      referenceId: projectId,
+      idempotencyKey: `${lineKeyPrefix}:reservation`,
+      lineKeyPrefix,
+      label: `Continuity analysis for project \"${project.title}\"`,
       systemPrompt,
       userPrompt,
-      thinking: "disabled",
-      retry: { label: "Continuity analysis", timeoutMs: 60_000, maxRetries: 3 },
+      maxOutputTokens: 4_000,
+      requireConfiguredPrimary: false,
     });
-    const content = cleanLLMOutput(raw);
 
+    const result = await submitBilledZaiText({
+      model: billing.model,
+      systemPrompt,
+      userPrompt,
+      maxOutputTokens: 4_000,
+      thinking: "disabled",
+      timeoutMs: 60_000,
+    });
+    if (!result.usage) {
+      throw new Error("Z.ai returned no usage metadata; the prepaid reserve is held for reconciliation rather than guessing the charge");
+    }
+    const inputCapture = await captureActualMeteredLine({
+      reservationId: billing.reservation.id,
+      lineKey: `${lineKeyPrefix}:input`,
+      userId: authResult.session.userId,
+      actualQuantity: result.usage.inputTokens,
+      projectId,
+    });
+    const outputCapture = await captureActualMeteredLine({
+      reservationId: billing.reservation.id,
+      lineKey: `${lineKeyPrefix}:output`,
+      userId: authResult.session.userId,
+      actualQuantity: result.usage.outputTokens,
+      projectId,
+    });
+    const finalized = await finalizeMeteredReservation({
+      reservationId: billing.reservation.id,
+      userId: authResult.session.userId,
+      reason: "Continuity analysis actual Z.ai token usage settled",
+    });
+
+    const content = cleanLLMOutput(result.content);
     let parsed: { issues?: ContinuityIssue[]; score?: number; summary?: string };
     try {
       parsed = JSON.parse(content);
     } catch {
-      // The provider call already occurred, so the debit is intentionally kept.
-      return NextResponse.json(
-        {
-          success: false,
-          error: "The AI returned a response that could not be parsed as JSON. Please try again.",
-        },
-        { status: 422 }
-      );
+      return NextResponse.json({ success: false, error: "The AI returned a response that could not be parsed as JSON. Please try again." }, { status: 422 });
     }
 
     return NextResponse.json({
@@ -127,8 +125,10 @@ export async function POST(req: NextRequest) {
       issues: parsed.issues || [],
       score: parsed.score ?? 85,
       summary: parsed.summary || "Continuity check complete",
-      tokensCharged: deduction.alreadyApplied ? 0 : 1,
-      remainingTokens: deduction.remainingTokens,
+      providerModel: billing.model,
+      tokensCharged: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
+      creditsReleased: finalized.creditsReleased,
+      remainingTokens: finalized.wallet.availableCredits,
     });
   } catch (error) {
     return zaiErrorResponse(error, {

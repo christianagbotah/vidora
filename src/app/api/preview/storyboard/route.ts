@@ -5,7 +5,7 @@ import { zai, cleanLLMOutput } from "@/lib/zai";
 import { zaiErrorResponse } from "@/lib/zai-errors";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { PRICING } from "@/lib/pricing";
+import { quoteFreeZaiTextAttempt } from "@/lib/zai-metered-billing";
 
 export const runtime = "nodejs";
 
@@ -62,6 +62,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const userPrompt = `Create a storyboard for this video idea.\n\nUser's idea: ${idea}\n\nPreferences:\n- Visual style: ${style}\n- Aspect ratio: ${aspectRatio}\n- Target duration: ~${targetDuration} seconds\n\nReturn the JSON storyboard now.`;
+  let cost;
+  try {
+    cost = await quoteFreeZaiTextAttempt({
+      systemPrompt: STORYBOARD_SYSTEM_PROMPT,
+      userPrompt,
+      maxOutputTokens: 5_000,
+      requireConfiguredPrimary: false,
+    });
+  } catch (error) {
+    return zaiErrorResponse(error, {
+      session: authResult.session,
+      fallbackStatus: 409,
+      logLabel: "preview-storyboard-price",
+    });
+  }
+
   const quota = await consumePreviewQuota(userId, "storyboard");
   if (!quota.ok) {
     return NextResponse.json(
@@ -71,27 +88,24 @@ export async function POST(req: NextRequest) {
   }
 
   const attemptId = crypto.randomUUID();
-  // Record the owner's CAC as soon as a provider attempt is authorized. The
-  // quota slot is intentionally not refunded after this point because a
-  // timeout/malformed response can still have consumed provider resources.
   await deductTokensForOperation({
     userId,
     operation: "preview_storyboard",
-    description: "Free storyboard preview provider attempt",
+    description: `Free storyboard preview provider attempt (${cost.model})`,
     referenceId: attemptId,
     idempotencyKey: `preview-storyboard:${attemptId}`,
     customTokens: 0,
-    customCostUsd: PRICING.preview_storyboard.costUsd,
+    customCostUsd: cost.providerCostUsd,
   });
-
-  const userPrompt = `Create a storyboard for this video idea.\n\nUser's idea: ${idea}\n\nPreferences:\n- Visual style: ${style}\n- Aspect ratio: ${aspectRatio}\n- Target duration: ~${targetDuration} seconds\n\nReturn the JSON storyboard now.`;
 
   let storyboardJson: string;
   try {
     storyboardJson = await zai.chat({
       systemPrompt: STORYBOARD_SYSTEM_PROMPT,
       userPrompt,
+      model: cost.model,
       thinking: "disabled",
+      extra: { max_tokens: 5_000 },
       retry: { label: "Storyboard preview", timeoutMs: 60_000, maxRetries: 2 },
     });
   } catch (err) {
@@ -131,6 +145,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     storyboard: sb,
+    providerModel: cost.model,
     previewQuota: quota,
   });
 }

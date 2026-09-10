@@ -5,78 +5,108 @@ import {
 } from "@/lib/pricing";
 import { getActivePackages } from "@/lib/token-packages";
 import { getChargeCurrency } from "@/lib/storefront";
+import { calculateSafeCreditPackageCheckoutPrice, getBillingGhsPerUsd } from "@/lib/package-billing-safety";
+import { getCommercialPricingPolicy } from "@/lib/provider-cost-billing";
 
 /**
- * Returns token packages available for purchase + a cost estimator
- * that the frontend uses to show users how much a video will cost.
+ * Returns purchasable credit packages plus non-binding planning estimates.
  *
- * Packages are now DB-backed and admin-managed (see /api/admin/packages).
- * If the DB is unreachable, the service falls back to hardcoded defaults
- * in src/lib/pricing.ts so the storefront never breaks.
+ * Billing v2 reprices an active package upward when its stored price no longer
+ * covers all base + bonus credits at the current policy/FX rate. The same
+ * helper is used again at payment initialization, so the customer-visible
+ * amount and the gateway amount cannot drift below the live economic floor.
+ * The authoritative generation amount is always the project-specific cost
+ * quote shown immediately before paid generation starts.
  */
 export async function GET() {
-  const [packages, currency] = await Promise.all([
-    getActivePackages(),
-    getChargeCurrency(),
-  ]);
+  try {
+    const [packages, currency, policy, ghsPerUsd] = await Promise.all([
+      getActivePackages(),
+      getChargeCurrency(),
+      getCommercialPricingPolicy(),
+      getBillingGhsPerUsd(),
+    ]);
 
-  // Build a "what can I make with N tokens?" estimate for each package
-  const packagesWithEstimates = packages.map((pkg) => {
-    // A 1-min video (6 scenes, with narration) costs:
-    const oneMinVideoCost = calculateProjectCost(6, {
-      withNarration: true,
-    }).totalTokens;
-    const videosYouCanMake = Math.floor(
-      pkg.effectiveTokens / oneMinVideoCost
+    const packagesWithEstimates = packages.map((pkg) => {
+      const safe = calculateSafeCreditPackageCheckoutPrice({
+        baseCredits: pkg.tokens,
+        bonusPct: pkg.bonusPct,
+        configuredPriceUsd: pkg.priceUSD,
+        configuredPriceGhs: pkg.priceGHS,
+        ghsPerUsd,
+        policy,
+      });
+      const oneMinVideoCost = calculateProjectCost(6, {
+        withNarration: true,
+      }).totalTokens;
+      const videosYouCanMake = Math.floor(pkg.effectiveTokens / oneMinVideoCost);
+
+      return {
+        ...pkg,
+        configuredPriceUSD: pkg.priceUSD,
+        configuredPriceGHS: pkg.priceGHS,
+        priceUSD: safe.checkoutPriceUsd,
+        priceGHS: safe.checkoutPriceGhs,
+        priceAdjustedForSafety: safe.repricedUsd || safe.repricedGhs,
+        minimumPriceUSD: safe.minimumPriceUsd,
+        minimumPriceGHS: safe.minimumPriceGhs,
+        estimatedVideos: videosYouCanMake,
+        perVideoCostGHS:
+          videosYouCanMake > 0
+            ? (safe.checkoutPriceGhs / videosYouCanMake).toFixed(2)
+            : null,
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      currency,
+      packages: packagesWithEstimates,
+      pricing: {
+        creditValueUSD: policy.creditValueUsd,
+        creditValueGHS: policy.creditValueUsd * ghsPerUsd,
+        ghsPerUsd,
+        authoritativeQuoteRequired: true,
+        samplesAreEstimates: true,
+        livePackageSafetyFloor: true,
+        samples: [
+          {
+            label: "30-second video (3 scenes)",
+            cost: calculateProjectCost(3, { withNarration: true }),
+          },
+          {
+            label: "1-minute video (6 scenes)",
+            cost: calculateProjectCost(6, { withNarration: true }),
+          },
+          {
+            label: "2-minute video (12 scenes)",
+            cost: calculateProjectCost(12, {
+              withNarration: true,
+              withContinuityCheck: true,
+            }),
+          },
+          {
+            label: "5-minute video (30 scenes)",
+            cost: calculateProjectCost(30, {
+              withNarration: true,
+              withContinuityCheck: true,
+            }),
+          },
+        ],
+      },
+    });
+  } catch (error) {
+    console.error(
+      "[payments/packages] billing-safe storefront unavailable:",
+      error instanceof Error ? error.message : "unknown error",
     );
-
-    return {
-      ...pkg,
-      estimatedVideos: videosYouCanMake,
-      perVideoCostGHS:
-        videosYouCanMake > 0
-          ? (pkg.priceGHS / videosYouCanMake).toFixed(2)
-          : null,
-    };
-  });
-
-  return NextResponse.json({
-    success: true,
-    // Admin-selected charge currency — the Buy Tokens cards charge in this.
-    currency,
-    packages: packagesWithEstimates,
-    pricing: {
-      tokenValueGHS: 0.5,
-      tokenValueUSD: 0.05,
-      // Sample video costs for the UI
-      samples: [
-        {
-          label: "30-second video (3 scenes)",
-          cost: calculateProjectCost(3, { withNarration: true }),
-        },
-        {
-          label: "1-minute video (6 scenes)",
-          cost: calculateProjectCost(6, { withNarration: true }),
-        },
-        {
-          label: "2-minute video (12 scenes)",
-          cost: calculateProjectCost(12, {
-            withNarration: true,
-            withContinuityCheck: true,
-          }),
-        },
-        {
-          label: "5-minute video (30 scenes)",
-          cost: calculateProjectCost(30, {
-            withNarration: true,
-            withContinuityCheck: true,
-          }),
-        },
-      ],
-    },
-  });
+    return NextResponse.json({
+      success: false,
+      error: "Credit packages are temporarily unavailable while billing rates are being verified.",
+      packages: [],
+    }, { status: 503 });
+  }
 }
 
-// Helper re-exported for callers that want it (not used in this route, kept
-// for backward compatibility with any code that imported it before).
+// Helper re-exported for backward compatibility with existing callers.
 export { estimateSceneCount };

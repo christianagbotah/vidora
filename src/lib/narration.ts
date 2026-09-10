@@ -1,23 +1,44 @@
 /**
- * Vidora — shared scene narration (TTS) library.
+ * Vidora — shared scene narration (Qwen TTS) library.
  *
- * Every billable scene TTS call passes through this module. Dialogue is kept
- * speaker-aware so character conversations are synthesized as intentional
- * lines instead of being flattened into one generic narrator voice.
+ * Every paid Qwen request is backed by a prepaid credit reservation. Quote
+ * lines, provider calls and deterministic local chunk files share the same
+ * chunk index so a crash cannot silently resubmit paid speech work.
  */
 
 import crypto from "crypto";
 import { db } from "@/lib/db";
-import { PRICING } from "@/lib/pricing";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { copyFile, unlink, writeFile } from "fs/promises";
 import path from "path";
+import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import {
-  getAIProviderSettings,
-  synthesizeProviderSpeech,
-} from "@/lib/ai-provider-router";
+  resolveQwenTtsModel,
+  splitQwenTtsInput,
+  synthesizeQwenTts,
+} from "@/lib/qwen-tts";
+import {
+  BillingSafetyError,
+  getCommercialPricingPolicy,
+  quoteProviderCharge,
+} from "@/lib/provider-cost-billing";
+import {
+  captureReservedQuoteLine,
+  createBillingQuote,
+  findReservationByReference,
+  getWalletSummary,
+  reserveBillingQuote,
+  type BillingQuoteLine,
+} from "@/lib/credit-reservations";
+import {
+  getReservedQuoteLines,
+  requireReservedQuoteLine,
+} from "@/lib/reserved-quote";
+import {
+  narrationBillableTextChunks,
+  parseNarrationTextSegments,
+} from "@/lib/narration-billing";
 import {
   buildNarrationPerformanceDirection,
   normalizeNarrationProfile,
@@ -33,6 +54,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+export { narrationBillableTextChunks } from "@/lib/narration-billing";
+
 export const TTS_VOICES = [
   { id: "tongtong", label: "TongTong", desc: "Warm & friendly (narrator)" },
   { id: "chuichui", label: "ChuiChui", desc: "Playful & cute (kids)" },
@@ -47,9 +70,6 @@ export const DEFAULT_TTS_VOICE = "tongtong";
 
 const ATTRIBUTION_PREFIX_RE =
   /^\s*(?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?\s*:\s*/;
-
-const ATTRIBUTION_CAPTURE_RE =
-  /^\s*((?:Narrator|Chorus|All|Everyone|[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)(?:\s*[&,+]\s*(?:and\s+)?[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)?(?:\s*\([^)]*\))?)\s*:\s*(.*)$/;
 
 function cleanSpokenText(value: string): string {
   return value
@@ -70,57 +90,23 @@ export function stripSpeakerAttributions(text: string): string {
 
 export interface DialogueSegment {
   speaker: string | null;
-  /** Optional screenplay performance cue kept separate from spoken words. */
   direction: string | null;
   text: string;
 }
 
-function performanceCueFromSpeakerLabel(label: string): string | null {
-  const match = label.match(/\(([^()]*)\)\s*$/);
-  const cue = match?.[1]?.trim().replace(/\s+/g, " ").slice(0, 64) || "";
-  return cue || null;
-}
-
-/**
- * Parse screenplay-style dialogue without losing speaker identity or delivery
- * direction. Continuation lines are attached to the preceding speaker so
- * multiline model output still becomes one coherent performance.
- */
 export function parseDialogueSegments(text: string): DialogueSegment[] {
-  const segments: DialogueSegment[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const attributed = line.match(ATTRIBUTION_CAPTURE_RE);
-    if (attributed) {
-      const rawSpeaker = attributed[1].trim();
-      const direction = performanceCueFromSpeakerLabel(rawSpeaker);
-      const speaker = rawSpeaker
-        .replace(/\s*\([^)]*\)\s*$/, "")
-        .trim();
-      const spoken = cleanSpokenText(attributed[2]);
-      if (spoken) segments.push({ speaker, direction, text: spoken });
-      continue;
-    }
-
-    const spoken = cleanSpokenText(line);
-    if (!spoken) continue;
-    const previous = segments[segments.length - 1];
-    if (previous) previous.text = `${previous.text} ${spoken}`.trim();
-    else segments.push({ speaker: null, direction: null, text: spoken });
-  }
-  return segments;
+  return parseNarrationTextSegments(text);
 }
 
+/** Legacy helper retained for callers/tests outside the Qwen billing path. */
 export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   if (text.length <= maxLen) return [text];
   const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
   const chunks: string[] = [];
   let current = "";
   for (const sentence of sentences) {
-    if ((current + sentence).length <= maxLen) {
-      current += sentence;
-    } else {
+    if ((current + sentence).length <= maxLen) current += sentence;
+    else {
       if (current) chunks.push(current.trim());
       current = sentence;
     }
@@ -129,11 +115,6 @@ export function splitTextIntoChunks(text: string, maxLen = 900): string[] {
   return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
 }
 
-/**
- * Normalize provider output (WAV or MP3) into one PCM WAV file. Re-encoding is
- * deliberate: mixed provider chunks may not share codecs/containers, and a
- * stream-copy concat can produce an invalid file with a .wav extension.
- */
 export async function concatWavChunks(chunkPaths: string[], outputPath: string): Promise<boolean> {
   if (chunkPaths.length === 0) return false;
   if (chunkPaths.length === 1 && path.extname(chunkPaths[0]).toLowerCase() === ".wav") {
@@ -141,18 +122,13 @@ export async function concatWavChunks(chunkPaths: string[], outputPath: string):
       await copyFile(chunkPaths[0], outputPath);
       return true;
     } catch (err) {
-      console.error(
-        "[narration] single-chunk copy failed:",
-        err instanceof Error ? err.message : "unknown error"
-      );
+      console.error("[narration] single-chunk copy failed:", err instanceof Error ? err.message : "unknown error");
       return false;
     }
   }
 
   const listFile = `${outputPath}.concat.txt`;
-  const listContent = chunkPaths
-    .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
-    .join("\n");
+  const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
   try {
     await writeFile(listFile, listContent, "utf8");
     await execFileAsync(
@@ -161,14 +137,11 @@ export async function concatWavChunks(chunkPaths: string[], outputPath: string):
         "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", listFile,
         "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", outputPath,
       ],
-      { timeout: 60_000 }
+      { timeout: 60_000 },
     );
     return true;
   } catch (err) {
-    console.error(
-      "[narration] ffmpeg audio concat failed:",
-      err instanceof Error ? err.message : "unknown error"
-    );
+    console.error("[narration] ffmpeg audio concat failed:", err instanceof Error ? err.message : "unknown error");
     return false;
   } finally {
     await unlink(listFile).catch(() => undefined);
@@ -210,9 +183,7 @@ function narrationFingerprint(opts: {
   chunks: PlannedSpeechChunk[];
   speed: number;
   profile: NarrationProfile;
-  provider: string;
   providerModel: string;
-  providerVoiceConfig: unknown;
 }): string {
   return crypto
     .createHash("sha256")
@@ -226,13 +197,31 @@ function narrationFilename(sceneId: string, fingerprint: string): string {
   return `narration_${safeScene}_${fingerprint}.wav`;
 }
 
+function narrationChunkFilename(
+  sceneId: string,
+  fingerprint: string,
+  index: number,
+  extension: "wav" | "mp3",
+): string {
+  const safeScene = sceneId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  return `narration_chunk_${safeScene}_${fingerprint}_${String(index).padStart(3, "0")}.${extension}`;
+}
+
+function existingNarrationChunkPath(sceneId: string, fingerprint: string, index: number): string | null {
+  for (const extension of ["wav", "mp3"] as const) {
+    const filename = narrationChunkFilename(sceneId, fingerprint, index, extension);
+    if (audioFileExists(filename)) return getAudioPath(filename);
+  }
+  return null;
+}
+
 async function buildSpeechPlan(opts: {
   text: string;
   defaultVoice: string;
   characterIds: string | null;
   profile: NarrationProfile;
 }): Promise<PlannedSpeechChunk[]> {
-  const segments = parseDialogueSegments(opts.text);
+  const segments = parseNarrationTextSegments(opts.text);
   if (segments.length === 0) return [];
 
   const characterVoice = new Map<string, string>();
@@ -263,11 +252,11 @@ async function buildSpeechPlan(opts: {
         }
       }
     }
-    for (const chunk of splitTextIntoChunks(segment.text, 700)) {
+    for (const text of splitQwenTtsInput(segment.text)) {
       output.push({
         speaker: segment.speaker,
         direction: buildNarrationPerformanceDirection(opts.profile, segment.direction),
-        text: chunk,
+        text,
         voice,
       });
     }
@@ -275,13 +264,91 @@ async function buildSpeechPlan(opts: {
   return output;
 }
 
-/**
- * Generate a complete scene performance and charge the owning user exactly
- * once for the logical performance. Each explicitly attributed character line
- * may use that character's configured voice; group/narrator lines use the
- * scene default voice. Performance direction is kept out of the spoken text
- * and is passed to providers as structured metadata.
- */
+async function buildNarrationQuoteLines(opts: {
+  sceneId: string;
+  chunks: PlannedSpeechChunk[];
+  providerModel: string;
+}): Promise<{ lines: BillingQuoteLine[]; policy: Awaited<ReturnType<typeof getCommercialPricingPolicy>> }> {
+  const policy = await getCommercialPricingPolicy();
+  const lines: BillingQuoteLine[] = [];
+  for (let index = 0; index < opts.chunks.length; index += 1) {
+    const chunk = opts.chunks[index];
+    const charge = await quoteProviderCharge({
+      provider: "qwen",
+      model: opts.providerModel,
+      operation: "tts",
+      quantity: Math.max(1, chunk.text.length),
+      policy,
+    });
+    lines.push({
+      ...charge,
+      lineKey: `tts:${opts.sceneId}:${index}`,
+      label: `Qwen narration part ${index + 1} (${Math.max(1, chunk.text.length)} chars)`,
+      sceneId: opts.sceneId,
+    });
+  }
+  return { lines, policy };
+}
+
+async function providerModelForNarration(opts: {
+  sceneId: string;
+  userId: string;
+  chunks: PlannedSpeechChunk[];
+  billingReservationId?: string;
+}): Promise<string> {
+  if (opts.billingReservationId) {
+    const lines = await getReservedQuoteLines(opts.billingReservationId, opts.userId);
+    const sceneTtsLines = lines.filter(
+      (line) => line.sceneId === opts.sceneId && line.provider === "qwen" && line.operation === "tts",
+    );
+    if (sceneTtsLines.length !== opts.chunks.length) {
+      throw new BillingSafetyError(
+        "TTS_QUOTE_SCOPE_CHANGED",
+        "The prepaid narration quote no longer matches the current speech chunks. Request a fresh generation quote before submitting provider work.",
+      );
+    }
+
+    let model = "";
+    for (let index = 0; index < opts.chunks.length; index += 1) {
+      const line = requireReservedQuoteLine(lines, {
+        lineKey: `tts:${opts.sceneId}:${index}`,
+        provider: "qwen",
+        operation: "tts",
+      });
+      const expectedQuantity = Math.max(1, opts.chunks[index].text.length);
+      if (Math.abs(line.quantity - expectedQuantity) > 1e-9) {
+        throw new BillingSafetyError(
+          "TTS_QUOTE_QUANTITY_CHANGED",
+          `Narration part ${index + 1} changed after the quote was reserved. A fresh quote is required.`,
+        );
+      }
+      if (!model) model = line.model;
+      if (line.model !== model) {
+        throw new BillingSafetyError(
+          "TTS_QUOTE_MODEL_INCONSISTENT",
+          "The prepaid narration quote contains inconsistent Qwen models.",
+        );
+      }
+    }
+    if (!model || resolveQwenTtsModel(model) !== model) {
+      throw new BillingSafetyError(
+        "TTS_QUOTE_MODEL_UNSAFE",
+        "The prepaid Qwen model would be rewritten by the provider transport. A fresh verified quote is required.",
+      );
+    }
+    return model;
+  }
+
+  const providerSettings = await getAIProviderSettings();
+  if (providerSettings.ttsProvider !== "qwen") {
+    throw new BillingSafetyError(
+      "UNPRICED_TTS_PROVIDER",
+      `Narration provider ${providerSettings.ttsProvider} is not enabled for paid billing. Configure Qwen TTS before generating narration.`,
+    );
+  }
+  return resolveQwenTtsModel(providerSettings.ttsModel);
+}
+
 export async function generateSceneNarration(opts: {
   sceneId: string;
   text: string;
@@ -290,6 +357,8 @@ export async function generateSceneNarration(opts: {
   language?: string;
   accent?: string;
   style?: string;
+  billingReservationId?: string;
+  generationRunId?: string;
 }): Promise<NarrationResult> {
   const scene = await db.videoScene.findUnique({
     where: { id: opts.sceneId },
@@ -300,14 +369,12 @@ export async function generateSceneNarration(opts: {
       narrationAccent: true,
       narrationStyle: true,
       characterIds: true,
-      project: { select: { userId: true } },
+      project: { select: { id: true, userId: true } },
     },
   });
   if (!scene) throw new Error("Scene not found");
   const userId = scene.project.userId;
-  if (!userId) {
-    throw new Error("Guest/demo projects cannot use billable narration generation");
-  }
+  if (!userId) throw new Error("Guest/demo projects cannot use billable narration generation");
 
   const defaultVoice = (opts.voice || DEFAULT_TTS_VOICE).trim().toLowerCase();
   const speed = Math.max(0.5, Math.min(2, Number(opts.speed) || 1));
@@ -326,69 +393,27 @@ export async function generateSceneNarration(opts: {
     profile,
   });
   if (chunks.length === 0) throw new Error("No speakable dialogue was found");
+  const providerModel = await providerModelForNarration({
+    sceneId: scene.id,
+    userId,
+    chunks,
+    billingReservationId: opts.billingReservationId,
+  });
 
-  const providerSettings = await getAIProviderSettings();
-  const providerModel = providerSettings.ttsProvider === "elevenlabs"
-    ? (providerSettings.ttsModel || "eleven_v3")
-    : (providerSettings.ttsModel || "zai-tts");
   const fingerprint = narrationFingerprint({
     sceneId: scene.id,
     chunks,
     speed,
     profile,
-    provider: providerSettings.ttsProvider,
     providerModel,
-    providerVoiceConfig: providerSettings.ttsProvider === "elevenlabs"
-      ? {
-          default: providerSettings.elevenLabsDefaultVoiceId,
-          map: providerSettings.elevenLabsVoiceMap,
-        }
-      : null,
   });
   const finalFilename = narrationFilename(scene.id, fingerprint);
   const finalPath = getAudioPath(finalFilename);
   const finalUrl = `/api/audio/${finalFilename}`;
   const operationKey = `tts:${userId}:${scene.id}:${fingerprint}`;
-  const tokensToCharge = chunks.length * PRICING.tts.tokens;
-  const costUsd = chunks.length * PRICING.tts.costUsd;
 
-  if (scene.narrationUrl === finalUrl && audioFileExists(finalFilename)) {
-    const existingCharge = await db.tokenTransaction.findUnique({
-      where: { idempotencyKey: operationKey },
-      select: { id: true, userId: true },
-    });
-    if (existingCharge?.userId === userId) {
-      const balance = await db.user.findUnique({
-        where: { id: userId },
-        select: { tokens: true },
-      });
-      return {
-        url: finalUrl,
-        path: finalPath,
-        chunks: chunks.length,
-        concatenated: true,
-        tokensCharged: 0,
-        remainingTokens: balance?.tokens,
-        transactionId: existingCharge.id,
-        replayed: true,
-        profile,
-      };
-    }
-  }
-
-  const deduction = await deductTokensForOperation({
-    userId,
-    operation: "tts",
-    description: `Generate ${chunks.length}-part ${profile.language} scene dialogue performance for scene ${scene.id}`,
-    referenceId: scene.id,
-    idempotencyKey: operationKey,
-    customTokens: tokensToCharge,
-    customCostUsd: costUsd,
-  });
-  if (!deduction.success) {
-    throw new Error(deduction.error || "Insufficient tokens for narration generation");
-  }
-
+  // Deterministic final media is a safe replay: no provider call and no new
+  // reservation are needed when the same performance already exists locally.
   if (audioFileExists(finalFilename)) {
     await db.videoScene.update({
       where: { id: scene.id },
@@ -399,76 +424,138 @@ export async function generateSceneNarration(opts: {
         narrationStyle: profile.style,
       },
     });
+    const wallet = await getWalletSummary(userId);
     return {
       url: finalUrl,
       path: finalPath,
       chunks: chunks.length,
       concatenated: true,
-      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,
-      remainingTokens: deduction.remainingTokens,
-      transactionId: deduction.transactionId,
+      tokensCharged: 0,
+      remainingTokens: wallet.availableCredits,
       replayed: true,
       profile,
     };
   }
 
+  let reservationId = opts.billingReservationId || "";
+  let wallet = await getWalletSummary(userId);
+  if (!reservationId) {
+    const prior = await findReservationByReference(operationKey);
+    if (prior && prior.userId === userId) {
+      reservationId = prior.id;
+    } else {
+      const { lines, policy } = await buildNarrationQuoteLines({
+        sceneId: scene.id,
+        chunks,
+        providerModel,
+      });
+      const quote = await createBillingQuote({
+        userId,
+        projectId: scene.project.id,
+        operation: "tts",
+        lines,
+        policy,
+      });
+      const reserved = await reserveBillingQuote({
+        quoteId: quote.id,
+        userId,
+        referenceId: operationKey,
+        idempotencyKey: `${operationKey}:reservation`,
+      });
+      reservationId = reserved.reservation.id;
+      wallet = reserved.wallet;
+    }
+  }
+
   ensureAudioDir();
-  const tempChunkPaths: string[] = [];
+  const chunkPaths: string[] = [];
+  let newlyCapturedCredits = 0;
   try {
-    for (let i = 0; i < chunks.length; i++) {
-      const speech = await synthesizeProviderSpeech({
-        input: chunks[i].text,
-        voice: chunks[i].voice,
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      const existingPath = existingNarrationChunkPath(scene.id, fingerprint, index);
+      if (existingPath) {
+        await captureReservedQuoteLine({
+          reservationId,
+          lineKey: `tts:${scene.id}:${index}`,
+          userId,
+          projectId: scene.project.id,
+          sceneId: scene.id,
+          generationRunId: opts.generationRunId ?? null,
+        });
+        chunkPaths.push(existingPath);
+        continue;
+      }
+
+      const capture = await captureReservedQuoteLine({
+        reservationId,
+        lineKey: `tts:${scene.id}:${index}`,
+        userId,
+        projectId: scene.project.id,
+        sceneId: scene.id,
+        generationRunId: opts.generationRunId ?? null,
+      });
+      if (capture.alreadyCaptured) {
+        // We know this paid line crossed the accounting boundary previously,
+        // but there is no deterministic audio artifact. Resubmitting would risk
+        // paying Qwen twice for one customer charge, so require reconciliation.
+        throw new BillingSafetyError(
+          "AMBIGUOUS_TTS_RETRY",
+          `Narration part ${index + 1} was previously funded but its audio result is missing. Automatic Qwen resubmission is blocked.`,
+        );
+      }
+      newlyCapturedCredits += capture.creditsCaptured;
+
+      const speech = await synthesizeQwenTts({
+        input: chunk.text,
+        voice: chunk.voice,
         language: profile.language,
         accent: profile.accent,
-        direction: chunks[i].direction,
+        direction: chunk.direction,
         speed,
+        model: providerModel,
       });
-      const tempFilename = `chunk_${scene.id}_${fingerprint}_${i}_${crypto.randomUUID()}.${speech.extension}`;
-      tempChunkPaths.push(writeAudioFile(tempFilename, speech.buffer));
+      if (speech.model !== providerModel) {
+        throw new BillingSafetyError(
+          "TTS_EXECUTION_MODEL_DRIFT",
+          "Qwen execution model did not match the prepaid billing model.",
+        );
+      }
+      const chunkFilename = narrationChunkFilename(scene.id, fingerprint, index, speech.extension);
+      chunkPaths.push(writeAudioFile(chunkFilename, speech.buffer));
     }
 
-    const concatenated = await concatWavChunks(tempChunkPaths, finalPath);
-    let url = finalUrl;
-    let resolvedPath = finalPath;
-
-    if (concatenated) {
-      for (const p of tempChunkPaths) deleteAudioFile(path.basename(p));
-    } else {
-      // Provider work has already been consumed. Preserve the first successful
-      // chunk as a recoverable result instead of discarding paid audio.
-      url = `/api/audio/${path.basename(tempChunkPaths[0])}`;
-      resolvedPath = tempChunkPaths[0];
+    const concatenated = await concatWavChunks(chunkPaths, finalPath);
+    if (!concatenated) {
+      throw new Error("Qwen narration was generated and preserved, but Vidora could not assemble the final audio file. Retry will reuse the preserved chunks without another provider call.");
     }
 
+    for (const chunkPath of chunkPaths) deleteAudioFile(path.basename(chunkPath));
     await db.videoScene.update({
       where: { id: scene.id },
       data: {
-        narrationUrl: url,
+        narrationUrl: finalUrl,
         narrationLang: profile.language,
         narrationAccent: profile.accent,
         narrationStyle: profile.style,
       },
     });
+    wallet = await getWalletSummary(userId);
 
     return {
-      url,
-      path: resolvedPath,
+      url: finalUrl,
+      path: finalPath,
       chunks: chunks.length,
-      concatenated,
-      tokensCharged: deduction.alreadyApplied ? 0 : tokensToCharge,
-      remainingTokens: deduction.remainingTokens,
-      transactionId: deduction.transactionId,
+      concatenated: true,
+      tokensCharged: newlyCapturedCredits,
+      remainingTokens: wallet.availableCredits,
       replayed: false,
       profile,
     };
-  } catch (err) {
-    for (const p of tempChunkPaths) {
-      await unlink(p).catch(() => undefined);
-    }
-    // Do not auto-refund an ambiguous provider request. Retrying the exact
-    // performance fingerprint reuses the existing token transaction.
-    throw err;
+  } catch (error) {
+    // Preserve deterministic chunk files. They are the proof that a specific
+    // funded Qwen part completed and let a retry avoid a duplicate provider call.
+    throw error;
   }
 }
 
@@ -506,11 +593,10 @@ export interface AutoNarrateResult {
   reason?: string;
 }
 
-/**
- * Non-fatal automatic dialogue performance. The shared generator performs
- * billable ownership and token charging before any TTS provider request.
- */
-export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResult> {
+export async function autoNarrateScene(
+  sceneId: string,
+  billing?: { reservationId?: string; generationRunId?: string },
+): Promise<AutoNarrateResult> {
   try {
     const scene = await db.videoScene.findUnique({
       where: { id: sceneId },
@@ -539,13 +625,15 @@ export async function autoNarrateScene(sceneId: string): Promise<AutoNarrateResu
       language: scene.narrationLang || undefined,
       accent: scene.narrationAccent || undefined,
       style: scene.narrationStyle || undefined,
+      billingReservationId: billing?.reservationId,
+      generationRunId: billing?.generationRunId,
     });
     return { ok: true, url: result.url };
   } catch (err) {
     console.warn(
       `[autoNarrate] scene=${sceneId} voice generation skipped/failed:`,
-      err instanceof Error ? err.message : "unknown error"
+      err instanceof Error ? err.message : "unknown error",
     );
-    return { ok: false, reason: "tts unavailable or not funded" };
+    return { ok: false, reason: err instanceof Error ? err.message : "tts unavailable or not funded" };
   }
 }

@@ -83,8 +83,11 @@ const DEFAULT_VALUES: Record<string, string> = {
   ai_text_provider: "zai",
   ai_text_model: "",
   ai_text_fallback_provider: "zai",
-  ai_tts_provider: "zai",
-  ai_tts_model: "",
+  // Billing v2 has a verified, character-priced Qwen TTS catalog. Keep the
+  // clean-install Admin view aligned with the runtime fallback so a blank DB
+  // never advertises legacy Z.ai TTS while execution actually selects Qwen.
+  ai_tts_provider: "qwen",
+  ai_tts_model: "qwen3-tts-instruct-flash",
   zai_tts_base_url: "https://open.bigmodel.cn/api/paas/v4",
   qwen_tts_base_url: "https://dashscope-intl.aliyuncs.com/api/v1",
   qwen_tts_default_voice: "Cherry",

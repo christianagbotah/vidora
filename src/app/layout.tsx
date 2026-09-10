@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Preloader, ViewTransitionOverlay } from "@/components/Preloader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import VoiceStudioLauncher from "@/components/VoiceStudioLauncher";
+import { GenerationBillingGate } from "@/components/GenerationBillingGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -105,6 +106,7 @@ export default function RootLayout({
           <Preloader />
           <ViewTransitionOverlay />
           {children}
+          <GenerationBillingGate />
           <VoiceStudioLauncher />
           <Toaster />
         </ErrorBoundary>

@@ -1,58 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { zai } from "@/lib/zai";
 import { requireSceneAccess } from "@/lib/project-auth";
 import { zaiErrorResponse } from "@/lib/zai-errors";
-import { deductTokensForOperation } from "@/lib/tokens";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
-import { copyFile, unlink, writeFile } from "fs/promises";
-import {
-  DUBBING_LANGUAGES,
-  DUBBING_LANGUAGE_GROUPS,
-  getDubbingLanguage,
-} from "@/lib/dubbing-languages";
+import { unlink, writeFile } from "fs/promises";
+import { DUBBING_LANGUAGES, DUBBING_LANGUAGE_GROUPS, getDubbingLanguage } from "@/lib/dubbing-languages";
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
+import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
+import { captureImmediateProviderOperation, reserveImmediateProviderOperation } from "@/lib/immediate-provider-billing";
+import { BillingSafetyError } from "@/lib/provider-cost-billing";
+import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
+import { resolveQwenTtsModel, splitQwenTtsInput, synthesizeQwenTts } from "@/lib/qwen-tts";
+import { submitBilledZaiText } from "@/lib/zai-billed-client";
+import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
 const execFileAsync = promisify(execFile);
 
-function splitTextIntoChunks(text: string, maxLen = 900): string[] {
-  if (text.length <= maxLen) return [text];
-  const sentences = text.match(/[^.!?。！？]+[.!?。！？]+/g) || [text];
-  const chunks: string[] = [];
-  let current = "";
-  for (const sentence of sentences) {
-    if ((current + sentence).length <= maxLen) {
-      current += sentence;
-    } else {
-      if (current) chunks.push(current.trim());
-      current = sentence;
-    }
-  }
-  if (current) chunks.push(current.trim());
-  return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
-}
-
 async function concatAudioFiles(chunkPaths: string[], outputPath: string): Promise<boolean> {
-  if (chunkPaths.length === 1) {
-    try {
-      await copyFile(chunkPaths[0], outputPath);
-      return true;
-    } catch (err) {
-      console.error("[dubbing] single-chunk copy failed:", err);
-      return false;
-    }
-  }
-
+  if (chunkPaths.length === 0) return false;
   const listFile = outputPath + ".concat.txt";
   const listContent = chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
   try {
     await writeFile(listFile, listContent, "utf8");
     await execFileAsync("ffmpeg", [
-      "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outputPath,
-    ], { timeout: 30_000 });
+      "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", listFile,
+      "-vn", "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", outputPath,
+    ], { timeout: 60_000 });
     return true;
   } catch (err) {
     console.error("[dubbing] ffmpeg concat failed:", err);
@@ -62,149 +38,151 @@ async function concatAudioFiles(chunkPaths: string[], outputPath: string): Promi
   }
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const authResult = await requireSceneAccess(id, true);
     if (!authResult.ok) return authResult.response;
-
     const { userId } = authResult.session;
-    if (!userId || userId === "guest") {
-      return NextResponse.json({ success: false, error: "Please sign in to generate dubbing" }, { status: 401 });
-    }
+    if (!userId || userId === "guest") return NextResponse.json({ success: false, error: "Please sign in to generate dubbing" }, { status: 401 });
 
     const { lang, voiceId, translateOnly } = await req.json();
     const langMeta = lang ? getDubbingLanguage(lang) : null;
-    if (!langMeta) {
-      return NextResponse.json(
-        { success: false, error: `Unsupported language. Supported codes: ${Object.keys(DUBBING_LANGUAGES).join(", ")}` },
-        { status: 400 }
-      );
-    }
+    if (!langMeta) return NextResponse.json({ success: false, error: `Unsupported language. Supported codes: ${Object.keys(DUBBING_LANGUAGES).join(", ")}` }, { status: 400 });
 
     const scene = await db.videoScene.findUnique({ where: { id } });
     if (!scene) return NextResponse.json({ success: false, error: "Scene not found" }, { status: 404 });
-
     const sourceText = scene.dialogue || scene.prompt;
-    if (!sourceText) {
-      return NextResponse.json(
-        { success: false, error: "No narration text to translate. Add dialogue to this scene first." },
-        { status: 400 }
-      );
-    }
+    if (!sourceText) return NextResponse.json({ success: false, error: "No narration text to translate. Add dialogue to this scene first." }, { status: 400 });
 
     const langName = langMeta.name;
     const voice = (voiceId || "tongtong").toLowerCase();
     let translation = await db.sceneTranslation.findUnique({ where: { sceneId_lang: { sceneId: id, lang } } });
-
     if (translation?.status === "ready" && translation.translatedText && translation.narrationUrl) {
       return NextResponse.json({ success: true, translation, message: "Translation already exists" });
     }
-
-    if (!translation) {
-      translation = await db.sceneTranslation.create({ data: { sceneId: id, lang, langName, status: "translating" } });
-    } else {
-      translation = await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "translating" } });
-    }
+    if (!translation) translation = await db.sceneTranslation.create({ data: { sceneId: id, lang, langName, status: "translating" } });
+    else translation = await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "translating" } });
 
     try {
+      let tokensCharged = 0;
       let cleanTranslation = translation.translatedText?.trim() || "";
       if (!cleanTranslation) {
-        const translationCharge = await deductTokensForOperation({
+        const systemPrompt = `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`;
+        const lineKeyPrefix = `dubbing:${translation.id}:translate`;
+        const translationBilling = await reserveMeteredZaiTextOperation({
           userId,
-          operation: "llm",
-          description: `Dubbing translation (${langName}) for scene ${scene.sceneNumber}`,
+          projectId: scene.projectId,
+          sceneId: id,
           referenceId: translation.id,
-          idempotencyKey: `dubbing:${translation.id}:translate`,
-        });
-        if (!translationCharge.success) {
-          await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => undefined);
-          return NextResponse.json(
-            { success: false, error: translationCharge.error || "Insufficient tokens for translation" },
-            { status: 402 }
-          );
-        }
-
-        const translatedText = await zai.chat({
-          systemPrompt: `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`,
+          idempotencyKey: `${lineKeyPrefix}:reservation`,
+          lineKeyPrefix,
+          label: `Dubbing translation (${langName}) for scene ${scene.sceneNumber}`,
+          systemPrompt,
           userPrompt: sourceText,
-          retry: { label: `translate to ${lang}`, timeoutMs: 30_000, maxRetries: 2 },
+          maxOutputTokens: 4_000,
+          requireConfiguredPrimary: false,
         });
 
-        cleanTranslation = translatedText.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+        const result = await submitBilledZaiText({
+          model: translationBilling.model,
+          systemPrompt,
+          userPrompt: sourceText,
+          maxOutputTokens: 4_000,
+          thinking: "disabled",
+          timeoutMs: 30_000,
+        });
+        if (!result.usage) throw new Error("Z.ai returned no usage metadata; the prepaid dubbing translation reserve is held for reconciliation");
+        const inputCapture = await captureActualMeteredLine({
+          reservationId: translationBilling.reservation.id,
+          lineKey: `${lineKeyPrefix}:input`,
+          userId,
+          actualQuantity: result.usage.inputTokens,
+          projectId: scene.projectId,
+          sceneId: id,
+        });
+        const outputCapture = await captureActualMeteredLine({
+          reservationId: translationBilling.reservation.id,
+          lineKey: `${lineKeyPrefix}:output`,
+          userId,
+          actualQuantity: result.usage.outputTokens,
+          projectId: scene.projectId,
+          sceneId: id,
+        });
+        await finalizeMeteredReservation({
+          reservationId: translationBilling.reservation.id,
+          userId,
+          reason: `Dubbing translation (${langName}) actual Z.ai token usage settled`,
+        });
+        tokensCharged += inputCapture.creditsCaptured + outputCapture.creditsCaptured;
+
+        cleanTranslation = result.content.replace(/^["'“”]+|["'“”]+$/g, "").trim();
         if (!cleanTranslation) throw new Error("Translation came back empty");
         translation = await db.sceneTranslation.update({
           where: { id: translation.id },
           data: { translatedText: cleanTranslation, status: "generating" },
         });
       } else {
-        translation = await db.sceneTranslation.update({
-          where: { id: translation.id },
-          data: { status: "generating" },
-        });
+        translation = await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "generating" } });
       }
 
       if (translateOnly === true) {
-        const translatedOnly = await db.sceneTranslation.update({
-          where: { id: translation.id },
-          data: { status: "translated" },
-        });
-        return NextResponse.json({
-          success: true,
-          translation: translatedOnly,
-          translatedOnly: true,
-          tokensChargedForVoice: 0,
-        });
+        const translatedOnly = await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "translated" } });
+        return NextResponse.json({ success: true, translation: translatedOnly, translatedOnly: true, tokensChargedForVoice: 0, tokensCharged });
       }
 
-      const chunks = splitTextIntoChunks(cleanTranslation);
+      const providerSettings = await getAIProviderSettings();
+      if (providerSettings.ttsProvider !== "qwen") {
+        throw new BillingSafetyError(
+          "UNPRICED_DUBBING_TTS_PROVIDER",
+          `Dubbing TTS provider ${providerSettings.ttsProvider} does not have a verified Billing v2 catalog. Configure Qwen TTS before paid dubbing.`,
+        );
+      }
+      const qwenModel = resolveQwenTtsModel(providerSettings.ttsModel);
+      const chunks = splitQwenTtsInput(cleanTranslation);
+      if (chunks.length === 0) throw new Error("Translation produced no billable speech chunks");
+
       ensureAudioDir();
       const chunkPaths: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
-        const ttsCharge = await deductTokensForOperation({
+        const lineKey = `dubbing:${translation.id}:tts:${i}`;
+        const ttsBilling = await reserveImmediateProviderOperation({
           userId,
+          projectId: scene.projectId,
+          referenceId: `${translation.id}:tts:${i}`,
+          provider: "qwen",
+          model: qwenModel,
           operation: "tts",
-          description: `Dubbing voice (${langName}) chunk ${i + 1}/${chunks.length} for scene ${scene.sceneNumber}`,
-          referenceId: translation.id,
-          idempotencyKey: `dubbing:${translation.id}:tts:${i}`,
+          quantity: chunks[i].length,
+          lineKey,
+          label: `Dubbing voice (${langName}) chunk ${i + 1}/${chunks.length} for scene ${scene.sceneNumber}`,
+          sceneId: id,
+          idempotencyKey: `${lineKey}:reservation`,
         });
-        if (!ttsCharge.success) {
-          await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => undefined);
-          return NextResponse.json(
-            { success: false, error: ttsCharge.error || "Insufficient tokens for dubbing voice generation" },
-            { status: 402 }
-          );
-        }
+        const capture = await captureImmediateProviderOperation({
+          reservationId: ttsBilling.reservation.id,
+          lineKey,
+          userId,
+          projectId: scene.projectId,
+          sceneId: id,
+        });
+        tokensCharged += capture.alreadyCaptured ? 0 : capture.creditsCaptured;
 
-        const arrayBuffer = await zai.tts({
-          input: chunks[i],
-          voice,
-          retry: { label: `tts ${lang} chunk ${i + 1}/${chunks.length}`, timeoutMs: 120_000, maxRetries: 4 },
-        });
-        const buffer = Buffer.from(new Uint8Array(arrayBuffer));
-        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.wav`;
-        chunkPaths.push(writeAudioFile(chunkFilename, buffer));
+        const speech = await synthesizeQwenTts({ input: chunks[i], voice, language: lang, model: qwenModel });
+        if (speech.model !== qwenModel) throw new Error("Qwen TTS provider model changed after billing reservation");
+        const chunkFilename = `dub_${id}_${lang}_${i}_${Date.now()}.${speech.extension}`;
+        chunkPaths.push(writeAudioFile(chunkFilename, speech.buffer));
       }
 
       const finalFilename = `dub_${id}_${lang}_${Date.now()}.wav`;
       const finalPath = getAudioPath(finalFilename);
       const concatenated = await concatAudioFiles(chunkPaths, finalPath);
-      let narrationUrl: string;
-      if (concatenated) {
-        narrationUrl = `/api/audio/${finalFilename}`;
-        for (const p of chunkPaths) deleteAudioFile(path.basename(p));
-      } else {
-        narrationUrl = `/api/audio/${path.basename(chunkPaths[0])}`;
-      }
+      if (!concatenated) throw new Error("Failed to assemble dubbed audio after provider synthesis");
+      const narrationUrl = `/api/audio/${finalFilename}`;
+      for (const p of chunkPaths) deleteAudioFile(path.basename(p));
 
-      const updated = await db.sceneTranslation.update({
-        where: { id: translation.id },
-        data: { narrationUrl, voiceId: voice, status: "ready" },
-      });
-      return NextResponse.json({ success: true, translation: updated, chunks: chunks.length });
+      const updated = await db.sceneTranslation.update({ where: { id: translation.id }, data: { narrationUrl, voiceId: voice, status: "ready" } });
+      return NextResponse.json({ success: true, translation: updated, chunks: chunks.length, provider: "qwen", providerModel: qwenModel, tokensCharged });
     } catch (aiError) {
       await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => {});
       return zaiErrorResponse(aiError, { session: authResult.session, logLabel: "dubbing" });
@@ -215,53 +193,31 @@ export async function POST(
   }
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const authResult = await requireSceneAccess(id, false);
     if (!authResult.ok) return authResult.response;
-
-    const translations = await db.sceneTranslation.findMany({
-      where: { sceneId: id },
-      orderBy: { lang: "asc" },
-    });
-    return NextResponse.json({
-      success: true,
-      translations,
-      supportedLangs: DUBBING_LANGUAGES,
-      languageGroups: DUBBING_LANGUAGE_GROUPS,
-    });
+    const translations = await db.sceneTranslation.findMany({ where: { sceneId: id }, orderBy: { lang: "asc" } });
+    return NextResponse.json({ success: true, translations, supportedLangs: DUBBING_LANGUAGES, languageGroups: DUBBING_LANGUAGE_GROUPS });
   } catch (error) {
     console.error("[dubbing GET]", error instanceof Error ? error.message : "unknown error");
     return NextResponse.json({ success: false, error: "Failed to load translations" }, { status: 500 });
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const authResult = await requireSceneAccess(id, true);
     if (!authResult.ok) return authResult.response;
-
     const lang = new URL(req.url).searchParams.get("lang");
-    if (!lang || !getDubbingLanguage(lang)) {
-      return NextResponse.json({ success: false, error: "A valid `lang` query parameter is required" }, { status: 400 });
-    }
-
+    if (!lang || !getDubbingLanguage(lang)) return NextResponse.json({ success: false, error: "A valid `lang` query parameter is required" }, { status: 400 });
     const translation = await db.sceneTranslation.findUnique({ where: { sceneId_lang: { sceneId: id, lang } } });
     if (!translation) return NextResponse.json({ success: false, error: "Translation not found" }, { status: 404 });
-
     if (translation.narrationUrl) {
       const filename = translation.narrationUrl.split("/").pop();
-      if (filename) {
-        try { deleteAudioFile(filename); } catch { /* non-fatal */ }
-      }
+      if (filename) try { deleteAudioFile(filename); } catch { /* non-fatal */ }
     }
     await db.sceneTranslation.delete({ where: { id: translation.id } });
     return NextResponse.json({ success: true, message: "Translation deleted" });
