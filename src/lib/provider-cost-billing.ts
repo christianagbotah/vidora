@@ -73,9 +73,10 @@ export class BillingSafetyError extends Error {
 }
 
 export const DEFAULT_COMMERCIAL_PRICING_POLICY: CommercialPricingPolicy = {
-  // One Vidora credit is one US cent of customer-facing value. Provider COGS,
-  // reserves and target margin determine how many credits an operation costs.
-  creditValueUsd: 0.01,
+  // Preserve Vidora's established wallet denomination: one credit represents
+  // five US cents of customer-facing value. Provider COGS, safety reserves and
+  // target margin determine how many whole credits an operation consumes.
+  creditValueUsd: 0.05,
   targetGrossMarginPct: 0.35,
   providerSafetyBufferPct: 0.05,
   fxSafetyBufferPct: 0.05,
