@@ -31,6 +31,13 @@ const BILLING_GUARD_PATTERNS = [
   /captureReservedQuoteLine/,
 ];
 
+// Keep operational provider probes explicit rather than broadly excluding every
+// route containing a `health` path segment. This route performs its live call
+// only behind requireAdmin + ?deep=1; normal public health polling is zero-cost.
+const OPERATIONAL_PROVIDER_PROBE_ROUTES = new Set([
+  "src/app/api/ai/health/route.ts",
+]);
+
 function walkTsFiles(dir: string): string[] {
   const output: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -49,7 +56,7 @@ function isCustomerApiRoute(file: string): boolean {
   const rel = relative(file);
   return path.basename(file) === "route.ts"
     && !rel.includes("/api/admin/")
-    && !rel.includes("/api/health/");
+    && !OPERATIONAL_PROVIDER_PROBE_ROUTES.has(rel);
 }
 
 function directProviderCalls(source: string): string[] {
@@ -78,6 +85,16 @@ describe("customer provider billing boundaries", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("the exempt AI health provider probe remains admin-only and explicit", () => {
+    const rel = "src/app/api/ai/health/route.ts";
+    const route = readFileSync(path.join(ROOT, ...rel.split("/")), "utf8");
+    expect(OPERATIONAL_PROVIDER_PROBE_ROUTES.has(rel)).toBe(true);
+    expect(route).toContain('req.nextUrl.searchParams.get("deep") !== "1"');
+    expect(route).toContain("requireAdmin(req)");
+    expect(route).toContain('model: "glm-4.5-flash"');
+    expect(route).toContain("await zai.chat(");
   });
 
   test("split-scenes validates legacy local-parser compatibility before delegation", () => {
