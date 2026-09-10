@@ -172,7 +172,7 @@ export async function captureImmediateProviderOperations(opts: {
   projectId?: string | null;
   sceneId?: string | null;
 }) {
-  const captures = [];
+  const captures: Awaited<ReturnType<typeof captureImmediateProviderOperation>>[] = [];
   for (const lineKey of opts.lineKeys) {
     captures.push(await captureImmediateProviderOperation({
       reservationId: opts.reservationId,
