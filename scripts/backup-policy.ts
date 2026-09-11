@@ -7,6 +7,8 @@ export const DEFAULT_BACKUP_HEADROOM_PERCENT = 25;
 export const DEFAULT_BACKUP_MIN_FREE_GB = 5;
 
 const GIB = 1024 ** 3;
+const AUTOMATIC_DB_BACKUP = /^vidora_db_\d{8}T\d{6}Z_[A-Fa-f0-9]{12}\.sql\.gz$/;
+const AUTOMATIC_MEDIA_BACKUP = /^vidora_media_\d{8}T\d{6}Z_[A-Fa-f0-9]{12}\.tar\.gz$/;
 
 export function requiredBackupBytes(opts: {
   mediaBytes: number;
@@ -37,6 +39,10 @@ function insideDir(candidate: string, root: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedCandidate = path.resolve(candidate);
   return resolvedCandidate !== resolvedRoot && resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
+}
+
+function automaticBackupArtifact(name: string): boolean {
+  return AUTOMATIC_DB_BACKUP.test(name) || AUTOMATIC_MEDIA_BACKUP.test(name);
 }
 
 export function planBackupRetention(
@@ -91,6 +97,27 @@ export function planBackupRetention(
   };
 }
 
+export function orphanBackupArtifacts(
+  fileNames: string[],
+  manifests: DeploymentManifest[],
+  backupDir: string,
+): string[] {
+  const root = path.resolve(backupDir);
+  const referenced = new Set<string>();
+
+  for (const raw of manifests) {
+    const manifest = validateDeploymentManifest(raw);
+    for (const artifact of [manifest.databaseBackup, manifest.mediaBackup]) {
+      if (!insideDir(artifact, root)) throw new Error(`backup artifact escapes backup directory: ${artifact}`);
+      referenced.add(path.basename(path.resolve(artifact)));
+    }
+  }
+
+  return fileNames
+    .filter((name) => automaticBackupArtifact(name) && !referenced.has(name))
+    .map((name) => path.join(root, name));
+}
+
 async function loadRetentionRecords(backupDir: string): Promise<RetentionManifestRecord[]> {
   const names = await readdir(backupDir);
   const records: RetentionManifestRecord[] = [];
@@ -105,6 +132,22 @@ async function loadRetentionRecords(backupDir: string): Promise<RetentionManifes
     }
   }
   return records;
+}
+
+async function loadArtifactReferenceManifests(backupDir: string): Promise<DeploymentManifest[]> {
+  const names = await readdir(backupDir);
+  const manifests: DeploymentManifest[] = [];
+  for (const name of names) {
+    if (!/^vidora_release_.*\.json$/.test(name) && name !== "vidora_last_successful_release.json") continue;
+    const manifestPath = path.join(backupDir, name);
+    try {
+      const raw = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifests.push(validateDeploymentManifest(raw));
+    } catch (error) {
+      throw new Error(`invalid recovery manifest ${manifestPath}: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+  return manifests;
 }
 
 async function main(): Promise<void> {
@@ -147,7 +190,20 @@ async function main(): Promise<void> {
       await rm(item.manifestPath, { force: true });
       console.log(`[backup-retention] pruned ${path.basename(item.manifestPath)}`);
     }
-    console.log(`[backup-retention] kept ${plan.keep.length} protected manifest(s); pruned ${plan.prune.length} old healthy set(s)`);
+
+    const artifactManifests = await loadArtifactReferenceManifests(backupDir);
+    const fileNames = await readdir(backupDir);
+    const orphanArtifacts = orphanBackupArtifacts(fileNames, artifactManifests, backupDir);
+    for (const artifact of orphanArtifacts) {
+      await rm(artifact, { force: true });
+      console.log(`[backup-retention] pruned orphan artifact ${path.basename(artifact)}`);
+    }
+
+    console.log(
+      `[backup-retention] kept ${plan.keep.length} protected manifest(s); ` +
+      `pruned ${plan.prune.length} old healthy set(s); ` +
+      `pruned ${orphanArtifacts.length} unreferenced automatic artifact(s)`,
+    );
     return;
   }
 
