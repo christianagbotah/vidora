@@ -29,13 +29,15 @@ describe("direct final-export delivery", () => {
     expect(route).toContain("streamDirectExportJob(jobId, output, req.signal)");
   });
 
-  test("final export POST returns a direct browser download URL", () => {
+  test("final export POST returns a direct browser download URL and expires sessions atomically", () => {
     const route = source("src", "app", "api", "export-video", "route.ts");
 
     expect(route).toContain("autoDownload: true");
     expect(route).toContain('delivery: "direct_stream"');
     expect(route).toContain("persistedOnServer: false");
     expect(route).toContain("directDownloadUrl(job.id)");
+    expect(route).toContain("updatedAt: { lt: staleBefore }");
+    expect(route).toContain("return released.count === 1");
   });
 
   test("background export worker only claims preview jobs", () => {
