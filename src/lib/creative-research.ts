@@ -56,12 +56,29 @@ function pushCandidate(output: string[], seen: Set<string>, raw: string): void {
   output.push(candidate);
 }
 
+function leadingProperName(value: string): string {
+  const tokens = value
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.replace(/^["'“”‘’([{]+|["'“”‘’),.;:!?\]}]+$/g, ""))
+    .filter(Boolean);
+  const kept: string[] = [];
+  for (const token of tokens) {
+    const titleCase = /^[A-Z][A-Za-z0-9&.'’-]*$/.test(token);
+    const allCaps = /^[A-Z][A-Z0-9&.-]{1,}$/.test(token);
+    if (!titleCase && !allCaps) break;
+    kept.push(token);
+    if (kept.length >= 4) break;
+  }
+  return kept.join(" ");
+}
+
 /**
  * Deliberately conservative local candidate extraction. Research has real COGS,
  * so ordinary capitalized prose must not trigger paid search. Strong signals:
  * all-caps brand/acronym names, corporate names ending in Ghana/company suffixes,
- * quoted names, or a proper noun immediately following an explicit brand intent
- * phrase such as "ad for Nike" / "commercial about Unilever Ghana".
+ * or a proper noun immediately following an explicit brand intent phrase such
+ * as "ad for Nike" / "commercial about Unilever Ghana".
  */
 export function extractStrongResearchCandidates(source: string): string[] {
   const text = source.slice(0, 40_000);
@@ -78,14 +95,19 @@ export function extractStrongResearchCandidates(source: string): string[] {
   for (const match of text.matchAll(corporatePattern)) pushCandidate(output, seen, match[1]);
 
   // Explicit advertising/research context catches common mixed-case brands
-  // such as Nike, Apple, Guinness Ghana and Unilever Ghana without searching
-  // every sentence-initial proper noun in a story.
-  const contextualPattern = /\b(?:ad(?:vert(?:isement)?)?|commercial|campaign|promo(?:tion)?|video|story)\s+(?:for|about|featuring|promoting)\s+([A-Z][A-Za-z0-9&.'’-]+(?:\s+[A-Z][A-Za-z0-9&.'’-]+){0,2})/gi;
-  for (const match of text.matchAll(contextualPattern)) pushCandidate(output, seen, match[1]);
+  // such as Nike, Apple, Guinness Ghana and Unilever Ghana. Capture a bounded
+  // phrase first, then stop at the first token that is not actually a proper
+  // name so "Nike with an..." cannot become a paid research query.
+  const contextualPattern = /\b(?:ad(?:vert(?:isement)?)?|commercial|campaign|promo(?:tion)?|video|story)\s+(?:for|about|featuring|promoting)\s+([^,\n.!?;:]{1,100})/gi;
+  for (const match of text.matchAll(contextualPattern)) {
+    pushCandidate(output, seen, leadingProperName(match[1]));
+  }
 
   // Explicit entity labels supplied by the user.
-  const labelledPattern = /\b(?:brand|company|organisation|organization|product|institution)\s+(?:called|named)?\s*[:\-]?\s*([A-Z][A-Za-z0-9&.'’-]+(?:\s+[A-Z][A-Za-z0-9&.'’-]+){0,3})/gi;
-  for (const match of text.matchAll(labelledPattern)) pushCandidate(output, seen, match[1]);
+  const labelledPattern = /\b(?:brand|company|organisation|organization|product|institution)\s+(?:called|named)?\s*[:\-]?\s*([^,\n.!?;:]{1,100})/gi;
+  for (const match of text.matchAll(labelledPattern)) {
+    pushCandidate(output, seen, leadingProperName(match[1]));
+  }
 
   return output.slice(0, MAX_RESEARCH_ENTITIES);
 }
