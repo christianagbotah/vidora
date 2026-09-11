@@ -330,7 +330,7 @@ model ProjectTemplate {
   sceneTemplates     String   @default("[]") @db.Text
   characterTemplates String   @default("[]") @db.Text
   isFeatured         Boolean  @default(false)
-  isActive            Boolean  @default(true)
+  isActive            Boolean @default(true)
   usageCount         Int      @default(0)
   sortOrder          Int      @default(0)
   createdBy          String?
@@ -494,9 +494,9 @@ model BillingQuote {
   creditsRequired  Int
   breakdown        String             @db.Text
   policySnapshot   String             @db.Text
-  expiresAt        DateTime
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  expiresAt        DateTime           @db.Timestamptz(3)
+  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
   reservation      CreditReservation?
 
   @@index([userId, createdAt])
