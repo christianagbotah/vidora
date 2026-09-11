@@ -9,6 +9,7 @@ import {
   normalizeLongFormRequest,
   parseLongFormPlan,
 } from "@/lib/long-form-planner";
+import { persistLongFormPlan } from "@/lib/long-form-store";
 import {
   reserveMeteredZaiTextOperation,
   resolveConfiguredBillableZaiTextModel,
@@ -137,6 +138,17 @@ export async function POST(req: NextRequest) {
       reason: "Long-form plan actual Z.ai token usage settled",
     });
 
+    const settlement = {
+      model: billing.model,
+      maxOutputTokens,
+      usage: result.usage,
+      creditsCaptured: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
+      creditsReleased: finalized.creditsReleased,
+      wallet: finalized.wallet,
+      reservationId: billing.reservation.id,
+      referenceId,
+    };
+
     let plan;
     try {
       plan = parseLongFormPlan(result.content, spec);
@@ -147,27 +159,39 @@ export async function POST(req: NextRequest) {
           success: false,
           error: "The AI long-form director returned an invalid production plan. No provider call will be repeated automatically; use a new idempotency key to try again.",
           code: "LONG_FORM_PLAN_INVALID",
-          usage: result.usage,
-          creditsCaptured: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
-          creditsReleased: finalized.creditsReleased,
+          planning: settlement,
         }, { status: 502 });
       }
       throw error;
     }
 
+    let persisted;
+    try {
+      persisted = await persistLongFormPlan({
+        userId: authResult.session.userId,
+        planningReferenceId: referenceId,
+        spec,
+        plan,
+      });
+    } catch (error) {
+      console.error(
+        `[long-form-plan] persistence failed after billed provider success: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return NextResponse.json({
+        success: false,
+        code: "LONG_FORM_PERSISTENCE_FAILED",
+        error: "The long-form plan was generated and billed successfully but could not be saved. The validated plan is returned below so it is not lost; do not automatically rerun the AI planning call.",
+        plan,
+        planning: settlement,
+      }, { status: 503 });
+    }
+
     return NextResponse.json({
       success: true,
+      productionId: persisted.productionId,
       plan,
-      planning: {
-        model: billing.model,
-        maxOutputTokens,
-        usage: result.usage,
-        creditsCaptured: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
-        creditsReleased: finalized.creditsReleased,
-        wallet: finalized.wallet,
-        reservationId: billing.reservation.id,
-        referenceId,
-      },
+      persistence: persisted,
+      planning: settlement,
     });
   } catch (error) {
     return providerBillingErrorResponse(error, {
