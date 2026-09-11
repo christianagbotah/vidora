@@ -64,10 +64,19 @@ async function releaseStaleFinalJob(job: {
 }): Promise<boolean> {
   if (mediaJobMode(job.params) !== "final") return false;
   if (!["queued", "running"].includes(job.status)) return false;
-  if (Date.now() - job.updatedAt.getTime() <= DIRECT_EXPORT_STALE_MS) return false;
+  const staleBefore = new Date(Date.now() - DIRECT_EXPORT_STALE_MS);
+  if (job.updatedAt >= staleBefore) return false;
 
-  await db.exportJob.updateMany({
-    where: { id: job.id, activeKey: { not: null } },
+  // Re-check staleness atomically in the UPDATE. A live direct stream writes a
+  // heartbeat every 10s, so a heartbeat that lands after our read must prevent
+  // this cleanup path from expiring the active browser download.
+  const released = await db.exportJob.updateMany({
+    where: {
+      id: job.id,
+      activeKey: { not: null },
+      status: { in: ["queued", "running"] },
+      updatedAt: { lt: staleBefore },
+    },
     data: {
       status: "failed",
       activeKey: null,
@@ -76,7 +85,7 @@ async function releaseStaleFinalJob(job: {
       updatedAt: new Date(),
     },
   });
-  return true;
+  return released.count === 1;
 }
 
 function resumedFinalJob(job: {
