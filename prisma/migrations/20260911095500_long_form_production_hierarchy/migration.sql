@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS "LongFormEpisode" (
   "payoffOrCliffhanger" TEXT NOT NULL,
   "status" TEXT NOT NULL DEFAULT 'planned',
   "expansionVersion" INTEGER NOT NULL DEFAULT 0,
+  "expansionActiveKey" TEXT,
+  "expansionClaimedAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "LongFormEpisode_pkey" PRIMARY KEY ("id"),
@@ -70,6 +72,8 @@ CREATE TABLE IF NOT EXISTS "LongFormEpisode" (
 
 CREATE UNIQUE INDEX IF NOT EXISTS "LongFormEpisode_seasonId_episodeNumber_key"
   ON "LongFormEpisode"("seasonId", "episodeNumber");
+CREATE UNIQUE INDEX IF NOT EXISTS "LongFormEpisode_expansionActiveKey_key"
+  ON "LongFormEpisode"("expansionActiveKey");
 CREATE INDEX IF NOT EXISTS "LongFormEpisode_seasonId_idx"
   ON "LongFormEpisode"("seasonId");
 CREATE INDEX IF NOT EXISTS "LongFormEpisode_status_updatedAt_idx"
