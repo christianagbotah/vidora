@@ -3,10 +3,9 @@ import { promisify } from "util";
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { enforceProjectFinalExportRetention } from "@/lib/final-export-retention";
 import { currentCutIsReviewed, mediaJobMode } from "@/lib/media-job-mode";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { GET as getCoreExportStatus, runExportJob as runCoreExportJob } from "./route-core";
+import { GET as getCoreExportStatus } from "./route-core";
 
 export type { ExportAudioSummary } from "./route-core";
 
@@ -14,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const QUALITY_PRESETS = ["draft", "standard", "high", "ultra"] as const;
 const TRANSITIONS = ["fade", "dissolve", "wipe", "slide", "cut"] as const;
 const FORMATS = ["mp4", "webm"] as const;
+const DIRECT_EXPORT_STALE_MS = 3 * 60 * 1000;
 
 async function checkFfmpeg(): Promise<boolean> {
   try {
@@ -23,6 +23,10 @@ async function checkFfmpeg(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function directDownloadUrl(jobId: string): string {
+  return `/api/export-video/download?jobId=${encodeURIComponent(jobId)}`;
 }
 
 function previewActiveResponse(jobId?: string): NextResponse {
@@ -48,89 +52,65 @@ function previewRequiredResponse(): NextResponse {
   );
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function releaseStaleFinalJob(job: {
+  id: string;
+  status: string;
+  updatedAt: Date;
+  params: string | null;
+}): Promise<boolean> {
+  if (mediaJobMode(job.params) !== "final") return false;
+  if (!['queued', 'running'].includes(job.status)) return false;
+  if (Date.now() - job.updatedAt.getTime() <= DIRECT_EXPORT_STALE_MS) return false;
+
+  await db.exportJob.updateMany({
+    where: { id: job.id, activeKey: { not: null } },
+    data: {
+      status: "failed",
+      activeKey: null,
+      step: "Download session expired",
+      error: "The previous browser download session ended unexpectedly. Start a new export to retry.",
+      updatedAt: new Date(),
+    },
+  });
+  return true;
+}
+
 function resumedFinalJob(job: {
   id: string;
+  status: string;
   progress: number;
   step: string;
 }) {
+  const canStartDownload = job.status === "queued";
   return NextResponse.json({
     success: true,
     jobId: job.id,
     resumed: true,
     progress: job.progress,
     step: job.step,
+    autoDownload: canStartDownload,
+    downloadUrl: canStartDownload ? directDownloadUrl(job.id) : null,
   });
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function completedFinalVideoUrl(result: string | null): string | null {
-  if (!result) return null;
-  try {
-    const parsed = JSON.parse(result) as { finalVideoUrl?: unknown };
-    return typeof parsed.finalVideoUrl === "string" ? parsed.finalVideoUrl : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
- * Durable final-export worker boundary.
+ * Prepare a one-time final export download session.
  *
- * The core exporter owns rendering and the terminal ExportJob write. Retention
- * runs only after that durable success state exists, and it is deliberately
- * best-effort so cleanup can never turn a valid export into a failed user job.
- */
-export async function runExportJob(jobId: string): Promise<void> {
-  await runCoreExportJob(jobId);
-
-  const job = await db.exportJob.findUnique({
-    where: { id: jobId },
-    select: { projectId: true, status: true, params: true, result: true },
-  });
-  if (!job || job.status !== "done" || mediaJobMode(job.params) !== "final") return;
-
-  const finalVideoUrl = completedFinalVideoUrl(job.result);
-  const retention = await enforceProjectFinalExportRetention(job.projectId, {
-    protectedUrls: finalVideoUrl ? [finalVideoUrl] : [],
-  }).catch((error) => {
-    console.warn(
-      `[final-export-retention] project=${job.projectId} cleanup skipped:`,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return null;
-  });
-
-  if (retention && (retention.deletedFiles > 0 || retention.expiredJobs > 0)) {
-    console.log(
-      `[final-export-retention] project=${job.projectId} deleted files=${retention.deletedFiles} expired jobs=${retention.expiredJobs}`,
-    );
-  }
-}
-
-/**
- * Final-export queue boundary.
- *
- * Preview and final export intentionally share one per-project activeKey. The
- * old route treated any active row as a resumable final export, which meant a
- * direct/multi-tab export request could receive a preview job id. Keep the
- * shared lock, but make the job mode explicit and fail with a precise 409 while
- * preview is active or the current cut has not been reviewed.
- *
- * The database trigger remains the authoritative fail-closed backstop for
- * races between this API validation and ExportJob insertion.
+ * Final media is no longer rendered by the export worker or promoted into the
+ * persistent generated store. The browser starts the returned downloadUrl;
+ * that request renders ffmpeg output directly to the HTTP response stream.
+ * ExportJob remains as durable progress/audit metadata only.
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { projectId } = body;
+    const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
     if (!projectId) {
-      return NextResponse.json(
-        { success: false, error: "Project ID is required" },
-        { status: 400 },
-      );
+      return NextResponse.json({ success: false, error: "Project ID is required" }, { status: 400 });
     }
 
     const authResult = await requireProjectAccess(projectId, true);
@@ -144,19 +124,13 @@ export async function POST(req: NextRequest) {
 
     if (!QUALITY_PRESETS.includes(quality as (typeof QUALITY_PRESETS)[number])) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Invalid quality: "${quality}". Must be one of: ${QUALITY_PRESETS.join(", ")}`,
-        },
+        { success: false, error: `Invalid quality: "${quality}". Must be one of: ${QUALITY_PRESETS.join(", ")}` },
         { status: 400 },
       );
     }
     if (!TRANSITIONS.includes(transition as (typeof TRANSITIONS)[number])) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Invalid transition: "${transition}". Must be one of: ${TRANSITIONS.join(", ")}`,
-        },
+        { success: false, error: `Invalid transition: "${transition}". Must be one of: ${TRANSITIONS.join(", ")}` },
         { status: 400 },
       );
     }
@@ -167,13 +141,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const hasFfmpeg = await checkFfmpeg();
-    if (!hasFfmpeg) {
+    if (!(await checkFfmpeg())) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "ffmpeg/ffprobe is not installed on the server. Please install them (e.g. sudo apt install ffmpeg) to export videos.",
-        },
+        { success: false, error: "ffmpeg/ffprobe is not installed on the server." },
         { status: 500 },
       );
     }
@@ -191,48 +161,39 @@ export async function POST(req: NextRequest) {
       },
     });
     if (!project) {
-      return NextResponse.json(
-        { success: false, error: "Project not found" },
-        { status: 404 },
-      );
+      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
     }
-
-    const completedScenes = project.scenes.filter((scene) => Boolean(scene.videoUrl));
-    if (completedScenes.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "No completed video scenes to export" },
-        { status: 400 },
-      );
+    if (!project.scenes.some((scene) => Boolean(scene.videoUrl))) {
+      return NextResponse.json({ success: false, error: "No completed video scenes to export" }, { status: 400 });
     }
 
     const activeKey = `project:${projectId}`;
-    const activeJob = await db.exportJob.findUnique({ where: { activeKey } });
+    let activeJob = await db.exportJob.findUnique({ where: { activeKey } });
+    if (activeJob && await releaseStaleFinalJob(activeJob)) {
+      activeJob = null;
+    }
     if (activeJob) {
-      if (mediaJobMode(activeJob.params) === "preview") {
-        return previewActiveResponse(activeJob.id);
-      }
+      if (mediaJobMode(activeJob.params) === "preview") return previewActiveResponse(activeJob.id);
       return resumedFinalJob(activeJob);
     }
 
-    if (!currentCutIsReviewed(project)) {
-      return previewRequiredResponse();
-    }
+    if (!currentCutIsReviewed(project)) return previewRequiredResponse();
 
     let job;
     try {
       job = await db.exportJob.create({
         data: {
           projectId,
-          userId:
-            authResult.session.userId && authResult.session.userId !== "guest"
-              ? authResult.session.userId
-              : null,
+          userId: authResult.session.userId && authResult.session.userId !== "guest"
+            ? authResult.session.userId
+            : null,
           activeKey,
           status: "queued",
           progress: 0,
-          step: "Queued",
+          step: "Waiting for browser download",
           params: JSON.stringify({
             mode: "final",
+            delivery: "direct_stream",
             expectedCutVersion: project.cutVersion,
             quality,
             transition,
@@ -246,49 +207,48 @@ export async function POST(req: NextRequest) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
         if (concurrent) {
-          if (mediaJobMode(concurrent.params) === "preview") {
-            return previewActiveResponse(concurrent.id);
-          }
+          if (mediaJobMode(concurrent.params) === "preview") return previewActiveResponse(concurrent.id);
           return resumedFinalJob(concurrent);
         }
       }
-
-      // The reviewed-cut trigger can win a race if the cut changes after the
-      // API read but before insert. Preserve the database guard and normalize
-      // that expected business failure into the same precise API response.
-      if (errorText(error).includes("VIDORA_PREVIEW_REQUIRED")) {
-        return previewRequiredResponse();
-      }
+      if (errorText(error).includes("VIDORA_PREVIEW_REQUIRED")) return previewRequiredResponse();
       throw error;
     }
 
-    return NextResponse.json({ success: true, jobId: job.id });
+    return NextResponse.json({
+      success: true,
+      jobId: job.id,
+      autoDownload: true,
+      downloadUrl: directDownloadUrl(job.id),
+      delivery: "direct_stream",
+      persistedOnServer: false,
+    });
   } catch (error) {
-    console.error("[Export] Failed to start export:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to start export" },
-      { status: 500 },
-    );
+    console.error("[Export] Failed to prepare direct download:", error);
+    return NextResponse.json({ success: false, error: "Failed to start export" }, { status: 500 });
   }
 }
 
+async function expireStaleDirectJob(jobId: string): Promise<void> {
+  const job = await db.exportJob.findUnique({ where: { id: jobId } });
+  if (!job || mediaJobMode(job.params) !== "final") return;
+  await releaseStaleFinalJob(job);
+}
+
 /**
- * Final-export status boundary.
- *
- * `GET ?projectId=...` is used by the Studio after reload to recover an active
- * background final export. Full Preview uses the same ExportJob table and the
- * same per-project activeKey, so returning a preview here would hydrate the
- * preview into the final-export progress UI. For project recovery, expose only
- * an active final job; explicit job-id polling keeps the core status behavior.
+ * Keep the existing status contract for Studio polling, but final jobs are now
+ * driven by the browser download request rather than the background worker.
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const jobId = searchParams.get("jobId");
   const projectId = searchParams.get("projectId");
 
-  if (jobId || !projectId) {
+  if (jobId) {
+    await expireStaleDirectJob(jobId);
     return getCoreExportStatus(req);
   }
+  if (!projectId) return getCoreExportStatus(req);
 
   const authResult = await requireProjectAccess(projectId, false);
   if (!authResult.ok) return authResult.response;
@@ -301,12 +261,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, job: null });
   }
 
+  await expireStaleDirectJob(activeJob.id);
   const forwardedUrl = new URL(req.url);
   forwardedUrl.searchParams.delete("projectId");
   forwardedUrl.searchParams.set("jobId", activeJob.id);
-  const forwardedRequest = new NextRequest(forwardedUrl, {
-    method: "GET",
-    headers: req.headers,
-  });
-  return getCoreExportStatus(forwardedRequest);
+  return getCoreExportStatus(new NextRequest(forwardedUrl, { method: "GET", headers: req.headers }));
 }
