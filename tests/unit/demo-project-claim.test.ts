@@ -7,7 +7,7 @@ const authSource = readFileSync(path.join(ROOT, "src/lib/project-auth.ts"), "utf
 const demoSource = readFileSync(path.join(ROOT, "src/lib/demo-templates.ts"), "utf8");
 
 describe("signed-in anonymous demo ownership transition", () => {
-  test("recognizes only shipped pristine demo identity before a write claim", () => {
+  test("recognizes only shipped pristine demo identity before a normal-user write claim", () => {
     expect(authSource).toContain('import { DEMO_TEMPLATES, getDemoFinalVideo } from "@/lib/demo-templates"');
     expect(authSource).toContain("async function isPristineAnonymousDemo");
     expect(authSource).toContain("template.title === project.title");
@@ -19,7 +19,7 @@ describe("signed-in anonymous demo ownership transition", () => {
     expect(demoSource).toContain('description: "[DEMO]');
   });
 
-  test("requires a valid session before atomically claiming an ownerless demo", () => {
+  test("requires a valid session before atomically claiming an ownerless project", () => {
     const ownerlessBlock = authSource.indexOf("if (project.userId === null)");
     const authCheck = authSource.indexOf("const authResult = await requireAuth();", ownerlessBlock);
     const pristineCheck = authSource.indexOf("await isPristineAnonymousDemo(project)", ownerlessBlock);
@@ -33,10 +33,16 @@ describe("signed-in anonymous demo ownership transition", () => {
     expect(authSource.slice(atomicClaim, atomicClaim + 300)).toContain("userId: authResult.session.userId");
   });
 
-  test("keeps generic ownerless projects unclaimable and resolves claim races safely", () => {
+  test("allows only admins to recover non-demo ownerless legacy projects", () => {
+    expect(authSource).toContain('const adminLegacyRecovery = !pristineDemo && authResult.session.role === "admin"');
+    expect(authSource).toContain("if (!pristineDemo && !adminLegacyRecovery)");
     expect(authSource).toContain('error: "This ownerless project cannot be modified."');
+    expect(authSource).toContain("admin recovered ownerless project");
+  });
+
+  test("resolves ownership claim races without allowing a second account", () => {
     expect(authSource).toContain("if (claimed.count === 1)");
     expect(authSource).toContain("latest?.userId === authResult.session.userId");
-    expect(authSource).toContain('error: "This demo is already attached to another account."');
+    expect(authSource).toContain('error: "This ownerless project is already attached to another account."');
   });
 });
