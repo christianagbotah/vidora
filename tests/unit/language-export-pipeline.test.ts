@@ -21,18 +21,18 @@ describe("language and export pipeline regression guards", () => {
     expect(preview).not.toContain("Apply the video language again before previewing");
   });
 
-  test("final export carries language profile and uses resilient scene media materialization", () => {
+  test("direct final export carries language profile and uses resilient scene media materialization", () => {
     const route = source("src/app/api/export-video/route.ts");
-    const core = source("src/app/api/export-video/route-core.ts");
-    expect(route).toContain('import { GET as getCoreExportStatus, runExportJob as runCoreExportJob } from "./route-core"');
-    expect(route).toContain("export async function runExportJob(jobId: string)");
-    expect(route).toContain("await runCoreExportJob(jobId)");
-    expect(route).toContain("enforceProjectFinalExportRetention(job.projectId");
-    expect(core).toContain("resolveSceneLanguageText(scene.id, language)");
-    expect(core).toContain("language,");
-    expect(core).toContain("accent: scene.narrationAccent || undefined");
-    expect(core).toContain("style: scene.narrationStyle || undefined");
-    expect(core).toContain("materializeSceneVideo(scene)");
+    const direct = source("src/lib/direct-export-stream.ts");
+    expect(route).toContain('import { GET as getCoreExportStatus } from "./route-core"');
+    expect(route).toContain('delivery: "direct_stream"');
+    expect(route).not.toContain("runCoreExportJob");
+    expect(direct).toContain("resolveSceneLanguageText(scene.id, language)");
+    expect(direct).toContain("language,");
+    expect(direct).toContain("accent: scene.narrationAccent || undefined");
+    expect(direct).toContain("style: scene.narrationStyle || undefined");
+    expect(direct).toContain("materializeSceneVideo(scene)");
+    expect(direct).toContain("persistedOnServer: false");
   });
 
   test("final export project recovery excludes Full Preview jobs", () => {

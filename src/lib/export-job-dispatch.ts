@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
 import { runFullPreviewJob } from "@/lib/full-preview-job";
-import { runExportJob } from "@/app/api/export-video/route";
 
 function jobMode(params: string | null): string {
   if (!params) return "final";
@@ -12,6 +11,14 @@ function jobMode(params: string | null): string {
   }
 }
 
+/**
+ * The durable export worker now owns Full Preview rendering only.
+ *
+ * Final exports are intentionally excluded: their ffmpeg stdout is streamed
+ * directly to the authenticated browser download response, so allowing the
+ * background worker to render a final job would re-introduce persistent final
+ * files and race the one-time download endpoint.
+ */
 export async function runQueuedMediaJob(jobId: string): Promise<void> {
   const job = await db.exportJob.findUnique({
     where: { id: jobId },
@@ -19,10 +26,10 @@ export async function runQueuedMediaJob(jobId: string): Promise<void> {
   });
   if (!job) return;
 
-  if (jobMode(job.params) === "preview") {
-    await runFullPreviewJob(jobId);
+  if (jobMode(job.params) !== "preview") {
+    console.warn(`[export-worker] ignored non-preview job ${jobId}; final exports are browser-streamed`);
     return;
   }
 
-  await runExportJob(jobId);
+  await runFullPreviewJob(jobId);
 }
