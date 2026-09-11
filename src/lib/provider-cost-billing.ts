@@ -9,7 +9,8 @@ export type BillableOperation =
   | "text_output"
   | "vision_input"
   | "vision_output"
-  | "asr";
+  | "asr"
+  | "web_search";
 export type BillingUnit = "request" | "image" | "character" | "token" | "minute";
 
 export interface ProviderPriceSnapshot {
@@ -242,6 +243,7 @@ function asOperation(value: string): BillableOperation | null {
     "vision_input",
     "vision_output",
     "asr",
+    "web_search",
   ]).has(value as BillableOperation)
     ? value as BillableOperation
     : null;
