@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/project-auth";
+import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
 import { findReservationByReference } from "@/lib/credit-reservations";
 import { buildProfessionalSceneDirectorPrompt } from "@/lib/ai-provider-router";
 import { providerBillingErrorResponse } from "@/lib/billing-errors";
@@ -107,6 +107,11 @@ export async function POST(req: NextRequest) {
   const projectType = inferProjectType(prompt, body.projectType);
   const projectId = typeof body.projectId === "string" && body.projectId.trim() ? body.projectId.trim() : null;
   const researchMode = typeof body.researchMode === "string" ? body.researchMode.trim().toLowerCase() : "auto";
+
+  if (projectId) {
+    const projectAccess = await requireProjectAccess(projectId, true);
+    if (!projectAccess.ok) return projectAccess.response;
+  }
 
   // For the metered director path, reject an explicit HTTP replay before any
   // fresh web research can be reserved. This preserves the existing exactly-once
