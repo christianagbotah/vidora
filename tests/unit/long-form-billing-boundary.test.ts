@@ -9,7 +9,7 @@ function read(relativePath: string): string {
 }
 
 describe("long-form provider billing boundary", () => {
-  test("reserves before the strict billed text submission and settles actual usage", () => {
+  test("story-bible planning reserves before strict billed text submission and settles actual usage", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
     const submitIndex = route.indexOf("submitBilledZaiText(");
@@ -25,7 +25,7 @@ describe("long-form provider billing boundary", () => {
     expect(route).not.toContain("withRetry(");
   });
 
-  test("explicit idempotency replay is rejected before another paid planning call", () => {
+  test("story-bible idempotency replay is rejected before another paid planning call", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     const replayLookup = route.indexOf("findReservationByReference(referenceId)");
     const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
@@ -35,14 +35,14 @@ describe("long-form provider billing boundary", () => {
     expect(route).toContain("status: 409");
   });
 
-  test("malformed paid output is not automatically resubmitted", () => {
+  test("malformed paid story-bible output is not automatically resubmitted", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     expect(route).toContain('code: "LONG_FORM_PLAN_INVALID"');
     expect(route).toContain("No provider call will be repeated automatically");
     expect((route.match(/submitBilledZaiText\(/g) || []).length).toBe(1);
   });
 
-  test("valid paid output is persisted transactionally and a DB failure returns the plan instead of paying twice", () => {
+  test("valid paid story-bible output is persisted transactionally and a DB failure returns the plan instead of paying twice", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     const store = read("src/lib/long-form-store.ts");
     expect(route).toContain("persistLongFormPlan({");
@@ -52,6 +52,44 @@ describe("long-form provider billing boundary", () => {
     expect(store).toContain("db.$transaction(async (tx) =>");
     expect(store).toContain('ON CONFLICT ("planningReferenceId") DO NOTHING');
     expect(store).toContain("alreadyPersisted: true");
+  });
+
+  test("episode expansion validates version before spend and uses one strict paid submission", () => {
+    const route = read("src/app/api/creative/long-form/episodes/[id]/expand/route.ts");
+    const versionCheck = route.indexOf("expectedExpansionVersion !== context.episode.expansionVersion");
+    const replayLookup = route.indexOf("findReservationByReference(referenceId)");
+    const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
+    const submitIndex = route.indexOf("submitBilledZaiText(");
+    const captureIndex = route.indexOf("captureActualMeteredLine(");
+
+    expect(versionCheck).toBeGreaterThan(-1);
+    expect(versionCheck).toBeLessThan(reserveIndex);
+    expect(replayLookup).toBeGreaterThan(versionCheck);
+    expect(replayLookup).toBeLessThan(reserveIndex);
+    expect(submitIndex).toBeGreaterThan(reserveIndex);
+    expect(captureIndex).toBeGreaterThan(submitIndex);
+    expect((route.match(/submitBilledZaiText\(/g) || []).length).toBe(1);
+    expect(route).not.toContain("zai.chat(");
+    expect(route).not.toContain("withRetry(");
+  });
+
+  test("malformed or conflicting paid sequence output is returned without hidden provider retry", () => {
+    const route = read("src/app/api/creative/long-form/episodes/[id]/expand/route.ts");
+    expect(route).toContain('code: "LONG_FORM_SEQUENCE_PLAN_INVALID"');
+    expect(route).toContain("will not be repeated automatically");
+    expect(route).toContain("LongFormExpansionConflictError");
+    expect(route).toContain("sequences,");
+    expect(route).toContain('code: "LONG_FORM_SEQUENCE_PERSISTENCE_FAILED"');
+  });
+
+  test("sequence replacement uses ownership scope, row locking and optimistic expansion versioning", () => {
+    const store = read("src/lib/long-form-sequence-store.ts");
+    expect(store).toContain('p."userId" = ${opts.userId}');
+    expect(store).toContain("FOR UPDATE OF e");
+    expect(store).toContain("episode.expansionVersion !== opts.expectedExpansionVersion");
+    expect(store).toContain('DELETE FROM "LongFormSequence"');
+    expect(store).toContain('SET "status" = \'sequenced\'');
+    expect(store).toContain('"expansionVersion" = ${expansionVersion}');
   });
 
   test("migration declares durable production, season, episode and sequence hierarchy", () => {
