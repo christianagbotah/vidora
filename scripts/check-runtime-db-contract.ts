@@ -139,6 +139,7 @@ async function main(): Promise<void> {
     'zai:glm-4.6v:vision_input',
     'zai:glm-4.6v:vision_output',
     'zai:glm-asr-2512:asr',
+    'zai:search-prime:web_search',
     `zai:${configuredTextModel}:text_input`,
     `zai:${configuredTextModel}:text_output`,
     `zai:${configuredVisionModel}:vision_input`,
