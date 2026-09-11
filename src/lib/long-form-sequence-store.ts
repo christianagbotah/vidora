@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LongFormSequencePlan } from "@/lib/long-form-sequence-planner";
 
@@ -27,7 +28,7 @@ export class LongFormExpansionBusyError extends Error {
 }
 
 async function lockOwnedEpisode(
-  tx: Parameters<Parameters<typeof db.$transaction>[0]>[0],
+  tx: Prisma.TransactionClient,
   opts: { episodeId: string; userId: string },
 ): Promise<EpisodeLockRow> {
   const rows = await tx.$queryRaw<EpisodeLockRow[]>`
