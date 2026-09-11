@@ -2,9 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireProjectAccess } from "@/lib/project-auth";
 import { createProjectGenerationQuote } from "@/lib/project-generation-quote";
 import { BillingSafetyError } from "@/lib/provider-cost-billing";
+import { getBillingGhsPerUsd } from "@/lib/package-billing-safety";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function roundCurrency(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 export async function POST(
   req: NextRequest,
@@ -22,6 +27,22 @@ export async function POST(
       sceneId,
     });
     const shortfall = Math.max(0, result.quote.creditsRequired - result.wallet.availableCredits);
+
+    // GHS is display-only here. Credits remain the authoritative reservation
+    // unit. Reuse Vidora's persisted billing FX rate so this estimate matches
+    // package/Hubtel economics without making generation depend on an external
+    // exchange-rate request at confirmation time.
+    const ghsPerUsd = await getBillingGhsPerUsd().catch(() => null);
+    const customerValueGhs = ghsPerUsd
+      ? roundCurrency(result.quote.customerPriceUsd * ghsPerUsd)
+      : null;
+    const breakdown = result.quote.breakdown.map((line) => ({
+      ...line,
+      customerValueGhs: ghsPerUsd
+        ? roundCurrency(line.customerValueUsd * ghsPerUsd)
+        : null,
+    }));
+
     return NextResponse.json({
       success: true,
       quoteId: result.quote.id,
@@ -32,9 +53,11 @@ export async function POST(
       providerCostUsd: result.quote.providerCostUsd,
       bufferedCostUsd: result.quote.bufferedCostUsd,
       customerValueUsd: result.quote.customerPriceUsd,
+      customerValueGhs,
+      ghsPerUsd,
       pricingVersion: result.quote.pricingVersion,
       expiresAt: result.quote.expiresAt.toISOString(),
-      breakdown: result.quote.breakdown,
+      breakdown,
       wallet: result.wallet,
       hasEnoughCredits: shortfall === 0,
       shortfallCredits: shortfall,
