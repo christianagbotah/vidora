@@ -64,6 +64,40 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: provider billing table(s) missing: ${missingTables.join(', ')}`);
   }
 
+  const requiredLongFormTables = [
+    'LongFormProduction',
+    'LongFormSeason',
+    'LongFormEpisode',
+    'LongFormSequence',
+  ];
+  const longFormTables = await db.$queryRaw<TableRow[]>`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('LongFormProduction','LongFormSeason','LongFormEpisode','LongFormSequence')
+  `;
+  const longFormTableNames = new Set(longFormTables.map((row) => row.table_name));
+  const missingLongFormTables = requiredLongFormTables.filter((name) => !longFormTableNames.has(name));
+  if (missingLongFormTables.length) {
+    throw new Error(`Runtime DB contract failed: long-form hierarchy table(s) missing: ${missingLongFormTables.join(', ')}`);
+  }
+
+  const longFormIndexes = await db.$queryRaw<IndexRow[]>`
+    SELECT indexname, indexdef FROM pg_indexes
+    WHERE schemaname = 'public'
+      AND tablename IN ('LongFormProduction','LongFormSeason','LongFormEpisode','LongFormSequence')
+  `;
+  const longFormIndexNames = new Set(longFormIndexes.map((row) => row.indexname));
+  const requiredLongFormIndexes = [
+    'LongFormProduction_planningReferenceId_key',
+    'LongFormSeason_productionId_seasonNumber_key',
+    'LongFormEpisode_seasonId_episodeNumber_key',
+    'LongFormSequence_episodeId_sequenceNumber_key',
+  ];
+  const missingLongFormIndexes = requiredLongFormIndexes.filter((name) => !longFormIndexNames.has(name));
+  if (missingLongFormIndexes.length) {
+    throw new Error(`Runtime DB contract failed: long-form hierarchy index(es) missing: ${missingLongFormIndexes.join(', ')}`);
+  }
+
   const generationColumns = await db.$queryRaw<ColumnRow[]>`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'GenerationRun'
@@ -161,7 +195,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + exact provider-cost billing contract verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy verified)');
 }
 
 main()
