@@ -17,9 +17,16 @@ export interface GenerationQuoteView {
   sceneCount: number;
   creditsRequired: number;
   customerValueUsd: number;
+  customerValueGhs?: number | null;
+  ghsPerUsd?: number | null;
   pricingVersion: string;
   expiresAt: string;
-  breakdown: Array<{ lineKey: string; label: string; credits: number }>;
+  breakdown: Array<{
+    lineKey: string;
+    label: string;
+    credits: number;
+    customerValueGhs?: number | null;
+  }>;
   wallet: {
     availableCredits: number;
     reservedCredits: number;
@@ -41,6 +48,10 @@ interface GenerationCostDialogProps {
   onTopUp: () => void | Promise<void>;
 }
 
+function formatGhs(value: number): string {
+  return `GH₵${value.toFixed(2)}`;
+}
+
 export function GenerationCostDialog({
   open,
   onOpenChange,
@@ -57,7 +68,7 @@ export function GenerationCostDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
@@ -76,11 +87,19 @@ export function GenerationCostDialog({
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="rounded-xl border bg-slate-50 p-3">
                 <div className="text-xs text-muted-foreground">This generation</div>
                 <div className="mt-1 text-2xl font-bold">{quote.creditsRequired} credits</div>
-                <div className="text-xs text-muted-foreground">≈ ${quote.customerValueUsd.toFixed(2)} customer value</div>
+                {typeof quote.customerValueGhs === "number" ? (
+                  <div className="text-xs text-muted-foreground">
+                    ≈ {formatGhs(quote.customerValueGhs)} customer value
+                  </div>
+                ) : null}
+                <div className="text-xs text-muted-foreground">
+                  ≈ ${quote.customerValueUsd.toFixed(2)} USD
+                  {typeof quote.ghsPerUsd === "number" ? ` at GH₵${quote.ghsPerUsd.toFixed(3)}/USD` : ""}
+                </div>
               </div>
               <div className="rounded-xl border bg-slate-50 p-3">
                 <div className="text-xs text-muted-foreground">Available balance</div>
@@ -89,11 +108,18 @@ export function GenerationCostDialog({
               </div>
             </div>
 
-            <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-3">
+            <div className="max-h-48 space-y-1 overflow-x-hidden overflow-y-auto rounded-xl border p-3 pr-4">
               {quote.breakdown.map((line) => (
-                <div key={line.lineKey} className="flex items-start justify-between gap-3 py-1 text-sm">
-                  <span className="text-slate-700">{line.label}</span>
-                  <span className="shrink-0 font-semibold">{line.credits} cr</span>
+                <div key={line.lineKey} className="flex w-full items-start gap-3 py-1 text-sm">
+                  <span className="min-w-0 flex-1 break-words pr-2 text-slate-700">{line.label}</span>
+                  <span className="shrink-0 pr-1 text-right">
+                    <span className="block font-semibold whitespace-nowrap">{line.credits} cr</span>
+                    {typeof line.customerValueGhs === "number" ? (
+                      <span className="block whitespace-nowrap text-[11px] font-normal text-muted-foreground">
+                        ≈ {formatGhs(line.customerValueGhs)}
+                      </span>
+                    ) : null}
+                  </span>
                 </div>
               ))}
             </div>

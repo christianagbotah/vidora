@@ -17,6 +17,16 @@ import {
 
 export const runtime = "nodejs";
 
+/**
+ * Compare the customer-visible billable work contract, not derived floating
+ * point accounting metadata. The reservation transaction independently locks
+ * ProviderPrice and re-checks pricingVersion before any credits move.
+ *
+ * This deliberately matches the project-generation quote compatibility rule:
+ * a quote remains usable when the exact work, credits and verified price
+ * version are unchanged, even if recomputed diagnostic USD fields differ by an
+ * irrelevant representation detail.
+ */
 function quoteLineSignature(lines: BillingQuoteLine[]): string {
   return JSON.stringify(
     [...lines]
@@ -27,12 +37,8 @@ function quoteLineSignature(lines: BillingQuoteLine[]): string {
         operation: line.operation,
         billingUnit: line.billingUnit,
         quantity: line.quantity,
-        providerCostUsd: line.providerCostUsd,
-        bufferedCostUsd: line.bufferedCostUsd,
-        customerValueUsd: line.customerValueUsd,
         credits: line.credits,
         pricingVersion: line.pricingVersion,
-        verifiedAt: line.verifiedAt,
       }))
       .sort((a, b) => a.lineKey.localeCompare(b.lineKey)),
   );
