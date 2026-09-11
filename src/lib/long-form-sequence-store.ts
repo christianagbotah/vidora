@@ -5,6 +5,7 @@ import type { LongFormSequencePlan } from "@/lib/long-form-sequence-planner";
 interface EpisodeLockRow {
   id: string;
   expansionVersion: number;
+  expansionActiveKey: string | null;
 }
 
 export class LongFormExpansionConflictError extends Error {
@@ -16,10 +17,99 @@ export class LongFormExpansionConflictError extends Error {
   }
 }
 
+export class LongFormExpansionBusyError extends Error {
+  readonly code = "LONG_FORM_EXPANSION_IN_PROGRESS";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "LongFormExpansionBusyError";
+  }
+}
+
+async function lockOwnedEpisode(
+  tx: Parameters<Parameters<typeof db.$transaction>[0]>[0],
+  opts: { episodeId: string; userId: string },
+): Promise<EpisodeLockRow> {
+  const rows = await tx.$queryRaw<EpisodeLockRow[]>`
+    SELECT e."id", e."expansionVersion", e."expansionActiveKey"
+    FROM "LongFormEpisode" e
+    INNER JOIN "LongFormSeason" s ON s."id" = e."seasonId"
+    INNER JOIN "LongFormProduction" p ON p."id" = s."productionId"
+    WHERE e."id" = ${opts.episodeId} AND p."userId" = ${opts.userId}
+    LIMIT 1
+    FOR UPDATE OF e
+  `;
+  if (!rows[0]) throw new Error("Long-form episode not found");
+  return rows[0];
+}
+
+/**
+ * Claim one episode/version before any provider billing reservation or submit.
+ * The same active key may resume if the process died before provider submission;
+ * a different key is rejected so two concurrent requests cannot both spend on
+ * the same approved episode version.
+ */
+export async function claimLongFormEpisodeExpansion(opts: {
+  episodeId: string;
+  userId: string;
+  expectedExpansionVersion: number;
+  activeKey: string;
+}): Promise<{ alreadyClaimed: boolean }> {
+  if (!Number.isSafeInteger(opts.expectedExpansionVersion) || opts.expectedExpansionVersion < 0) {
+    throw new LongFormExpansionConflictError("Expected expansion version is invalid");
+  }
+  if (!opts.activeKey.trim()) throw new Error("Expansion active key is required");
+
+  return db.$transaction(async (tx) => {
+    const episode = await lockOwnedEpisode(tx, opts);
+    if (episode.expansionVersion !== opts.expectedExpansionVersion) {
+      throw new LongFormExpansionConflictError(
+        `Episode expansion changed from version ${opts.expectedExpansionVersion} to ${episode.expansionVersion}; reload before expanding it again`,
+      );
+    }
+    if (episode.expansionActiveKey) {
+      if (episode.expansionActiveKey === opts.activeKey) return { alreadyClaimed: true };
+      throw new LongFormExpansionBusyError(
+        "This episode version already has an expansion in progress. Wait for it to settle or reconcile the existing expansion before starting another.",
+      );
+    }
+
+    await tx.$executeRaw`
+      UPDATE "LongFormEpisode"
+      SET "expansionActiveKey" = ${opts.activeKey},
+          "expansionClaimedAt" = CURRENT_TIMESTAMP,
+          "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${opts.episodeId}
+    `;
+    return { alreadyClaimed: false };
+  });
+}
+
+/** Release only a claim owned by this exact operation. */
+export async function releaseLongFormEpisodeExpansionClaim(opts: {
+  episodeId: string;
+  userId: string;
+  activeKey: string;
+}): Promise<boolean> {
+  return db.$transaction(async (tx) => {
+    const episode = await lockOwnedEpisode(tx, opts);
+    if (episode.expansionActiveKey !== opts.activeKey) return false;
+    await tx.$executeRaw`
+      UPDATE "LongFormEpisode"
+      SET "expansionActiveKey" = NULL,
+          "expansionClaimedAt" = NULL,
+          "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "id" = ${opts.episodeId}
+    `;
+    return true;
+  });
+}
+
 export async function replaceLongFormEpisodeSequences(opts: {
   episodeId: string;
   userId: string;
   expectedExpansionVersion: number;
+  activeKey: string;
   sequences: LongFormSequencePlan[];
 }): Promise<{ expansionVersion: number; sequenceCount: number }> {
   if (!Number.isSafeInteger(opts.expectedExpansionVersion) || opts.expectedExpansionVersion < 0) {
@@ -28,20 +118,15 @@ export async function replaceLongFormEpisodeSequences(opts: {
   if (!opts.sequences.length) throw new Error("At least one sequence is required");
 
   return db.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<EpisodeLockRow[]>`
-      SELECT e."id", e."expansionVersion"
-      FROM "LongFormEpisode" e
-      INNER JOIN "LongFormSeason" s ON s."id" = e."seasonId"
-      INNER JOIN "LongFormProduction" p ON p."id" = s."productionId"
-      WHERE e."id" = ${opts.episodeId} AND p."userId" = ${opts.userId}
-      LIMIT 1
-      FOR UPDATE OF e
-    `;
-    const episode = rows[0];
-    if (!episode) throw new Error("Long-form episode not found");
+    const episode = await lockOwnedEpisode(tx, opts);
     if (episode.expansionVersion !== opts.expectedExpansionVersion) {
       throw new LongFormExpansionConflictError(
         `Episode expansion changed from version ${opts.expectedExpansionVersion} to ${episode.expansionVersion}; reload before replacing its sequence map`,
+      );
+    }
+    if (episode.expansionActiveKey !== opts.activeKey) {
+      throw new LongFormExpansionBusyError(
+        "The episode expansion lease no longer belongs to this request; the generated sequence map was not written.",
       );
     }
 
@@ -67,6 +152,8 @@ export async function replaceLongFormEpisodeSequences(opts: {
       UPDATE "LongFormEpisode"
       SET "status" = 'sequenced',
           "expansionVersion" = ${expansionVersion},
+          "expansionActiveKey" = NULL,
+          "expansionClaimedAt" = NULL,
           "updatedAt" = CURRENT_TIMESTAMP
       WHERE "id" = ${opts.episodeId}
     `;
