@@ -57,4 +57,21 @@ describe("full preview Cloudflare timeout regression", () => {
     expect(previewJob).toContain("markCurrentCutReviewed");
     expect(previewJob).toContain("activeKey: null");
   });
+
+  test("missing local scene clips are recovered from existing provider tasks without a new generation submit", () => {
+    const previewJob = read("src/lib/full-preview-job.ts");
+    expect(previewJob).toContain("recoverMissingLocalSceneVideos");
+    expect(previewJob).toContain("existsSync(localPath)");
+    expect(previewJob).toContain("zai.pollVideoTask({");
+    expect(previewJob).toContain("persistProviderVideo(scene.id, refreshed.videoUrl)");
+    expect(previewJob).toContain("data: { videoUrl: recoveredUrl, errorMessage: null }");
+    expect(previewJob).not.toContain("zai.generateVideo(");
+  });
+
+  test("unrecoverable deleted scene media gives an actionable regenerate-scene error", () => {
+    const previewJob = read("src/lib/full-preview-job.ts");
+    expect(previewJob).toContain("source video is missing from storage");
+    expect(previewJob).toContain("Regenerate this scene before building Full Preview.");
+    expect(previewJob).toContain('if (/source video is missing from storage/i.test(message))');
+  });
 });

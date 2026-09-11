@@ -1,9 +1,13 @@
+import { existsSync } from "fs";
 import { db } from "@/lib/db";
 import {
   renderFullProjectPreview,
   type FullPreviewTransition,
 } from "@/lib/full-preview-render";
 import { enforceProjectReviewCutRetention } from "@/lib/review-cut-retention";
+import { persistProviderVideo } from "@/lib/provider-video-storage";
+import { resolvePublicAssetPath } from "@/lib/generated-store";
+import { zai } from "@/lib/zai";
 
 const PREVIEW_TRANSITIONS = new Set<FullPreviewTransition>([
   "fade",
@@ -19,6 +23,13 @@ interface PreviewJobParams {
   transition?: string;
   withTitleCard?: boolean;
   includeAudio?: boolean;
+}
+
+interface RecoverablePreviewScene {
+  id: string;
+  sceneNumber: number;
+  videoUrl: string | null;
+  taskId: string | null;
 }
 
 function parseParams(raw: string | null): PreviewJobParams {
@@ -44,10 +55,72 @@ async function markCurrentCutReviewed(
   }
 }
 
+/**
+ * Disk cleanup may remove a locally archived scene clip while the database still
+ * contains its /generated/... URL and original provider task id. Full Preview
+ * must not blindly trust the URL string as proof that the bytes still exist.
+ *
+ * Recovery is status/download only: it polls the existing provider task and
+ * re-archives the returned media. It never submits a new paid generation.
+ */
+async function recoverMissingLocalSceneVideos(
+  scenes: RecoverablePreviewScene[],
+): Promise<void> {
+  for (const scene of scenes) {
+    if (!scene.videoUrl?.startsWith("/")) continue;
+
+    const localPath = resolvePublicAssetPath(scene.videoUrl);
+    if (existsSync(localPath)) continue;
+
+    if (!scene.taskId) {
+      throw new Error(
+        `Scene ${scene.sceneNumber} source video is missing from storage. Regenerate this scene before building Full Preview.`,
+      );
+    }
+
+    try {
+      const refreshed = await zai.pollVideoTask({
+        taskId: scene.taskId,
+        maxAttempts: 2,
+        intervalMs: 1_500,
+      });
+      if (refreshed.status !== "success" || !refreshed.videoUrl) {
+        throw new Error("provider task did not return recoverable media");
+      }
+
+      const recoveredUrl = await persistProviderVideo(scene.id, refreshed.videoUrl);
+      const recoveredPath = resolvePublicAssetPath(recoveredUrl);
+      if (!existsSync(recoveredPath)) {
+        throw new Error("recovered provider media was not persisted");
+      }
+
+      await db.videoScene.update({
+        where: { id: scene.id },
+        data: { videoUrl: recoveredUrl, errorMessage: null },
+      });
+      scene.videoUrl = recoveredUrl;
+      console.log(
+        `[full-preview] recovered missing local video for scene=${scene.id} task=${scene.taskId}`,
+      );
+    } catch (error) {
+      console.warn(
+        `[full-preview] could not recover missing local video scene=${scene.id}:`,
+        error instanceof Error ? error.message : "unknown error",
+      );
+      throw new Error(
+        `Scene ${scene.sceneNumber} source video is missing from storage and the original provider task is no longer recoverable. Regenerate this scene before building Full Preview.`,
+      );
+    }
+  }
+}
+
 function friendlyPreviewError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/changed while|changed before/i.test(message)) {
     return "The project changed while the full preview was being built. Build the preview again to review the latest cut.";
+  }
+  if (/source video is missing from storage/i.test(message)) {
+    return message;
   }
   if (/requires every scene|scene.*complete/i.test(message)) {
     return "Full preview requires every scene to be complete.";
@@ -77,6 +150,8 @@ export async function runFullPreviewJob(jobId: string): Promise<void> {
       include: { scenes: { orderBy: { sceneNumber: "asc" } } },
     });
     if (!project) throw new Error("Project not found");
+
+    await recoverMissingLocalSceneVideos(project.scenes);
 
     const completedScenes = project.scenes.filter((scene) => Boolean(scene.videoUrl));
     if (completedScenes.length !== project.scenes.length || project.scenes.length === 0) {
