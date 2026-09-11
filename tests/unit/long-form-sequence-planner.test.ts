@@ -101,9 +101,9 @@ describe("episode sequence targeting", () => {
     const prompt = buildEpisodeSequencePrompt(context);
     expect(prompt.sequenceCount).toBe(5);
     expect(prompt.systemPrompt).toContain("Continuity handoff is mandatory");
+    expect(prompt.systemPrompt).toContain("do not generate final 10-second video prompts");
     expect(prompt.userPrompt).toContain("silver wristwatch");
     expect(prompt.userPrompt).toContain("exactly 5 sequences");
-    expect(prompt.userPrompt).toContain("do not generate final 10-second video prompts");
   });
 });
 
