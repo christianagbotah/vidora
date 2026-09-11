@@ -1,9 +1,16 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/project-auth";
+import { requireAuth, requireProjectAccess } from "@/lib/project-auth";
 import { findReservationByReference } from "@/lib/credit-reservations";
 import { buildProfessionalSceneDirectorPrompt } from "@/lib/ai-provider-router";
 import { providerBillingErrorResponse } from "@/lib/billing-errors";
+import {
+  augmentDirectorPromptWithResearch,
+  enrichScenePayloadWithResearch,
+  extractStrongResearchCandidates,
+  researchCreativeEntities,
+  type CreativeResearchDossier,
+} from "@/lib/creative-research";
 import {
   reserveMeteredZaiTextOperation,
   resolveConfiguredBillableZaiTextModel,
@@ -20,13 +27,6 @@ function hasParseableSceneBody(value: string): boolean {
   return value.replace(/\n{2,}/g, " ").trim().length > 10;
 }
 
-/**
- * Keep this gate aligned with the legacy local parser's accepted scene shapes.
- * The internal helper still contains a historical provider fallback, so the
- * public route must only invoke it with input that will deterministically take
- * the local parsing branch. Unstructured input is handled by the metered,
- * exact-model Billing v2 provider path below.
- */
 function isLocallyStructuredScript(prompt: string): boolean {
   const explicitPattern = /(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]+([^\n]*)\n([\s\S]*?)(?=(?:🎬\s*)?(?:Scene\s*\d+)[\s\-–—:]|Final\s*Screen|$)/gi;
   const explicitScenes = [...prompt.matchAll(explicitPattern)]
@@ -41,6 +41,37 @@ function isLocallyStructuredScript(prompt: string): boolean {
 
 function cleanStructuredOutput(value: string): string {
   return value.replace(/^```(?:text|markdown|md)?\s*/i, "").replace(/```\s*$/i, "").trim();
+}
+
+function inferProjectType(prompt: string, supplied: unknown): string | undefined {
+  if (typeof supplied === "string" && supplied.trim()) return supplied.trim().slice(0, 80);
+  if (/\b(?:commercial|advert(?:isement)?|promo(?:tion)?|marketing campaign|corporate ad|product ad)\b/i.test(prompt)) {
+    return "commercial";
+  }
+  if (/\b(?:short story|story|film|movie|cinematic)\b/i.test(prompt)) return "story";
+  return undefined;
+}
+
+function emptyResearchDossier(): CreativeResearchDossier {
+  return { entities: [], totalCreditsCharged: 0, generatedAt: new Date().toISOString() };
+}
+
+async function attachResearchToResponse(
+  response: NextResponse,
+  dossier: CreativeResearchDossier,
+  projectType?: string,
+): Promise<NextResponse> {
+  if (!dossier.entities.length) return response;
+  let payload: Record<string, unknown>;
+  try {
+    payload = await response.json() as Record<string, unknown>;
+  } catch {
+    return response;
+  }
+  const enriched = response.ok
+    ? enrichScenePayloadWithResearch(payload, dossier, projectType)
+    : { ...payload, researchDossier: dossier };
+  return NextResponse.json(enriched, { status: response.status });
 }
 
 export async function POST(req: NextRequest) {
@@ -63,28 +94,55 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(requestedDuration)) return NextResponse.json({ success: false, error: "targetDuration must be a number" }, { status: 400 });
 
   const structuredLocally = isLocallyStructuredScript(prompt);
+  const supplied = req.headers.get("idempotency-key")?.trim();
+  const requestKey = supplied && IDEMPOTENCY_KEY_RE.test(supplied) ? supplied : crypto.randomUUID();
+  const operationKey = `scene-split:${authResult.session.userId}:${requestKey}`;
+  const projectType = inferProjectType(prompt, body.projectType);
+  const projectId = typeof body.projectId === "string" && body.projectId.trim() ? body.projectId.trim() : null;
+  const researchMode = typeof body.researchMode === "string" ? body.researchMode.trim().toLowerCase() : "auto";
+
+  if (projectId) {
+    const projectAccess = await requireProjectAccess(projectId, true);
+    if (!projectAccess.ok) return projectAccess.response;
+  }
+
+  if (!structuredLocally && supplied) {
+    const prior = await findReservationByReference(operationKey);
+    if (prior) {
+      return NextResponse.json({
+        success: false,
+        error: "This scene-planning request was already funded/submitted. Use a new idempotency key to run it again.",
+        replayed: true,
+      }, { status: 409 });
+    }
+  }
+
+  let researchDossier = emptyResearchDossier();
+  if (researchMode !== "off") {
+    const candidates = extractStrongResearchCandidates(prompt);
+    if (candidates.length) {
+      researchDossier = await researchCreativeEntities({
+        userId: authResult.session.userId,
+        projectId,
+        operationKey,
+        source: prompt,
+        candidates,
+      });
+    }
+  }
+
   let providerDirectedPrompt = prompt;
 
   if (!structuredLocally) {
-    const supplied = req.headers.get("idempotency-key")?.trim();
-    const requestKey = supplied && IDEMPOTENCY_KEY_RE.test(supplied) ? supplied : crypto.randomUUID();
-    const operationKey = `scene-split:${authResult.session.userId}:${requestKey}`;
-
-    if (supplied) {
-      const prior = await findReservationByReference(operationKey);
-      if (prior) {
-        return NextResponse.json({
-          success: false,
-          error: "This scene-planning request was already funded/submitted. Use a new idempotency key to run it again.",
-          replayed: true,
-        }, { status: 409 });
-      }
-    }
-
-    const director = buildProfessionalSceneDirectorPrompt({
+    const baseDirector = buildProfessionalSceneDirectorPrompt({
       source: prompt,
       targetDuration: Math.max(10, Math.min(300, Math.round(requestedDuration))),
-      projectType: typeof body.projectType === "string" ? body.projectType : undefined,
+      projectType,
+    });
+    const director = augmentDirectorPromptWithResearch({
+      ...baseDirector,
+      dossier: researchDossier,
+      projectType,
     });
 
     try {
@@ -92,6 +150,7 @@ export async function POST(req: NextRequest) {
       const lineKeyPrefix = `${operationKey}:billing`;
       const billing = await reserveMeteredZaiTextOperation({
         userId: authResult.session.userId,
+        projectId,
         referenceId: operationKey,
         idempotencyKey: `${operationKey}:reservation`,
         lineKeyPrefix,
@@ -116,12 +175,14 @@ export async function POST(req: NextRequest) {
         reservationId: billing.reservation.id,
         lineKey: `${lineKeyPrefix}:input`,
         userId: authResult.session.userId,
+        projectId,
         actualQuantity: result.usage.inputTokens,
       });
       await captureActualMeteredLine({
         reservationId: billing.reservation.id,
         lineKey: `${lineKeyPrefix}:output`,
         userId: authResult.session.userId,
+        projectId,
         actualQuantity: result.usage.outputTokens,
       });
       await finalizeMeteredReservation({
@@ -153,5 +214,6 @@ export async function POST(req: NextRequest) {
     headers,
     body: JSON.stringify({ ...body, prompt: providerDirectedPrompt }),
   });
-  return runSplitScenes(forwarded);
+  const response = await runSplitScenes(forwarded);
+  return attachResearchToResponse(response, researchDossier, projectType);
 }
