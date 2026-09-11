@@ -23,6 +23,23 @@ export function resolveZaiTextBillingModel(requestedModel?: string | null): stri
 }
 
 /**
+ * Resolve a secondary/director text model that is intentionally independent
+ * of the deployment's primary chat-model override. These calls are used by
+ * supporting creative features (prompt enhancement, scene directing, etc.)
+ * that must remain on a known, verified billing-catalog model unless the
+ * caller explicitly requests another exact model.
+ *
+ * This prevents an unrelated primary override such as an older/experimental
+ * ZAI_CHAT_MODEL from silently crossing an unpriced COGS boundary and making
+ * creative-assist endpoints unusable. Explicit requested models are still
+ * preserved so Billing v2 can fail closed when their price is unknown.
+ */
+export function resolveZaiSecondaryTextBillingModel(requestedModel?: string | null): string {
+  const requested = (requestedModel || "").trim();
+  return requested || DEFAULT_ZAI_TEXT_MODEL_ID;
+}
+
+/**
  * Resolve the exact multimodal model sent by Z.ai vision calls. Do not fall
  * back to the text-model environment variable: a text-only model may be valid
  * for chat but invalid/unpriced for video or image understanding.
