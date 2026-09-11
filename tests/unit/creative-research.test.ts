@@ -12,7 +12,7 @@ const dossier: CreativeResearchDossier = {
   totalCreditsCharged: 1,
   entities: [{
     name: "GHACEM",
-    query: '"GHACEM" official company brand products services visual identity logo',
+    query: '"GHACEM" official information company organization products services person place visual identity',
     creditsCharged: 1,
     status: "researched",
     sources: [{
@@ -31,6 +31,14 @@ describe("creative research entity detection", () => {
     expect(extractStrongResearchCandidates("Create a premium commercial for GHACEM in Ghana.")).toContain("GHACEM");
     expect(extractStrongResearchCandidates("Create an advert for Nike with an energetic voice-over.")).toContain("Nike");
     expect(extractStrongResearchCandidates("A quiet family walks through a beautiful village at sunrise.")).toEqual([]);
+  });
+
+  test("does not web-search uppercase celebration text or a private honoree by default", () => {
+    expect(extractStrongResearchCandidates("HAPPY BIRTHDAY GIANNIS! Everyone cheers as balloons rise.")).toEqual([]);
+  });
+
+  test("can detect an explicitly requested public-name research context", () => {
+    expect(extractStrongResearchCandidates("Create a documentary about Kwame Nkrumah and Ghanaian independence.")).toContain("Kwame Nkrumah");
   });
 
   test("caps automatic paid research candidates", () => {
@@ -57,6 +65,7 @@ describe("creative research prompt grounding", () => {
     });
     expect(directed.systemPrompt).toContain("PROFESSIONAL COMMERCIAL DIRECTION");
     expect(directed.systemPrompt).toContain("end-frame/CTA");
+    expect(directed.systemPrompt).toContain("exact super text inside the Visual:");
     expect(directed.userPrompt).toContain("GHACEM");
   });
 
