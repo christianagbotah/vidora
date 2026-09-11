@@ -29,6 +29,7 @@ model User {
   brandKit                 BrandKit?
   socialConnections        SocialConnection[]
   workspaces               WorkspaceMember[]
+  longFormProductions      LongFormProduction[]
 }
 
 model VideoProject {
@@ -553,4 +554,84 @@ model ProviderUsageLedger {
   @@index([projectId, createdAt])
   @@index([provider, model])
   @@index([generationRunId])
+}
+
+model LongFormProduction {
+  id                  String           @id
+  userId              String
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  format              String
+  title               String
+  source              String           @db.Text
+  status              String           @default("planned")
+  storyBible          String           @db.Text
+  totalTargetMinutes  Int
+  planningReferenceId String           @unique
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @default(now()) @updatedAt
+  seasons             LongFormSeason[]
+
+  @@index([userId, updatedAt])
+  @@index([status, updatedAt])
+}
+
+model LongFormSeason {
+  id           String             @id
+  productionId String
+  production   LongFormProduction @relation(fields: [productionId], references: [id], onDelete: Cascade)
+  seasonNumber Int
+  title        String
+  arc          String             @db.Text
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
+  episodes     LongFormEpisode[]
+
+  @@unique([productionId, seasonNumber])
+  @@index([productionId])
+}
+
+model LongFormEpisode {
+  id                  String             @id
+  seasonId            String
+  season              LongFormSeason     @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  episodeNumber       Int
+  title               String
+  logline             String             @db.Text
+  targetMinutes       Int
+  openingHook         String             @db.Text
+  emotionalArc        String             @db.Text
+  actBeats            String             @db.Text
+  payoffOrCliffhanger String             @db.Text
+  status              String             @default("planned")
+  expansionVersion    Int                @default(0)
+  expansionActiveKey  String?            @unique
+  expansionClaimedAt  DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @default(now()) @updatedAt
+  sequences           LongFormSequence[]
+
+  @@unique([seasonId, episodeNumber])
+  @@index([seasonId])
+  @@index([status, updatedAt])
+}
+
+model LongFormSequence {
+  id                 String          @id
+  episodeId          String
+  episode            LongFormEpisode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  sequenceNumber     Int
+  title              String
+  purpose            String          @db.Text
+  startState         String          @db.Text
+  endState           String          @db.Text
+  targetSeconds      Int
+  continuitySnapshot String          @default("{}") @db.Text
+  scenePlan          String?         @db.Text
+  status             String          @default("planned")
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @default(now()) @updatedAt
+
+  @@unique([episodeId, sequenceNumber])
+  @@index([episodeId])
+  @@index([status, updatedAt])
 }
