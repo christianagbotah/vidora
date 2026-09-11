@@ -576,14 +576,14 @@ model LongFormProduction {
 }
 
 model LongFormSeason {
-  id           String            @id
+  id           String             @id
   productionId String
   production   LongFormProduction @relation(fields: [productionId], references: [id], onDelete: Cascade)
   seasonNumber Int
   title        String
-  arc          String            @db.Text
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @default(now()) @updatedAt
+  arc          String             @db.Text
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
   episodes     LongFormEpisode[]
 
   @@unique([productionId, seasonNumber])
@@ -604,6 +604,8 @@ model LongFormEpisode {
   payoffOrCliffhanger String             @db.Text
   status              String             @default("planned")
   expansionVersion    Int                @default(0)
+  expansionActiveKey  String?            @unique
+  expansionClaimedAt  DateTime?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @default(now()) @updatedAt
   sequences           LongFormSequence[]
