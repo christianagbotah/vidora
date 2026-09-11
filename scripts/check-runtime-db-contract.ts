@@ -163,9 +163,6 @@ async function main(): Promise<void> {
     .filter((row) => Number(row.unitPriceUsd) > 0 && Number(row.unitsPerPrice) > 0)
     .map((row) => `${row.provider}:${row.model}:${row.operation}`));
 
-  // Resolve the same DB-backed provider settings used by runtime. Environment
-  // validation alone is insufficient because Admin can select a different text
-  // or TTS model without changing the process environment.
   const providerSettings = await getAIProviderSettings();
   if (providerSettings.textProvider !== 'zai') {
     throw new Error(`Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai`);
@@ -186,6 +183,7 @@ async function main(): Promise<void> {
     'zai:glm-4.6v:vision_input',
     'zai:glm-4.6v:vision_output',
     'zai:glm-asr-2512:asr',
+    'zai:search-prime:web_search',
     `zai:${configuredTextModel}:text_input`,
     `zai:${configuredTextModel}:text_output`,
     `zai:${configuredVisionModel}:vision_input`,
