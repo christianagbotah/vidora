@@ -9,7 +9,8 @@ export type BillableOperation =
   | "text_output"
   | "vision_input"
   | "vision_output"
-  | "asr";
+  | "asr"
+  | "web_search";
 export type BillingUnit = "request" | "image" | "character" | "token" | "minute";
 
 export interface ProviderPriceSnapshot {
@@ -73,16 +74,10 @@ export class BillingSafetyError extends Error {
 }
 
 export const DEFAULT_COMMERCIAL_PRICING_POLICY: CommercialPricingPolicy = {
-  // Preserve Vidora's established wallet denomination: one credit represents
-  // five US cents of customer-facing value. Provider COGS, safety reserves and
-  // target margin determine how many whole credits an operation consumes.
   creditValueUsd: 0.05,
   targetGrossMarginPct: 0.35,
   providerSafetyBufferPct: 0.05,
   fxSafetyBufferPct: 0.05,
-  // This is deliberately a configurable reserve, not a claim about Hubtel's
-  // published merchant fee. It protects margin until the actual gateway fee is
-  // set in Admin Billing Policy.
   gatewayFeeReservePct: 0.03,
   infrastructureReservePct: 0.03,
   minimumChargeCredits: 1,
@@ -166,7 +161,6 @@ export async function getCommercialPricingPolicy(): Promise<CommercialPricingPol
     `;
     return normalizeBillingPolicy(rows[0]);
   } catch (error) {
-    // Fail closed in production if the billing migration is unexpectedly absent.
     if (process.env.NODE_ENV === "production") {
       throw new BillingSafetyError(
         "BILLING_POLICY_UNAVAILABLE",
@@ -192,9 +186,6 @@ export function calculateCommercialCharge(
   const infrastructureReserveUsd = providerCostUsd * policy.infrastructureReservePct;
   const base = providerCostUsd + providerSafetyUsd + fxReserveUsd + infrastructureReserveUsd;
 
-  // Both target margin and payment-gateway reserve are percentages of the sale
-  // price. Solve price = base / (1 - margin - gateway reserve), rather than
-  // simply adding percentages to cost and accidentally shrinking the margin.
   const denominator = 1 - policy.targetGrossMarginPct - policy.gatewayFeeReservePct;
   if (denominator <= 0.05) {
     throw new BillingSafetyError("UNSAFE_MARGIN_POLICY", "Margin and gateway reserve leave no safe customer price.");
@@ -242,6 +233,7 @@ function asOperation(value: string): BillableOperation | null {
     "vision_input",
     "vision_output",
     "asr",
+    "web_search",
   ]).has(value as BillableOperation)
     ? value as BillableOperation
     : null;
