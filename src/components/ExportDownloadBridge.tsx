@@ -75,12 +75,17 @@ export function ExportDownloadBridge() {
   const { toast } = useToast();
 
   useEffect(() => {
-    const previousFetch = window.fetch.bind(window);
+    const previousFetch = window.fetch;
+    const originalFetch = previousFetch.bind(window);
     const tracked = loadTrackedJobs();
     const notified = new Set<string>();
 
-    const wrappedFetch: typeof window.fetch = async (input, init) => {
-      const response = await previousFetch(input, init);
+    // Next/Bun augment typeof fetch with static members such as `preconnect`.
+    // This interceptor only implements the browser callable request signature;
+    // preserve the original function for delegation/restoration and cast only
+    // at the assignment boundary, matching GenerationBillingGate.
+    const wrappedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const response = await originalFetch(input, init);
       const url = requestUrl(input);
       if (!url || url.origin !== window.location.origin) return response;
 
@@ -170,9 +175,10 @@ export function ExportDownloadBridge() {
       return response;
     };
 
-    window.fetch = wrappedFetch;
+    const assignedFetch = wrappedFetch as typeof window.fetch;
+    window.fetch = assignedFetch;
     return () => {
-      if (window.fetch === wrappedFetch) window.fetch = previousFetch;
+      if (window.fetch === assignedFetch) window.fetch = previousFetch;
     };
   }, [toast]);
 
