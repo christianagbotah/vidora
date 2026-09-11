@@ -31,9 +31,6 @@ const BILLING_GUARD_PATTERNS = [
   /captureReservedQuoteLine/,
 ];
 
-// Keep operational provider probes explicit rather than broadly excluding every
-// route containing a `health` path segment. This route performs its live call
-// only behind requireAdmin + ?deep=1; normal public health polling is zero-cost.
 const OPERATIONAL_PROVIDER_PROBE_ROUTES = new Set([
   "src/app/api/ai/health/route.ts",
 ]);
@@ -73,9 +70,6 @@ describe("customer provider billing boundaries", () => {
   test("every non-admin API route with a provider submission declares a Billing v2 guard", () => {
     const offenders: string[] = [];
     for (const file of walkTsFiles(API_ROOT)) {
-      // Next.js API endpoints are route.ts files. Internal helpers under the API
-      // tree are covered by the provider-boundary inventory; this assertion is
-      // deliberately about the customer-facing route that declares the guard.
       if (!isCustomerApiRoute(file)) continue;
       const source = readFileSync(file, "utf8");
       const calls = directProviderCalls(source);
@@ -105,7 +99,8 @@ describe("customer provider billing boundaries", () => {
     expect(route).toContain("const explicitPattern =");
     expect(route).toContain("const numberedPattern =");
     expect(route).toContain("if (!isLocallyStructuredScript(providerDirectedPrompt))");
-    expect(route).toContain("return runSplitScenes(forwarded)");
+    expect(route).toContain("const response = await runSplitScenes(forwarded)");
+    expect(route).toContain("return attachResearchToResponse(response, researchDossier, projectType)");
   });
 
   test("generation worker uses immutable prepaid lines and strict single-submit media transports", () => {
