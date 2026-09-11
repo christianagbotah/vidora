@@ -19,7 +19,13 @@ import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/mete
 export const runtime = "nodejs";
 
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9._:-]{8,128}$/;
-const MAX_OUTPUT_TOKENS = 10_000;
+const MIN_OUTPUT_TOKENS = 6_000;
+const MAX_OUTPUT_TOKENS = 30_000;
+
+export function longFormOutputTokenBudget(seasons: number, episodesPerSeason: number): number {
+  const episodeCount = Math.max(1, Math.floor(seasons) * Math.floor(episodesPerSeason));
+  return Math.min(MAX_OUTPUT_TOKENS, Math.max(MIN_OUTPUT_TOKENS, MIN_OUTPUT_TOKENS + episodeCount * 400));
+}
 
 export async function POST(req: NextRequest) {
   const authResult = await requireAuth();
@@ -79,6 +85,7 @@ export async function POST(req: NextRequest) {
   }
 
   const prompts = buildLongFormPlannerPrompt(spec);
+  const maxOutputTokens = longFormOutputTokenBudget(spec.seasons, spec.episodesPerSeason);
 
   try {
     const model = await resolveConfiguredBillableZaiTextModel();
@@ -91,7 +98,7 @@ export async function POST(req: NextRequest) {
       label: `Long-form ${spec.format} story-bible and episode architecture`,
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
       model,
       requireConfiguredPrimary: true,
     });
@@ -100,7 +107,7 @@ export async function POST(req: NextRequest) {
       model: billing.model,
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
       thinking: "enabled",
       temperature: 0.35,
       timeoutMs: 180_000,
@@ -153,6 +160,7 @@ export async function POST(req: NextRequest) {
       plan,
       planning: {
         model: billing.model,
+        maxOutputTokens,
         usage: result.usage,
         creditsCaptured: inputCapture.creditsCaptured + outputCapture.creditsCaptured,
         creditsReleased: finalized.creditsReleased,
