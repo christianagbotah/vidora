@@ -15,6 +15,7 @@ async function claimJob(): Promise<string | null> {
       SELECT "id", "status"
       FROM "ExportJob"
       WHERE "activeKey" IS NOT NULL
+        AND "params" LIKE '%"mode":"preview"%'
         AND (
           "status" = 'queued'
           OR (
@@ -34,7 +35,7 @@ async function claimJob(): Promise<string | null> {
       where: { id: row.id },
       data: {
         status: "running",
-        step: row.status === "running" ? "Recovering interrupted media job…" : "Preparing media job…",
+        step: row.status === "running" ? "Recovering interrupted preview…" : "Preparing preview…",
         error: null,
         updatedAt: new Date(),
       },
@@ -45,7 +46,7 @@ async function claimJob(): Promise<string | null> {
 }
 
 async function runForever(): Promise<void> {
-  console.log("[export-worker] started");
+  console.log("[export-worker] started (preview jobs only; final exports stream directly to browsers)");
 
   while (!stopping) {
     let jobId: string | null = null;
@@ -59,11 +60,8 @@ async function runForever(): Promise<void> {
     } catch (error) {
       console.error(
         `[export-worker] ${jobId ? `job=${jobId} ` : ""}error`,
-        error instanceof Error ? error.message : "unknown error"
+        error instanceof Error ? error.message : "unknown error",
       );
-      // Normal preview/final pipeline failures are persisted by their job
-      // handlers. An uncaught worker failure leaves activeKey intact; after the
-      // stale lease expires another worker iteration can safely recover it.
       await sleep(IDLE_MS);
     }
   }
@@ -81,7 +79,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 runForever().catch(async (error) => {
   console.error(
     "[export-worker] fatal",
-    error instanceof Error ? error.message : "unknown error"
+    error instanceof Error ? error.message : "unknown error",
   );
   await db.$disconnect().catch(() => undefined);
   process.exitCode = 1;
