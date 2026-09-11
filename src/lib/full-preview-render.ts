@@ -453,7 +453,12 @@ export async function renderFullProjectPreview(
       }
     });
 
-    const videoStream = videoPaths.length === 1 ? "0:v" : "outv";
+    // transitionFilter always produces the normalized/composited [outv] stream,
+    // including the single-scene case. Mapping the raw 0:v input for one scene
+    // leaves [outv] unconsumed and can make ffmpeg fail with an unconnected
+    // filter output. Always feed the normalized [outv] stream into the final
+    // preview scale so one-scene and multi-scene projects share one graph.
+    const videoStream = "outv";
     const filterParts = [
       videoFilter,
       `[${videoStream}]format=yuv420p,scale=-2:720[final]`,

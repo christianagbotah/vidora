@@ -7,6 +7,7 @@ import {
 import { getAIProviderSettings } from "@/lib/ai-provider-router";
 import {
   resolveZaiAsrBillingModel,
+  resolveZaiSecondaryTextBillingModel,
   resolveZaiTextBillingModel,
   resolveZaiVisionBillingModel,
 } from "@/lib/zai-billing-models";
@@ -83,7 +84,7 @@ export async function reserveMeteredZaiTextOperation(opts: {
   requireConfiguredPrimary?: boolean;
 }) {
   const model = opts.requireConfiguredPrimary === false
-    ? resolveZaiTextBillingModel(opts.model)
+    ? resolveZaiSecondaryTextBillingModel(opts.model)
     : await resolveConfiguredBillableZaiTextModel(opts.model);
   const inputTokens = estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt);
   const maxOutputTokens = safeOutputTokenCeiling(opts.maxOutputTokens, 4_000);
@@ -134,7 +135,7 @@ export async function quoteFreeZaiTextAttempt(opts: {
   requireConfiguredPrimary?: boolean;
 }) {
   const model = opts.requireConfiguredPrimary === false
-    ? resolveZaiTextBillingModel(opts.model)
+    ? resolveZaiSecondaryTextBillingModel(opts.model)
     : await resolveConfiguredBillableZaiTextModel(opts.model);
   const policy = await getCommercialPricingPolicy();
   const inputTokens = estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt);
