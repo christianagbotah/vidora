@@ -52,7 +52,7 @@ describe("creative research prompt grounding", () => {
     const context = buildCreativeResearchContext(dossier);
     expect(context).toContain("UNTRUSTED REFERENCE DATA");
     expect(context).toContain("GHACEM");
-    expect(context).toContain("do not");
+    expect(context.toLowerCase()).toContain("do not");
     expect(context.toLowerCase()).toContain("exact official logo");
   });
 
