@@ -54,18 +54,19 @@ describe("long-form provider billing boundary", () => {
     expect(store).toContain("alreadyPersisted: true");
   });
 
-  test("episode expansion validates version before spend and uses one strict paid submission", () => {
+  test("episode expansion validates version, replay and lease before any paid reservation", () => {
     const route = read("src/app/api/creative/long-form/episodes/[id]/expand/route.ts");
     const versionCheck = route.indexOf("expectedExpansionVersion !== context.episode.expansionVersion");
     const replayLookup = route.indexOf("findReservationByReference(referenceId)");
+    const leaseIndex = route.indexOf("claimLongFormEpisodeExpansion({");
     const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
     const submitIndex = route.indexOf("submitBilledZaiText(");
     const captureIndex = route.indexOf("captureActualMeteredLine(");
 
     expect(versionCheck).toBeGreaterThan(-1);
-    expect(versionCheck).toBeLessThan(reserveIndex);
-    expect(replayLookup).toBeGreaterThan(versionCheck);
-    expect(replayLookup).toBeLessThan(reserveIndex);
+    expect(versionCheck).toBeLessThan(replayLookup);
+    expect(replayLookup).toBeLessThan(leaseIndex);
+    expect(leaseIndex).toBeLessThan(reserveIndex);
     expect(submitIndex).toBeGreaterThan(reserveIndex);
     expect(captureIndex).toBeGreaterThan(submitIndex);
     expect((route.match(/submitBilledZaiText\(/g) || []).length).toBe(1);
@@ -73,16 +74,37 @@ describe("long-form provider billing boundary", () => {
     expect(route).not.toContain("withRetry(");
   });
 
+  test("episode lease blocks different concurrent keys and is owned by the exact expansion reference", () => {
+    const store = read("src/lib/long-form-sequence-store.ts");
+    expect(store).toContain("LongFormExpansionBusyError");
+    expect(store).toContain('readonly code = "LONG_FORM_EXPANSION_IN_PROGRESS"');
+    expect(store).toContain("episode.expansionActiveKey === opts.activeKey");
+    expect(store).toContain('SET "expansionActiveKey" = ${opts.activeKey}');
+    expect(store).toContain('"expansionClaimedAt" = CURRENT_TIMESTAMP');
+    expect(store).toContain("episode.expansionActiveKey !== opts.activeKey");
+  });
+
+  test("known pre-provider failure releases the lease while indeterminate provider submission keeps it held", () => {
+    const route = read("src/app/api/creative/long-form/episodes/[id]/expand/route.ts");
+    expect(route).toContain("let providerSubmissionStarted = false");
+    expect(route).toContain("providerSubmissionStarted = true");
+    expect(route).toContain("if (!providerSubmissionStarted) await releaseClaim()");
+    expect(route).toContain("prepaid episode-expansion reserve and lease are held for reconciliation");
+    expect(route).toContain("expansionLeaseHeld: true");
+  });
+
   test("malformed or conflicting paid sequence output is returned without hidden provider retry", () => {
     const route = read("src/app/api/creative/long-form/episodes/[id]/expand/route.ts");
     expect(route).toContain('code: "LONG_FORM_SEQUENCE_PLAN_INVALID"');
     expect(route).toContain("will not be repeated automatically");
+    expect(route).toContain("await releaseClaim()");
     expect(route).toContain("LongFormExpansionConflictError");
+    expect(route).toContain("LongFormExpansionBusyError");
     expect(route).toContain("sequences,");
     expect(route).toContain('code: "LONG_FORM_SEQUENCE_PERSISTENCE_FAILED"');
   });
 
-  test("sequence replacement uses ownership scope, row locking and optimistic expansion versioning", () => {
+  test("sequence replacement uses ownership, row locking, optimistic versioning and consumes its lease", () => {
     const store = read("src/lib/long-form-sequence-store.ts");
     expect(store).toContain('p."userId" = ${opts.userId}');
     expect(store).toContain("FOR UPDATE OF e");
@@ -90,9 +112,11 @@ describe("long-form provider billing boundary", () => {
     expect(store).toContain('DELETE FROM "LongFormSequence"');
     expect(store).toContain('SET "status" = \'sequenced\'');
     expect(store).toContain('"expansionVersion" = ${expansionVersion}');
+    expect(store).toContain('"expansionActiveKey" = NULL');
+    expect(store).toContain('"expansionClaimedAt" = NULL');
   });
 
-  test("migration declares durable production, season, episode and sequence hierarchy", () => {
+  test("migration declares durable hierarchy plus the unique episode expansion lease", () => {
     const migration = read("prisma/migrations/20260911095500_long_form_production_hierarchy/migration.sql");
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS "LongFormProduction"');
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS "LongFormSeason"');
@@ -101,6 +125,7 @@ describe("long-form provider billing boundary", () => {
     expect(migration).toContain('"LongFormProduction_planningReferenceId_key"');
     expect(migration).toContain('"LongFormSeason_productionId_seasonNumber_key"');
     expect(migration).toContain('"LongFormEpisode_seasonId_episodeNumber_key"');
+    expect(migration).toContain('"LongFormEpisode_expansionActiveKey_key"');
     expect(migration).toContain('"LongFormSequence_episodeId_sequenceNumber_key"');
   });
 });
