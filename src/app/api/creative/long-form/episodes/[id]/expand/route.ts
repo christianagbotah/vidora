@@ -10,7 +10,10 @@ import {
   parseEpisodeSequencePlan,
 } from "@/lib/long-form-sequence-planner";
 import {
+  LongFormExpansionBusyError,
   LongFormExpansionConflictError,
+  claimLongFormEpisodeExpansion,
+  releaseLongFormEpisodeExpansionClaim,
   replaceLongFormEpisodeSequences,
 } from "@/lib/long-form-sequence-store";
 import {
@@ -99,8 +102,41 @@ export async function POST(
     }
   }
 
+  // Serialize the expensive boundary itself, not only the eventual sequence
+  // write. This blocks two different idempotency keys from both paying for an
+  // expansion of the same episode/version before optimistic persistence runs.
+  try {
+    await claimLongFormEpisodeExpansion({
+      episodeId,
+      userId: auth.session.userId,
+      expectedExpansionVersion,
+      activeKey: referenceId,
+    });
+  } catch (error) {
+    if (error instanceof LongFormExpansionConflictError || error instanceof LongFormExpansionBusyError) {
+      return NextResponse.json({
+        success: false,
+        code: error.code,
+        error: error.message,
+      }, { status: 409 });
+    }
+    console.error(`[long-form-expand] lease acquisition failed: ${error instanceof Error ? error.message : String(error)}`);
+    return NextResponse.json({ success: false, error: "Could not claim this episode for expansion" }, { status: 500 });
+  }
+
+  const releaseClaim = async () => {
+    await releaseLongFormEpisodeExpansionClaim({
+      episodeId,
+      userId: auth.session.userId,
+      activeKey: referenceId,
+    }).catch((error) => {
+      console.error(`[long-form-expand] could not release expansion lease: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+
   const prompts = buildEpisodeSequencePrompt(context);
   const maxOutputTokens = sequenceOutputBudget(prompts.sequenceCount);
+  let providerSubmissionStarted = false;
 
   try {
     const model = await resolveConfiguredBillableZaiTextModel();
@@ -118,6 +154,10 @@ export async function POST(
       requireConfiguredPrimary: true,
     });
 
+    // From this point onward a thrown transport error may mean the provider saw
+    // the request. Keep the episode lease in that indeterminate case so a second
+    // request cannot accidentally spend again before reconciliation.
+    providerSubmissionStarted = true;
     const result = await submitBilledZaiText({
       model: billing.model,
       systemPrompt: prompts.systemPrompt,
@@ -128,7 +168,7 @@ export async function POST(
       timeoutMs: 180_000,
     });
     if (!result.usage) {
-      throw new Error("Z.ai returned no usage metadata; the prepaid episode-expansion reserve is held for reconciliation");
+      throw new Error("Z.ai returned no usage metadata; the prepaid episode-expansion reserve and lease are held for reconciliation");
     }
 
     const inputCapture = await captureActualMeteredLine({
@@ -165,6 +205,10 @@ export async function POST(
     } catch (error) {
       if (error instanceof LongFormSequenceValidationError) {
         console.error(`[long-form-expand] invalid provider sequence map: ${error.message}`);
+        // Provider usage is known and settled, but there is no usable sequence
+        // payload to recover. Release the lease so a deliberate new request can
+        // be made later with a new idempotency key.
+        await releaseClaim();
         return NextResponse.json({
           success: false,
           code: "LONG_FORM_SEQUENCE_PLAN_INVALID",
@@ -180,6 +224,7 @@ export async function POST(
         episodeId,
         userId: auth.session.userId,
         expectedExpansionVersion,
+        activeKey: referenceId,
         sequences,
       });
       return NextResponse.json({
@@ -190,7 +235,8 @@ export async function POST(
         planning: settlement,
       });
     } catch (error) {
-      if (error instanceof LongFormExpansionConflictError) {
+      if (error instanceof LongFormExpansionConflictError || error instanceof LongFormExpansionBusyError) {
+        await releaseClaim();
         return NextResponse.json({
           success: false,
           code: error.code,
@@ -203,12 +249,14 @@ export async function POST(
       return NextResponse.json({
         success: false,
         code: "LONG_FORM_SEQUENCE_PERSISTENCE_FAILED",
-        error: "The sequence map was generated and billed successfully but could not be saved. It is returned below so it is not lost; do not automatically rerun the AI expansion call.",
+        error: "The sequence map was generated and billed successfully but could not be saved. It is returned below and the episode expansion lease remains held for reconciliation; do not automatically rerun the AI expansion call.",
         sequences,
+        expansionLeaseHeld: true,
         planning: settlement,
       }, { status: 503 });
     }
   } catch (error) {
+    if (!providerSubmissionStarted) await releaseClaim();
     return providerBillingErrorResponse(error, {
       session: auth.session,
       logLabel: "long-form-expand",
