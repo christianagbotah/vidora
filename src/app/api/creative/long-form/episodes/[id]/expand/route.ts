@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
 import { findReservationByReference } from "@/lib/credit-reservations";
@@ -82,24 +81,27 @@ export async function POST(
   }
 
   const supplied = req.headers.get("idempotency-key")?.trim();
-  if (supplied && !IDEMPOTENCY_KEY_RE.test(supplied)) {
+  if (!supplied) {
+    return NextResponse.json({
+      success: false,
+      error: "Idempotency-Key is required for paid episode expansion",
+    }, { status: 400 });
+  }
+  if (!IDEMPOTENCY_KEY_RE.test(supplied)) {
     return NextResponse.json({
       success: false,
       error: "Idempotency-Key must be 8-128 characters using letters, numbers, dot, underscore, colon, or hyphen",
     }, { status: 400 });
   }
-  const requestKey = supplied || crypto.randomUUID();
-  const referenceId = `long-form-expand:${auth.session.userId}:${episodeId}:v${expectedExpansionVersion}:${requestKey}`;
 
-  if (supplied) {
-    const prior = await findReservationByReference(referenceId);
-    if (prior) {
-      return NextResponse.json({
-        success: false,
-        error: "This episode expansion was already funded/submitted. Use a new idempotency key only if you intentionally want another expansion.",
-        replayed: true,
-      }, { status: 409 });
-    }
+  const referenceId = `long-form-expand:${auth.session.userId}:${episodeId}:v${expectedExpansionVersion}:${supplied}`;
+  const prior = await findReservationByReference(referenceId);
+  if (prior) {
+    return NextResponse.json({
+      success: false,
+      error: "This episode expansion was already funded/submitted. Use a new idempotency key only if you intentionally want another expansion.",
+      replayed: true,
+    }, { status: 409 });
   }
 
   // Serialize the expensive boundary itself, not only the eventual sequence
