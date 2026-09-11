@@ -66,7 +66,7 @@ function matchingDemoTemplate(project: ProjectAccessRow) {
  * demo template, including every pre-rendered scene. This is intentionally
  * stricter than checking userId=null or a [DEMO] description: user deletion can
  * also leave ordinary projects ownerless through the Prisma onDelete:SetNull
- * relation and those projects must never become claimable.
+ * relation and those projects must never become claimable by normal users.
  */
 async function isPristineAnonymousDemo(project: ProjectAccessRow): Promise<boolean> {
   if (project.userId !== null) return false;
@@ -141,13 +141,20 @@ export async function requireProjectAccess(projectId: string, writeCheck = false
       return { ok: true, session: { userId: "guest", role: "guest", email: "" }, project };
     }
 
-    // Check the real session before deciding that an ownerless demo is still
-    // read-only. This fixes demos created anonymously and then continued after
-    // login without weakening the guest boundary.
+    // Check the real session before deciding whether an ownerless project may
+    // transition into an authenticated project. This preserves anonymous demo
+    // read access while keeping every write behind a valid active session.
     const authResult = await requireAuth();
     if (!authResult.ok) return authResult;
 
-    if (!(await isPristineAnonymousDemo(project))) {
+    const pristineDemo = await isPristineAnonymousDemo(project);
+    const adminLegacyRecovery = !pristineDemo && authResult.session.role === "admin";
+
+    // Ordinary users may claim only a shipped pristine demo. A non-demo
+    // ownerless row can represent historical/imported data or a project whose
+    // former owner was removed via onDelete:SetNull, so only an authenticated
+    // administrator may recover it by explicitly attempting a write action.
+    if (!pristineDemo && !adminLegacyRecovery) {
       return {
         ok: false,
         response: NextResponse.json(
@@ -157,14 +164,19 @@ export async function requireProjectAccess(projectId: string, writeCheck = false
       };
     }
 
-    // The claim is atomic. If two authenticated sessions race on the same demo,
-    // exactly one may change userId from null. A retry by the winning user is
-    // accepted; every other user remains forbidden.
+    // The ownership transition is atomic. If two authenticated sessions race,
+    // exactly one may change userId from null. A retry by the winning account
+    // is accepted; every other account remains forbidden.
     const claimed = await db.videoProject.updateMany({
       where: { id: project.id, userId: null },
       data: { userId: authResult.session.userId },
     });
     if (claimed.count === 1) {
+      if (adminLegacyRecovery) {
+        console.warn(
+          `[project-auth] admin recovered ownerless project project=${project.id} user=${authResult.session.userId}`,
+        );
+      }
       return {
         ok: true,
         session: authResult.session,
@@ -187,7 +199,7 @@ export async function requireProjectAccess(projectId: string, writeCheck = false
     return {
       ok: false,
       response: NextResponse.json(
-        { success: false, error: "This demo is already attached to another account." },
+        { success: false, error: "This ownerless project is already attached to another account." },
         { status: 409 },
       ),
     };
