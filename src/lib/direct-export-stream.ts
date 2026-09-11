@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -494,11 +494,8 @@ function buildFfmpegArgs(options: {
   ].filter(Boolean).join(";");
 
   args.push("-filter_complex", graph, "-map", "[final]");
-  if (options.audioFilter) {
-    args.push("-map", "[aout]");
-  } else {
-    args.push("-an");
-  }
+  if (options.audioFilter) args.push("-map", "[aout]");
+  else args.push("-an");
 
   if (options.format === "webm") {
     const cpuUsed = options.quality.preset === "ultrafast" ? "8"
@@ -531,19 +528,21 @@ function runFfmpegToBrowser(
   signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child: ChildProcessWithoutNullStreams = spawn("ffmpeg", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
     let bytes = 0;
     let stderrTail = "";
     let lastPct = -1;
     let settled = false;
-    const timeoutMs = Math.max(60_000, Number(process.env.DIRECT_EXPORT_TIMEOUT_MS || DEFAULT_TIMEOUT_MS));
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const configuredTimeout = Number(process.env.DIRECT_EXPORT_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+    const timeoutMs = Number.isFinite(configuredTimeout)
+      ? Math.max(60_000, configuredTimeout)
+      : DEFAULT_TIMEOUT_MS;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       if (error) {
         if (!sink.destroyed) sink.destroy(error);
@@ -557,13 +556,18 @@ function runFfmpegToBrowser(
       try { child.kill("SIGKILL"); } catch { /* already exited */ }
       finish(new Error("Browser download was cancelled"));
     };
+
+    if (!child.stdout || !child.stderr) {
+      finish(new Error("ffmpeg output streams were not available"));
+      return;
+    }
     if (signal?.aborted) {
       abort();
       return;
     }
     signal?.addEventListener("abort", abort, { once: true });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already exited */ }
       finish(new Error("Direct export timed out"));
     }, timeoutMs);
