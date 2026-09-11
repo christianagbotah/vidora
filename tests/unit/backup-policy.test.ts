@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  orphanBackupArtifacts,
   planBackupRetention,
   requiredBackupBytes,
   type RetentionManifestRecord,
@@ -89,6 +90,37 @@ describe("Vidora backup retention policy", () => {
       databaseBackup: "",
       mediaBackup: oldHealthy.manifest.mediaBackup,
     }]);
+  });
+
+  test("prunes only unreferenced automatic backup artifacts", () => {
+    const currentDb = "vidora_db_20260911T171225Z_082b8f386e40.sql.gz";
+    const currentMedia = "vidora_media_20260911T171225Z_082b8f386e40.tar.gz";
+    const orphanDb = "vidora_db_20260905T104305Z_c1fbf4076d66.sql.gz";
+    const orphanMedia = "vidora_media_20260905T104305Z_c1fbf4076d66.tar.gz";
+    const current = record("vidora_release_current", "2026-09-11T17:12:25Z", "healthy", {
+      db: `${BACKUP_DIR}/${currentDb}`,
+      media: `${BACKUP_DIR}/${currentMedia}`,
+    });
+
+    expect(orphanBackupArtifacts([
+      currentDb,
+      currentMedia,
+      orphanDb,
+      orphanMedia,
+      "emergency-media-backup.tar.gz",
+      "vidora_media_manual.tar.gz",
+      "vidora_release_current.json",
+    ], [current.manifest], BACKUP_DIR).sort()).toEqual([
+      `${BACKUP_DIR}/${orphanDb}`,
+      `${BACKUP_DIR}/${orphanMedia}`,
+    ].sort());
+  });
+
+  test("orphan scan fails closed when a manifest artifact escapes the backup directory", () => {
+    const unsafe = record("vidora_release_unsafe_orphan", "2026-09-03T00:00:00Z", "healthy", {
+      media: "/tmp/vidora_media_20260903T000000Z_aaaaaaaaaaaa.tar.gz",
+    });
+    expect(() => orphanBackupArtifacts([], [unsafe.manifest], BACKUP_DIR)).toThrow("backup artifact escapes backup directory");
   });
 
   test("fails closed when any manifest or artifact escapes the backup directory", () => {
