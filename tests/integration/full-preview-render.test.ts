@@ -5,7 +5,7 @@ import path from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync } from "fs";
 import { db } from "@/lib/db";
-import { generatedFilePath, generatedStoreDir } from "@/lib/generated-store";
+import { generatedFilePath } from "@/lib/generated-store";
 import { renderFullProjectPreview } from "@/lib/full-preview-render";
 
 const execFileAsync = promisify(execFile);
@@ -86,5 +86,42 @@ describe("assembled full-project preview", () => {
     expect(after.cutVersion).toBe(before.cutVersion);
     expect(after.finalVideoUrl).toBeNull();
     expect(after.status).toBe(before.status);
+  });
+
+  test("renders a one-scene project through the normalized outv filter graph", async () => {
+    const nonce = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const user = await db.user.create({
+      data: { email: `preview-single-${nonce}@example.invalid`, name: "Single Preview Test" },
+    });
+    createdUsers.push(user.id);
+    const project = await db.videoProject.create({
+      data: { userId: user.id, title: "Single scene preview" },
+    });
+
+    const clip = await createClip(`preview-single-${nonce}.mp4`, 520);
+    await db.videoScene.create({
+      data: {
+        projectId: project.id,
+        sceneNumber: 1,
+        prompt: "Only scene",
+        videoUrl: clip,
+        status: "completed",
+      },
+    });
+
+    const before = await db.videoProject.findUniqueOrThrow({ where: { id: project.id } });
+    const result = await renderFullProjectPreview(project.id, before.cutVersion, {
+      transition: "fade",
+      includeAudio: true,
+      withTitleCard: false,
+    });
+
+    expect(result.sceneCount).toBe(1);
+    expect(result.previewVideoUrl.startsWith("/generated/preview_")).toBe(true);
+
+    const previewName = result.previewVideoUrl.replace(/^\/generated\//, "");
+    const previewPath = generatedFilePath(previewName);
+    createdFiles.push(previewPath);
+    expect(existsSync(previewPath)).toBe(true);
   });
 });
