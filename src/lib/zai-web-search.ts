@@ -104,23 +104,29 @@ export async function billedZaiWebSearch(opts: {
     idempotencyKey: opts.idempotencyKey,
   });
 
-  const apiKey = await getConfigValue("zai_api_key", "ZAI_API_KEY");
-  if (!apiKey) {
+  const releaseBeforeProvider = async (reason: string) => {
     await releaseImmediateProviderOperation({
       reservationId: billing.reservation.id,
       userId: opts.userId,
-      reason: "Z.ai API key is not configured; provider boundary was not crossed",
+      reason,
     });
+  };
+
+  let apiKey: string;
+  try {
+    apiKey = await getConfigValue("zai_api_key", "ZAI_API_KEY");
+  } catch (error) {
+    await releaseBeforeProvider("Z.ai credential lookup failed before provider boundary");
+    throw error;
+  }
+  if (!apiKey) {
+    await releaseBeforeProvider("Z.ai API key is not configured; provider boundary was not crossed");
     throw new Error("Z.ai API key is not configured for creative research");
   }
 
   const baseUrl = (process.env.ZAI_BASE_URL || DEFAULT_ZAI_BASE_URL).trim().replace(/\/+$/, "");
   if (!/^https:\/\//i.test(baseUrl)) {
-    await releaseImmediateProviderOperation({
-      reservationId: billing.reservation.id,
-      userId: opts.userId,
-      reason: "Invalid Z.ai HTTPS base URL; provider boundary was not crossed",
-    });
+    await releaseBeforeProvider("Invalid Z.ai HTTPS base URL; provider boundary was not crossed");
     throw new Error("Z.ai base URL must use HTTPS");
   }
 
@@ -138,7 +144,9 @@ export async function billedZaiWebSearch(opts: {
         search_engine: ZAI_WEB_SEARCH_MODEL_ID,
         search_query: query,
         count,
-        search_recency_filter: opts.recency || "noLimit",
+        ...(opts.recency && opts.recency !== "noLimit"
+          ? { search_recency_filter: opts.recency }
+          : {}),
         request_id: opts.referenceId.slice(0, 128),
         user_id: pseudonymousProviderUserId(opts.userId),
       }),
