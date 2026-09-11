@@ -12,7 +12,9 @@ const RESEARCH_STOPWORDS = new Set([
   "VOICE-OVER", "COMMERCIAL", "ADVERTISEMENT", "ADVERT", "STORY", "MOVIE", "FILM",
   "GHANA", "GHANAIAN", "AFRICA", "AFRICAN", "CREATE", "MAKE", "GENERATE", "SHOW",
   "INTRO", "OUTRO", "FINAL", "SCREEN", "NARRATOR", "VISUAL", "CAMERA", "MUSIC",
-  "HD", "UHD", "4K", "3D", "CTA", "TV", "SOCIAL", "MEDIA",
+  "HD", "UHD", "4K", "3D", "CTA", "TV", "SOCIAL", "MEDIA", "HAPPY", "BIRTHDAY",
+  "CONGRATULATIONS", "WELCOME", "THANK", "THANKS", "YOU", "SALE", "OFFER", "BUY",
+  "NOW", "NEW", "BEST", "FREE",
 ]);
 
 export interface CreativeResearchEntity {
@@ -74,37 +76,39 @@ function leadingProperName(value: string): string {
 }
 
 /**
- * Deliberately conservative local candidate extraction. Research has real COGS,
- * so ordinary capitalized prose must not trigger paid search. Strong signals:
- * all-caps brand/acronym names, corporate names ending in Ghana/company suffixes,
- * or a proper noun immediately following an explicit brand intent phrase such
- * as "ad for Nike" / "commercial about Unilever Ghana".
+ * Deliberately conservative local candidate extraction. Research has real COGS
+ * and can touch public-web data, so ordinary capitalized prose or private names
+ * must not trigger automatic search. Strong signals are explicit entity intent,
+ * corporate naming patterns, or acronym-style names inside a business context.
  */
 export function extractStrongResearchCandidates(source: string): string[] {
   const text = source.slice(0, 40_000);
   const output: string[] = [];
   const seen = new Set<string>();
+  const businessContext = /\b(?:brand|company|business|commercial|advert(?:isement)?|ads?|campaign|promo(?:tion)?|product|service|corporate|manufacturer|industry|cement|bank|telecom|network|factory|enterprise)\b/i.test(text);
 
-  // All-caps brands/acronyms: GHACEM, MTN, GTP, BMW, etc. Permit a short
-  // following geography/corporate qualifier, e.g. "MTN Ghana".
-  const acronymPattern = /\b([A-Z][A-Z0-9&.-]{1,}(?:\s+(?:Ghana|Africa|Limited|Ltd|PLC|Inc|Group))?)\b/g;
-  for (const match of text.matchAll(acronymPattern)) pushCandidate(output, seen, match[1]);
+  // Bare all-caps brands/acronyms are researched only when the surrounding
+  // request is clearly business/brand work. This avoids searches caused by
+  // celebration text such as "HAPPY BIRTHDAY GIANNIS".
+  if (businessContext) {
+    const acronymPattern = /\b([A-Z][A-Z0-9&.-]{1,}(?:\s+(?:Ghana|Africa|Limited|Ltd|PLC|Inc|Group))?)\b/g;
+    for (const match of text.matchAll(acronymPattern)) pushCandidate(output, seen, match[1]);
+  }
 
-  // Corporate names with strong suffix/geography signals.
+  // Corporate names with strong suffix/geography signals are safe enough to
+  // recognize even without a separate marketing keyword.
   const corporatePattern = /\b([A-Z][A-Za-z0-9&.'’-]+(?:\s+[A-Z][A-Za-z0-9&.'’-]+){0,3}\s+(?:Ghana|Limited|Ltd|PLC|Inc|Corporation|Company|Group))\b/g;
   for (const match of text.matchAll(corporatePattern)) pushCandidate(output, seen, match[1]);
 
-  // Explicit advertising/research context catches common mixed-case brands
-  // such as Nike, Apple, Guinness Ghana and Unilever Ghana. Capture a bounded
-  // phrase first, then stop at the first token that is not actually a proper
-  // name so "Nike with an..." cannot become a paid research query.
-  const contextualPattern = /\b(?:ad(?:vert(?:isement)?)?|commercial|campaign|promo(?:tion)?|video|story)\s+(?:for|about|featuring|promoting)\s+([^,\n.!?;:]{1,100})/gi;
+  // Explicit advertising/story context catches mixed-case brands, public names
+  // and places such as Nike, Unilever Ghana, Kwame Nkrumah or Eiffel Tower.
+  const contextualPattern = /\b(?:ad(?:vert(?:isement)?)?|commercial|campaign|promo(?:tion)?|video|story|documentary|film|movie)\s+(?:for|about|featuring|promoting)\s+([^,\n.!?;:]{1,100})/gi;
   for (const match of text.matchAll(contextualPattern)) {
     pushCandidate(output, seen, leadingProperName(match[1]));
   }
 
   // Explicit entity labels supplied by the user.
-  const labelledPattern = /\b(?:brand|company|organisation|organization|product|institution)\s+(?:called|named)?\s*[:\-]?\s*([^,\n.!?;:]{1,100})/gi;
+  const labelledPattern = /\b(?:brand|company|organisation|organization|product|institution|person|place|landmark)\s+(?:called|named)?\s*[:\-]?\s*([^,\n.!?;:]{1,100})/gi;
   for (const match of text.matchAll(labelledPattern)) {
     pushCandidate(output, seen, leadingProperName(match[1]));
   }
@@ -113,7 +117,7 @@ export function extractStrongResearchCandidates(source: string): string[] {
 }
 
 export function buildCreativeResearchQuery(entityName: string): string {
-  return `"${normalizeCandidate(entityName)}" official company brand products services visual identity logo`;
+  return `"${normalizeCandidate(entityName)}" official information company organization products services person place visual identity`;
 }
 
 export async function researchCreativeEntities(opts: {
@@ -217,6 +221,7 @@ export function augmentDirectorPromptWithResearch(opts: {
         "PROFESSIONAL COMMERCIAL DIRECTION:",
         "Structure the piece like a premium corporate advertisement: immediate hook, brand/product establishing shot, human benefit or problem/solution, credibility/proof moment when supported, polished product/brand beauty shots, concise on-screen supers, and a strong end-frame/CTA.",
         "Specify deliberate camera movement, edit rhythm, transitions, typography/super placement, lighting, sound/voice-over mood, and a coherent brand color language. Keep spoken copy natural and persuasive rather than generic AI marketing filler.",
+        "When a title, price-independent benefit line, slogan supplied by the user, or CTA should appear on screen, put the exact super text inside the Visual: direction so downstream scene generation preserves it.",
         "Never invent an unsupported product claim, price, award, certification, testimonial, slogan, logo detail, or corporate fact.",
       ].join("\n")
     : "";
