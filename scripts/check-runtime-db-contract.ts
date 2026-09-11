@@ -81,6 +81,18 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: long-form hierarchy table(s) missing: ${missingLongFormTables.join(', ')}`);
   }
 
+  const longFormEpisodeColumns = await db.$queryRaw<ColumnRow[]>`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'LongFormEpisode'
+      AND column_name IN ('expansionVersion','expansionActiveKey','expansionClaimedAt')
+  `;
+  const longFormEpisodeColumnNames = new Set(longFormEpisodeColumns.map((row) => row.column_name));
+  const missingLongFormEpisodeColumns = ['expansionVersion', 'expansionActiveKey', 'expansionClaimedAt']
+    .filter((name) => !longFormEpisodeColumnNames.has(name));
+  if (missingLongFormEpisodeColumns.length) {
+    throw new Error(`Runtime DB contract failed: LongFormEpisode expansion column(s) missing: ${missingLongFormEpisodeColumns.join(', ')}`);
+  }
+
   const longFormIndexes = await db.$queryRaw<IndexRow[]>`
     SELECT indexname, indexdef FROM pg_indexes
     WHERE schemaname = 'public'
@@ -91,6 +103,7 @@ async function main(): Promise<void> {
     'LongFormProduction_planningReferenceId_key',
     'LongFormSeason_productionId_seasonNumber_key',
     'LongFormEpisode_seasonId_episodeNumber_key',
+    'LongFormEpisode_expansionActiveKey_key',
     'LongFormSequence_episodeId_sequenceNumber_key',
   ];
   const missingLongFormIndexes = requiredLongFormIndexes.filter((name) => !longFormIndexNames.has(name));
@@ -195,7 +208,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy/lease verified)');
 }
 
 main()
