@@ -155,16 +155,27 @@ export async function POST(req: NextRequest) {
     let created = false;
 
     if (projectId) {
-      const access = await requireProjectAccess(projectId, true);
-      if (!access.ok) return access.response;
-      const existing = await db.videoProject.findUnique({ where: { id: projectId }, select: { status: true } });
+      // A remembered browser draft id can outlive its database row after an
+      // operator cleanup or failed/rolled-back creation. Distinguish that
+      // genuinely missing row from an existing project that the current user
+      // is not allowed to modify. Only the missing-row case self-heals by
+      // creating a fresh authenticated draft from the exact submitted snapshot.
+      const existing = await db.videoProject.findUnique({
+        where: { id: projectId },
+        select: { status: true },
+      });
       if (!existing) {
-        return NextResponse.json({ success: false, error: "Project draft not found" }, { status: 404 });
+        projectId = null;
+      } else {
+        const access = await requireProjectAccess(projectId, true);
+        if (!access.ok) return access.response;
+        if (existing.status !== "draft") {
+          return NextResponse.json({ success: false, error: "This project is no longer an editable creation draft" }, { status: 409 });
+        }
       }
-      if (existing.status !== "draft") {
-        return NextResponse.json({ success: false, error: "This project is no longer an editable creation draft" }, { status: 409 });
-      }
-    } else {
+    }
+
+    if (!projectId) {
       const initial = await db.videoProject.create({
         data: {
           userId: auth.session.userId,
