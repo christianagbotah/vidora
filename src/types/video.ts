@@ -1,6 +1,7 @@
 export interface Character {
   id: string;
   projectId: string;
+  sourceProfileId?: string | null;
   name: string;
   role?: string | null;
   description?: string | null;
