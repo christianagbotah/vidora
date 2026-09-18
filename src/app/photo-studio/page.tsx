@@ -1,7 +1,7 @@
 "use client";\n/* eslint-disable @next/next/no-img-element */
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -113,11 +113,6 @@ export default function PhotoStudioPage() {
     void load();
   }, [load]);
 
-  const selectedAssets = useMemo(
-    () => selected.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as MediaAsset[],
-    [assets, selected],
-  );
-
   const toggleAsset = (id: string) => {
     setSelected((current) => {
       if (current.includes(id)) return current.filter((item) => item !== id);
@@ -164,7 +159,7 @@ export default function PhotoStudioPage() {
           name: characterName,
           role: characterRole,
           primaryAssetId,
-          referenceAssetIds: selected.includes(primaryAssetId) ? selected : [primaryAssetId],
+          referenceAssetIds: [primaryAssetId],
           consentConfirmed,
           performanceProfile: { emotion, gestureIntensity, eyeContact, bodyMotion, actingStyle },
         }),
