@@ -12,6 +12,7 @@ import {
   requireMatchingTalkingPhotoQuote,
   talkingPhotoActiveKey,
 } from "@/lib/talking-photo-billing";
+import { markTalkingPhotoNeedsReconciliation } from "@/lib/talking-photo-reconciliation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,13 +159,14 @@ export async function POST(req: NextRequest) {
       } catch (releaseError) {
         await db.talkingPhotoJob.update({
           where: { id: job.id },
-          data: {
-            status: "needs_reconciliation",
-            creditReservationId: reserved.reservation.id,
-            error: `Queue handoff failed and reserved credits could not be released safely: ${
-              releaseError instanceof Error ? releaseError.message : "unknown release error"
-            }`,
-          },
+          data: { creditReservationId: reserved.reservation.id },
+        }).catch(() => undefined);
+        await markTalkingPhotoNeedsReconciliation({
+          jobId: job.id,
+          kind: "reservation_release",
+          message: `Queue handoff failed and reserved credits could not be released safely: ${
+            releaseError instanceof Error ? releaseError.message : "unknown release error"
+          }`,
         }).catch(() => undefined);
       }
       throw error;

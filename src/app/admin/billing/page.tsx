@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, DollarSign, Loader2, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -165,7 +166,12 @@ export default function AdminBillingPage() {
           <h1 className="text-2xl font-bold">Provider Billing & Profit Protection</h1>
           <p className="text-sm text-muted-foreground">Verified provider COGS, customer-credit pricing, reserve coverage and margin controls.</p>
         </div>
-        <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/admin/talking-photo/reconciliation">Talking Photo reconciliation</Link>
+          </Button>
+          <Button variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
+        </div>
       </div>
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
