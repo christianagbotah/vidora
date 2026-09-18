@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireSceneAccess } from "@/lib/project-auth";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { unlink, writeFile } from "fs/promises";
 import { DUBBING_LANGUAGES, DUBBING_LANGUAGE_GROUPS, getDubbingLanguage } from "@/lib/dubbing-languages";
 import { writeAudioFile, deleteAudioFile, getAudioPath, ensureAudioDir } from "@/lib/audio-storage";
-import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
+import { reserveMeteredTextOperation, submitBilledText } from "@/lib/metered-text-billing";
 import { captureImmediateProviderOperation, reserveImmediateProviderOperation } from "@/lib/immediate-provider-billing";
 import { BillingSafetyError } from "@/lib/provider-cost-billing";
 import { getAIProviderSettings } from "@/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel, splitQwenTtsInput, synthesizeQwenTts } from "@/lib/qwen-tts";
-import { submitBilledZaiText } from "@/lib/zai-billed-client";
 import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
@@ -70,7 +69,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!cleanTranslation) {
         const systemPrompt = `You are a professional dubbing translator. Translate the user's narration text into ${langName}. Preserve the original tone, emotion, pacing, and any character voice. Output ONLY the translated text — no explanations, no quotation marks, no notes, no preamble.`;
         const lineKeyPrefix = `dubbing:${translation.id}:translate`;
-        const translationBilling = await reserveMeteredZaiTextOperation({
+        const translationBilling = await reserveMeteredTextOperation({
           userId,
           projectId: scene.projectId,
           sceneId: id,
@@ -81,10 +80,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           systemPrompt,
           userPrompt: sourceText,
           maxOutputTokens: 4_000,
-          requireConfiguredPrimary: false,
-        });
+            });
 
-        const result = await submitBilledZaiText({
+        const result = await submitBilledText({
           model: translationBilling.model,
           systemPrompt,
           userPrompt: sourceText,
@@ -92,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           thinking: "disabled",
           timeoutMs: 30_000,
         });
-        if (!result.usage) throw new Error("Z.ai returned no usage metadata; the prepaid dubbing translation reserve is held for reconciliation");
+        if (!result.usage) throw new Error("Paid text provider returned no usage metadata; the prepaid dubbing translation reserve is held for reconciliation");
         const inputCapture = await captureActualMeteredLine({
           reservationId: translationBilling.reservation.id,
           lineKey: `${lineKeyPrefix}:input`,
@@ -112,7 +110,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         await finalizeMeteredReservation({
           reservationId: translationBilling.reservation.id,
           userId,
-          reason: `Dubbing translation (${langName}) actual Z.ai token usage settled`,
+          reason: `Dubbing translation (${langName}) actual provider token usage settled`,
         });
         tokensCharged += inputCapture.creditsCaptured + outputCapture.creditsCaptured;
 
@@ -185,7 +183,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: true, translation: updated, chunks: chunks.length, provider: "qwen", providerModel: qwenModel, tokensCharged });
     } catch (aiError) {
       await db.sceneTranslation.update({ where: { id: translation.id }, data: { status: "failed" } }).catch(() => {});
-      return zaiErrorResponse(aiError, { session: authResult.session, logLabel: "dubbing" });
+      return providerBillingErrorResponse(aiError, { session: authResult.session, logLabel: "dubbing" });
     }
   } catch (error) {
     console.error("[dubbing POST]", error instanceof Error ? error.message : "unknown error");
