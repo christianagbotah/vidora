@@ -5,7 +5,6 @@ import { resolveConfiguredBillableTextRoute } from "../src/lib/metered-text-bill
 import {
   resolveZaiAsrBillingModel,
   resolveZaiImageBillingModel,
-  resolveZaiTextBillingModel,
   resolveZaiVideoBillingModel,
   resolveZaiVisionBillingModel,
 } from "../src/lib/zai-billing-models";
