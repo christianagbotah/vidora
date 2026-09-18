@@ -53,8 +53,10 @@ describe("Talking Photo reconciliation controls", () => {
     expect(route).toContain('case "ambiguous_submission"');
     expect(route).toContain('return ["confirm_not_submitted_release"]');
     expect(route).toContain('case "billing_capture"');
-    expect(route).toContain('"retry_billing_capture"');
-    expect(route).toContain('"retry_provider_status"');
+    expect(route).toContain('return ["retry_billing_capture"]');
+    expect(route).toContain('case "provider_lookup"');
+    expect(route).toContain('case "provider_status"');
+    expect(route).toContain('return ["retry_provider_status"]');
     expect(route).toContain('where: { status: "needs_reconciliation" }');
   });
 
