@@ -1,11 +1,10 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { cleanLLMOutput } from "@/lib/zai";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { db } from "@/lib/db";
 import { requireProjectAccess } from "@/lib/project-auth";
-import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
-import { submitBilledZaiText } from "@/lib/zai-billed-client";
+import { reserveMeteredTextOperation, submitBilledText } from "@/lib/metered-text-billing";
 import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
@@ -68,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     const operationId = crypto.randomUUID();
     const lineKeyPrefix = `continuity:${projectId}:${operationId}`;
-    const billing = await reserveMeteredZaiTextOperation({
+    const billing = await reserveMeteredTextOperation({
       userId: authResult.session.userId,
       projectId,
       referenceId: projectId,
@@ -78,10 +77,10 @@ export async function POST(req: NextRequest) {
       systemPrompt,
       userPrompt,
       maxOutputTokens: 4_000,
-      requireConfiguredPrimary: false,
     });
 
-    const result = await submitBilledZaiText({
+    const result = await submitBilledText({
+      provider: billing.provider,
       model: billing.model,
       systemPrompt,
       userPrompt,
@@ -90,7 +89,7 @@ export async function POST(req: NextRequest) {
       timeoutMs: 60_000,
     });
     if (!result.usage) {
-      throw new Error("Z.ai returned no usage metadata; the prepaid reserve is held for reconciliation rather than guessing the charge");
+      throw new Error("Paid text provider returned no usage metadata; the prepaid reserve is held for reconciliation rather than guessing the charge");
     }
     const inputCapture = await captureActualMeteredLine({
       reservationId: billing.reservation.id,
@@ -109,7 +108,7 @@ export async function POST(req: NextRequest) {
     const finalized = await finalizeMeteredReservation({
       reservationId: billing.reservation.id,
       userId: authResult.session.userId,
-      reason: "Continuity analysis actual Z.ai token usage settled",
+      reason: "Continuity analysis actual provider token usage settled",
     });
 
     const content = cleanLLMOutput(result.content);
@@ -131,7 +130,7 @@ export async function POST(req: NextRequest) {
       remainingTokens: finalized.wallet.availableCredits,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
+    return providerBillingErrorResponse(error, {
       session: authResult?.ok ? authResult.session : null,
       logLabel: "check-continuity",
     });

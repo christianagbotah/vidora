@@ -1,11 +1,11 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
-import { zai, cleanLLMOutput } from "@/lib/zai";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { cleanLLMOutput } from "@/lib/zai";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { quoteFreeZaiTextAttempt } from "@/lib/zai-metered-billing";
+import { quoteFreeTextAttempt, submitBilledText } from "@/lib/metered-text-billing";
 
 export const runtime = "nodejs";
 
@@ -65,14 +65,13 @@ export async function POST(req: NextRequest) {
   const userPrompt = `Create a storyboard for this video idea.\n\nUser's idea: ${idea}\n\nPreferences:\n- Visual style: ${style}\n- Aspect ratio: ${aspectRatio}\n- Target duration: ~${targetDuration} seconds\n\nReturn the JSON storyboard now.`;
   let cost;
   try {
-    cost = await quoteFreeZaiTextAttempt({
+    cost = await quoteFreeTextAttempt({
       systemPrompt: STORYBOARD_SYSTEM_PROMPT,
       userPrompt,
       maxOutputTokens: 5_000,
-      requireConfiguredPrimary: false,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
+    return providerBillingErrorResponse(error, {
       session: authResult.session,
       fallbackStatus: 409,
       logLabel: "preview-storyboard-price",
@@ -100,16 +99,18 @@ export async function POST(req: NextRequest) {
 
   let storyboardJson: string;
   try {
-    storyboardJson = await zai.chat({
+    const result = await submitBilledText({
+      provider: cost.provider,
+      model: cost.model,
       systemPrompt: STORYBOARD_SYSTEM_PROMPT,
       userPrompt,
-      model: cost.model,
+      maxOutputTokens: 5_000,
       thinking: "disabled",
-      extra: { max_tokens: 5_000 },
-      retry: { label: "Storyboard preview", timeoutMs: 60_000, maxRetries: 2 },
+      timeoutMs: 60_000,
     });
+    storyboardJson = result.content;
   } catch (err) {
-    const resp = zaiErrorResponse(err, {
+    const resp = providerBillingErrorResponse(err, {
       session: authResult.session,
       fallbackStatus: 502,
       logLabel: "preview-storyboard",

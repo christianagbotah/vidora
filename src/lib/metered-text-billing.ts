@@ -1,4 +1,8 @@
-import { BillingSafetyError } from "@/lib/provider-cost-billing";
+import {
+  BillingSafetyError,
+  getCommercialPricingPolicy,
+  quoteProviderCharge,
+} from "@/lib/provider-cost-billing";
 import { getAIProviderSettings } from "@/lib/ai-provider-router";
 import {
   reserveImmediateProviderOperations,
@@ -43,14 +47,7 @@ export async function resolveConfiguredBillableTextRoute(requestedModel?: string
   );
 }
 
-export async function reserveMeteredTextOperation(opts: {
-  userId: string;
-  projectId?: string | null;
-  sceneId?: string | null;
-  referenceId: string;
-  idempotencyKey: string;
-  lineKeyPrefix: string;
-  label: string;
+async function resolveTextAttemptEnvelope(opts: {
   systemPrompt?: string | null;
   userPrompt: string;
   maxOutputTokens?: number;
@@ -65,8 +62,27 @@ export async function reserveMeteredTextOperation(opts: {
       "Paid xAI text prompts are currently limited to the verified short-context billing envelope. Reduce the prompt below 128,000 UTF-8 bytes.",
     );
   }
-  const inputTokens = estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt);
-  const maxOutputTokens = safeOutputTokenCeiling(opts.maxOutputTokens);
+  return {
+    route,
+    inputTokens: estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt),
+    maxOutputTokens: safeOutputTokenCeiling(opts.maxOutputTokens),
+  };
+}
+
+export async function reserveMeteredTextOperation(opts: {
+  userId: string;
+  projectId?: string | null;
+  sceneId?: string | null;
+  referenceId: string;
+  idempotencyKey: string;
+  lineKeyPrefix: string;
+  label: string;
+  systemPrompt?: string | null;
+  userPrompt: string;
+  maxOutputTokens?: number;
+  model?: string | null;
+}) {
+  const { route, inputTokens, maxOutputTokens } = await resolveTextAttemptEnvelope(opts);
   const lines: ImmediateProviderLineInput[] = [
     {
       provider: route.provider,
@@ -101,6 +117,46 @@ export async function reserveMeteredTextOperation(opts: {
     model: route.model,
     inputTokens,
     maxOutputTokens,
+  };
+}
+
+/**
+ * Quote a zero-customer-credit text attempt against the active verified
+ * provider catalog. This does not reserve wallet credits; callers use the
+ * conservative providerCostUsd for CAC/platform-cost accounting before the
+ * single provider submission.
+ */
+export async function quoteFreeTextAttempt(opts: {
+  systemPrompt?: string | null;
+  userPrompt: string;
+  maxOutputTokens?: number;
+  model?: string | null;
+}) {
+  const { route, inputTokens, maxOutputTokens } = await resolveTextAttemptEnvelope(opts);
+  const policy = await getCommercialPricingPolicy();
+  const [input, output] = await Promise.all([
+    quoteProviderCharge({
+      provider: route.provider,
+      model: route.model,
+      operation: "text_input",
+      quantity: inputTokens,
+      policy,
+    }),
+    quoteProviderCharge({
+      provider: route.provider,
+      model: route.model,
+      operation: "text_output",
+      quantity: maxOutputTokens,
+      policy,
+    }),
+  ]);
+  return {
+    provider: route.provider,
+    model: route.model,
+    inputTokens,
+    maxOutputTokens,
+    providerCostUsd: input.providerCostUsd + output.providerCostUsd,
+    pricingVersion: `${input.pricingVersion}+${output.pricingVersion}`,
   };
 }
 

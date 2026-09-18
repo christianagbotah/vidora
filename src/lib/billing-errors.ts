@@ -39,6 +39,7 @@ function billingSafetyShape(error: BillingSafetyError): BillingHttpShape {
       };
     case "INVALID_BILLING_QUANTITY":
     case "INVALID_ASR_DURATION":
+    case "XAI_TEXT_CONTEXT_TOO_LARGE":
       return {
         status: 422,
         code: error.code,
@@ -49,6 +50,9 @@ function billingSafetyShape(error: BillingSafetyError): BillingHttpShape {
     case "INVALID_PROVIDER_PRICE":
     case "STALE_PROVIDER_PRICE":
     case "UNPRICED_TEXT_PROVIDER":
+    case "UNPRICED_XAI_ENDPOINT":
+    case "UNPRICED_XAI_MODEL":
+    case "XAI_KEY_MISSING":
     case "INVALID_PROVIDER_COST":
     case "UNSAFE_MARGIN_POLICY":
       return {
