@@ -10,6 +10,9 @@ describe("Digital Actor Character Profile reuse", () => {
   test("Photo Studio passes reusable profiles including saved voice metadata", () => {
     const page = read("src/app/photo-studio/page.tsx");
     expect(page).toContain("voiceId?: string | null");
+    expect(page).toContain('const [characterVoice, setCharacterVoice] = useState("tongtong")');
+    expect(page).toContain("voiceId: characterVoice");
+    expect(page).toContain('setCharacterVoice("tongtong")');
     expect(page).toContain("<TalkingPhotoStudio images={assets} characters={profiles} />");
   });
 
