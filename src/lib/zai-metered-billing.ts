@@ -66,6 +66,12 @@ export async function resolveConfiguredBillableTextRoute(
     };
   }
   if (settings.textProvider === "xai") {
+    if (settings.xaiBaseUrl.replace(/\/+$/, "") !== "https://api.x.ai/v1") {
+      throw new BillingSafetyError(
+        "UNPRICED_TEXT_PROVIDER",
+        "Billing v2 xAI pricing is verified only for the global https://api.x.ai/v1 endpoint.",
+      );
+    }
     const model = (requestedModel || settings.textModel || settings.xaiTextModel).trim();
     if (!model) {
       throw new BillingSafetyError(
