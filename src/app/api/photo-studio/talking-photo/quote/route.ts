@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireAuth();
     if (!auth.ok) return auth.response;
-    assertFalTalkingPhotoConfigured();
+    await assertFalTalkingPhotoConfigured();
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const imageAssetId = typeof body.imageAssetId === "string" ? body.imageAssetId.trim() : "";
     const audioAssetId = typeof body.audioAssetId === "string" ? body.audioAssetId.trim() : "";
