@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
 import { createTalkingPhotoQuote } from "@/lib/talking-photo-billing";
 import { BillingSafetyError } from "@/lib/provider-cost-billing";
+import { assertFalTalkingPhotoConfigured, FalProviderError } from "@/lib/fal-lipsync";
 import { getWalletSummary } from "@/lib/credit-reservations";
 import { getBillingGhsPerUsd } from "@/lib/package-billing-safety";
 
@@ -17,6 +18,7 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireAuth();
     if (!auth.ok) return auth.response;
+    assertFalTalkingPhotoConfigured();
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const imageAssetId = typeof body.imageAssetId === "string" ? body.imageAssetId.trim() : "";
     const audioAssetId = typeof body.audioAssetId === "string" ? body.audioAssetId.trim() : "";
@@ -71,10 +73,11 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     const safety = error instanceof BillingSafetyError;
+    const providerConfig = error instanceof FalProviderError && error.code === "FAL_KEY_MISSING";
     return NextResponse.json({
       success: false,
       error: error instanceof Error ? error.message : "Could not calculate Talking Photo price",
-      code: safety ? error.code : "TALKING_PHOTO_QUOTE_FAILED",
-    }, { status: safety ? 409 : 500 });
+      code: safety ? error.code : providerConfig ? error.code : "TALKING_PHOTO_QUOTE_FAILED",
+    }, { status: providerConfig ? 503 : safety ? 409 : 500 });
   }
 }
