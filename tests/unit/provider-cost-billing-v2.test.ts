@@ -122,7 +122,7 @@ describe("metered provider safeguards", () => {
   test("text token preflight uses a conservative UTF-8 byte ceiling", () => {
     expect(estimateTextInputTokenCeiling("abc")).toBe(3);
     expect(estimateTextInputTokenCeiling("😀")).toBe(4);
-    expect(estimateTextInputTokenCeiling("x".repeat(200_000))).toBe(128_000);
+    expect(() => estimateTextInputTokenCeiling("x".repeat(200_000))).toThrow("prepaid 128000-token safety ceiling");
   });
 
   test("legacy Qwen flash configuration resolves to the priced instruction model", () => {
