@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAppStore } from "@/store/useAppStore";
+import { PhotoMotionDirector } from "@/components/PhotoMotionDirector";
 import { livingPhotoGenerationProgress, type LivingPhotoProgress } from "@/lib/photo-studio-living-progress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -88,6 +89,7 @@ export default function PhotoStudioPage() {
   const [slideshowRender, setSlideshowRender] = useState<SlideshowRenderState | null>(null);
   const [generatingLivingPhotos, setGeneratingLivingPhotos] = useState(false);
   const [livingPhotoGeneration, setLivingPhotoGeneration] = useState<LivingPhotoGenerationState | null>(null);
+  const [motionDirectorDirty, setMotionDirectorDirty] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProjectResult | null>(null);
 
@@ -203,6 +205,7 @@ export default function PhotoStudioPage() {
     setResult(null);
     setSlideshowRender(null);
     setLivingPhotoGeneration(null);
+    setMotionDirectorDirty(false);
     try {
       const response = await fetch("/api/photo-studio/projects", {
         method: "POST",
@@ -560,8 +563,14 @@ export default function PhotoStudioPage() {
                 <p className="font-bold text-emerald-200">Project ready · {result.sceneCount} scenes</p>
                 <p className="mt-1 text-sm leading-6 text-emerald-100/80">{result.message}</p>
                 {result.mode === "animate" ? (
-                  <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                  <>
+                    <PhotoMotionDirector
+                      projectId={result.projectId}
+                      locked={generatingLivingPhotos || livingPhotoGeneration !== null}
+                      onDirtyChange={setMotionDirectorDirty}
+                    />
+                    <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="max-w-xl">
                         <p className="text-sm font-bold text-violet-100">AI Living Photo motion</p>
                         <p className="mt-1 text-xs leading-5 text-slate-400">
@@ -573,6 +582,7 @@ export default function PhotoStudioPage() {
                         onClick={() => void generateLivingPhotos()}
                         disabled={
                           generatingLivingPhotos ||
+                          motionDirectorDirty ||
                           livingPhotoGeneration?.status === "done" ||
                           livingPhotoGeneration?.status === "failed"
                         }
@@ -587,7 +597,9 @@ export default function PhotoStudioPage() {
                               ? livingPhotoGeneration
                                 ? "Generating AI motion…"
                                 : "Waiting for confirmation…"
-                              : "Review cost & animate"}
+                              : motionDirectorDirty
+                                ? "Save motion directions first"
+                                : "Review cost & animate"}
                       </button>
                     </div>
                     {livingPhotoGeneration ? (
@@ -616,7 +628,8 @@ export default function PhotoStudioPage() {
                         ) : null}
                       </div>
                     ) : null}
-                  </div>
+                    </div>
+                  </>
                 ) : null}
                 {result.mode === "slideshow" ? (
                   <div className="mt-4 rounded-xl border border-cyan-300/20 bg-slate-950/40 p-3">
