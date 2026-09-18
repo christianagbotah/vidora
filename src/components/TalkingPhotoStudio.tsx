@@ -42,10 +42,13 @@ type TalkingPhotoQuote = {
 
 type TalkingPhotoJob = {
   id: string;
+  imageAssetId?: string;
+  audioAssetId?: string;
   status: string;
   durationSeconds: number;
   videoUrl?: string | null;
   error?: string | null;
+  createdAt?: string;
 };
 
 interface TalkingPhotoStudioProps {
@@ -81,6 +84,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [quote, setQuote] = useState<TalkingPhotoQuote | null>(null);
   const [job, setJob] = useState<TalkingPhotoJob | null>(null);
+  const [recentJobs, setRecentJobs] = useState<TalkingPhotoJob[]>([]);
   const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(true);
   const [uploadingAudio, setUploadingAudio] = useState(false);
@@ -102,13 +106,30 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     void (async () => {
       setLoadingAudio(true);
       try {
-        const response = await fetch("/api/photo-studio/audio-assets", { cache: "no-store" });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok || !body.success) throw new Error(body.error || "Unable to load audio library");
-        const items = Array.isArray(body.assets) ? body.assets as AudioAsset[] : [];
+        const [audioResponse, jobsResponse] = await Promise.all([
+          fetch("/api/photo-studio/audio-assets", { cache: "no-store" }),
+          fetch("/api/photo-studio/talking-photo/jobs", { cache: "no-store" }),
+        ]);
+        const [audioBody, jobsBody] = await Promise.all([
+          audioResponse.json().catch(() => ({})),
+          jobsResponse.json().catch(() => ({})),
+        ]);
+        if (!audioResponse.ok || !audioBody.success) {
+          throw new Error(audioBody.error || "Unable to load audio library");
+        }
+        if (!jobsResponse.ok || !jobsBody.success) {
+          throw new Error(jobsBody.error || "Unable to load recent Talking Photo jobs");
+        }
+        const items = Array.isArray(audioBody.assets) ? audioBody.assets as AudioAsset[] : [];
+        const jobs = Array.isArray(jobsBody.jobs) ? jobsBody.jobs as TalkingPhotoJob[] : [];
         if (cancelled) return;
         setAudioAssets(items);
+        setRecentJobs(jobs);
         setSelectedAudioId((current) => current || items[0]?.id || "");
+        const active = jobs.find((candidate) =>
+          !["completed", "failed", "needs_reconciliation"].includes(candidate.status),
+        );
+        if (active) setJob(active);
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load audio library");
       } finally {
@@ -210,6 +231,10 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
       }
       const next = body.job as TalkingPhotoJob;
       setJob(next);
+      setRecentJobs((current) => {
+        const remaining = current.filter((item) => item.id !== next.id);
+        return [next, ...remaining].slice(0, 20);
+      });
       if (next.status === "completed") return;
       if (next.status === "failed" || next.status === "needs_reconciliation") {
         throw new Error(next.error || statusLabel(next.status));
@@ -240,6 +265,10 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
       }
       const next = body.job as TalkingPhotoJob;
       setJob(next);
+      setRecentJobs((current) => {
+        const remaining = current.filter((item) => item.id !== next.id);
+        return [next, ...remaining].slice(0, 20);
+      });
       if (next.status !== "completed") await pollJob(next.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Talking Photo failed");
@@ -359,6 +388,47 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
           )}
         </div>
       </div>
+
+      {recentJobs.length ? (
+        <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Recent Talking Photos</p>
+              <p className="mt-1 text-xs text-slate-500">Durable jobs remain here after refresh or reconnect.</p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {recentJobs.slice(0, 6).map((recent) => {
+              const active = !["completed", "failed", "needs_reconciliation"].includes(recent.status);
+              return (
+                <button
+                  type="button"
+                  key={recent.id}
+                  onClick={() => {
+                    setJob(recent);
+                    if (active && !starting) {
+                      setStarting(true);
+                      setError("");
+                      void pollJob(recent.id)
+                        .catch((reason) => setError(reason instanceof Error ? reason.message : "Unable to monitor Talking Photo"))
+                        .finally(() => setStarting(false));
+                    }
+                  }}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/45 p-3 text-left hover:bg-white/5"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold">{statusLabel(recent.status)}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{durationLabel(recent.durationSeconds)}</p>
+                  </div>
+                  <span className="text-[11px] font-bold text-violet-200">
+                    {active ? "Resume" : "View"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {selectedImage && selectedAudio ? (
         <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/55 p-4">
