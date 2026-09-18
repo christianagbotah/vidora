@@ -273,6 +273,18 @@ function buildEndpoint(baseUrl: string): string {
   return normalized.endsWith(suffix) ? normalized : `${normalized}${suffix}`;
 }
 
+export async function isQwenTtsConfigured(): Promise<boolean> {
+  return Boolean(await getConfigValue("qwen_tts_api_key", "DASHSCOPE_API_KEY"));
+}
+
+export async function assertQwenTtsConfigured(): Promise<void> {
+  if (!(await isQwenTtsConfigured())) {
+    throw new Error(
+      "Qwen3-TTS API key is not configured. Set qwen_tts_api_key in Admin Providers or DASHSCOPE_API_KEY on the server.",
+    );
+  }
+}
+
 async function getSettings(): Promise<QwenTtsSettings> {
   const [baseUrl, apiKey, defaultVoice, voiceMap] = await Promise.all([
     getConfigValue("qwen_tts_base_url", "QWEN_TTS_BASE_URL"),
