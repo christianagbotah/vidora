@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 
-export type BillableProvider = "zai" | "qwen" | "fal";
+export type BillableProvider = "zai" | "qwen" | "fal" | "xai";
 export type BillableOperation =
   | "video_generation"
   | "image_generation"
@@ -231,7 +231,7 @@ export function calculateCommercialCharge(
 }
 
 function asProvider(value: string): BillableProvider | null {
-  return value === "zai" || value === "qwen" || value === "fal" ? value : null;
+  return value === "zai" || value === "qwen" || value === "fal" || value === "xai" ? value : null;
 }
 
 function asOperation(value: string): BillableOperation | null {
