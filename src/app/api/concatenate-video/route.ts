@@ -293,8 +293,20 @@ export async function POST(req: NextRequest) {
       stage = "queue-lookup";
       const activeJob = await db.exportJob.findUnique({ where: { activeKey } });
       if (activeJob) {
-        if (jobMode(activeJob.params) === "preview") {
+        const mode = jobMode(activeJob.params);
+        if (mode === "preview") {
           return streamFullPreviewJob(activeJob.id);
+        }
+        if (mode === "photo_slideshow") {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Photo Studio is still rendering local slideshow clips. Build Full Preview after it finishes.",
+              code: "VIDORA_SLIDESHOW_ACTIVE",
+              jobId: activeJob.id,
+            },
+            { status: 409 },
+          );
         }
         return NextResponse.json(
           {
@@ -335,6 +347,17 @@ export async function POST(req: NextRequest) {
           const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
           if (concurrent && jobMode(concurrent.params) === "preview") {
             return streamFullPreviewJob(concurrent.id);
+          }
+          if (concurrent && jobMode(concurrent.params) === "photo_slideshow") {
+            return NextResponse.json(
+              {
+                success: false,
+                error: "Photo Studio is still rendering local slideshow clips.",
+                code: "VIDORA_SLIDESHOW_ACTIVE",
+                jobId: concurrent.id,
+              },
+              { status: 409 },
+            );
           }
           if (concurrent) {
             return NextResponse.json(
