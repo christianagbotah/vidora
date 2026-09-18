@@ -126,7 +126,7 @@ async function updateProviderPrice(input: Record<string, unknown>): Promise<void
   const sourceUrl = text(input.sourceUrl);
   const requestedVersion = text(input.pricingVersion);
 
-  if (!new Set(["zai", "qwen", "fal"]).has(provider)) throw new Error("Unsupported provider price provider");
+  if (!new Set(["zai", "qwen", "fal", "xai"]).has(provider)) throw new Error("Unsupported provider price provider");
   if (!new Set([
     "video_generation",
     "image_generation",

@@ -17,6 +17,8 @@ const PROVIDER_CALL_PATTERNS = [
   /\bsynthesizeQwenTts\s*\(/,
   /\btranscribeWithPricedZaiAsr\s*\(/,
   /\bsubmitBilledZaiText\s*\(/,
+  /\bsubmitBilledText\s*\(/,
+  /\bsubmitBilledXaiText\s*\(/,
   /\bsubmitBilledZaiVision\s*\(/,
   /\bsubmitBilledZaiImage\s*\(/,
   /\bsubmitBilledZaiVideo\s*\(/,
@@ -26,6 +28,7 @@ const PROVIDER_CALL_PATTERNS = [
 const BILLING_GUARD_PATTERNS = [
   /reserveImmediateProviderOperation(?:s)?/,
   /reserveMeteredZai(?:Text|Vision|Asr)Operation/,
+  /reserveMeteredTextOperation/,
   /quoteFreeZaiTextAttempt/,
   /quoteProviderCharge/,
   /getReservedQuoteLines/,
@@ -94,8 +97,9 @@ describe("customer provider billing boundaries", () => {
 
   test("split-scenes validates legacy local-parser compatibility before delegation", () => {
     const route = readFileSync(path.join(ROOT, "src", "app", "api", "split-scenes", "route.ts"), "utf8");
-    expect(route).toContain("reserveMeteredZaiTextOperation");
-    expect(route).toContain("submitBilledZaiText");
+    expect(route).toContain("reserveMeteredTextOperation");
+    expect(route).toContain("submitBilledText");
+    expect(route).toContain("provider: billing.provider");
     expect(route).toContain("hasParseableSceneBody");
     expect(route).toContain("const explicitPattern =");
     expect(route).toContain("const numberedPattern =");

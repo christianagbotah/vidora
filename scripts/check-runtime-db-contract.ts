@@ -1,10 +1,10 @@
 import { db } from "../src/lib/db";
 import { getAIProviderSettings } from "../src/lib/ai-provider-router-qwen";
 import { resolveQwenTtsModel } from "../src/lib/qwen-tts";
+import { resolveConfiguredBillableTextRoute } from "../src/lib/metered-text-billing";
 import {
   resolveZaiAsrBillingModel,
   resolveZaiImageBillingModel,
-  resolveZaiTextBillingModel,
   resolveZaiVideoBillingModel,
   resolveZaiVisionBillingModel,
 } from "../src/lib/zai-billing-models";
@@ -250,14 +250,11 @@ async function main(): Promise<void> {
     .map((row) => `${row.provider}:${row.model}:${row.operation}`));
 
   const providerSettings = await getAIProviderSettings();
-  if (providerSettings.textProvider !== 'zai') {
-    throw new Error(`Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai`);
-  }
   if (providerSettings.ttsProvider !== 'qwen') {
     throw new Error(`Runtime DB contract failed: paid narration provider ${providerSettings.ttsProvider} has no verified Billing v2 catalog; configure Qwen`);
   }
 
-  const configuredTextModel = resolveZaiTextBillingModel(providerSettings.textModel);
+  const configuredTextRoute = await resolveConfiguredBillableTextRoute();
   const configuredVisionModel = resolveZaiVisionBillingModel();
   const configuredAsrModel = resolveZaiAsrBillingModel();
   const configuredImageModel = resolveZaiImageBillingModel();
@@ -266,12 +263,14 @@ async function main(): Promise<void> {
   const requiredPrices = [
     'zai:glm-4.7:text_input',
     'zai:glm-4.7:text_output',
+    'xai:grok-4.6:text_input',
+    'xai:grok-4.6:text_output',
     'zai:glm-4.6v:vision_input',
     'zai:glm-4.6v:vision_output',
     'zai:glm-asr-2512:asr',
     'zai:search-prime:web_search',
-    `zai:${configuredTextModel}:text_input`,
-    `zai:${configuredTextModel}:text_output`,
+    `${configuredTextRoute.provider}:${configuredTextRoute.model}:text_input`,
+    `${configuredTextRoute.provider}:${configuredTextRoute.model}:text_output`,
     `zai:${configuredVisionModel}:vision_input`,
     `zai:${configuredVisionModel}:vision_output`,
     `zai:${configuredAsrModel}:asr`,

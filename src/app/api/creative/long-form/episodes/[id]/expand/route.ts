@@ -16,10 +16,9 @@ import {
   replaceLongFormEpisodeSequences,
 } from "@/lib/long-form-sequence-store";
 import {
-  reserveMeteredZaiTextOperation,
-  resolveConfiguredBillableZaiTextModel,
-} from "@/lib/zai-metered-billing";
-import { submitBilledZaiText } from "@/lib/zai-billed-client";
+  reserveMeteredTextOperation,
+  submitBilledText,
+} from "@/lib/metered-text-billing";
 import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
@@ -141,9 +140,8 @@ export async function POST(
   let providerSubmissionStarted = false;
 
   try {
-    const model = await resolveConfiguredBillableZaiTextModel();
     const lineKeyPrefix = `${referenceId}:billing`;
-    const billing = await reserveMeteredZaiTextOperation({
+    const billing = await reserveMeteredTextOperation({
       userId: auth.session.userId,
       referenceId,
       idempotencyKey: `${referenceId}:reservation`,
@@ -152,15 +150,14 @@ export async function POST(
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
       maxOutputTokens,
-      model,
-      requireConfiguredPrimary: true,
     });
 
     // From this point onward a thrown transport error may mean the provider saw
     // the request. Keep the episode lease in that indeterminate case so a second
     // request cannot accidentally spend again before reconciliation.
     providerSubmissionStarted = true;
-    const result = await submitBilledZaiText({
+    const result = await submitBilledText({
+      provider: billing.provider,
       model: billing.model,
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
@@ -170,7 +167,7 @@ export async function POST(
       timeoutMs: 180_000,
     });
     if (!result.usage) {
-      throw new Error("Z.ai returned no usage metadata; the prepaid episode-expansion reserve and lease are held for reconciliation");
+      throw new Error("Paid text provider returned no usage metadata; the prepaid episode-expansion reserve and lease are held for reconciliation");
     }
 
     const inputCapture = await captureActualMeteredLine({

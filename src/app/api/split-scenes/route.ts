@@ -12,10 +12,9 @@ import {
   type CreativeResearchDossier,
 } from "@/lib/creative-research";
 import {
-  reserveMeteredZaiTextOperation,
-  resolveConfiguredBillableZaiTextModel,
-} from "@/lib/zai-metered-billing";
-import { submitBilledZaiText } from "@/lib/zai-billed-client";
+  reserveMeteredTextOperation,
+  submitBilledText,
+} from "@/lib/metered-text-billing";
 import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 import { POST as runSplitScenes } from "./legacy";
 
@@ -146,9 +145,8 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-      const model = await resolveConfiguredBillableZaiTextModel();
       const lineKeyPrefix = `${operationKey}:billing`;
-      const billing = await reserveMeteredZaiTextOperation({
+      const billing = await reserveMeteredTextOperation({
         userId: authResult.session.userId,
         projectId,
         referenceId: operationKey,
@@ -158,10 +156,9 @@ export async function POST(req: NextRequest) {
         systemPrompt: director.systemPrompt,
         userPrompt: director.userPrompt,
         maxOutputTokens: 6_000,
-        model,
-        requireConfiguredPrimary: true,
       });
-      const result = await submitBilledZaiText({
+      const result = await submitBilledText({
+        provider: billing.provider,
         model: billing.model,
         systemPrompt: director.systemPrompt,
         userPrompt: director.userPrompt,
@@ -170,7 +167,7 @@ export async function POST(req: NextRequest) {
         temperature: 0.35,
         timeoutMs: 120_000,
       });
-      if (!result.usage) throw new Error("Z.ai returned no usage metadata; the prepaid scene-planning reserve is held for reconciliation");
+      if (!result.usage) throw new Error("Paid text provider returned no usage metadata; the prepaid scene-planning reserve is held for reconciliation");
       await captureActualMeteredLine({
         reservationId: billing.reservation.id,
         lineKey: `${lineKeyPrefix}:input`,
@@ -188,7 +185,7 @@ export async function POST(req: NextRequest) {
       await finalizeMeteredReservation({
         reservationId: billing.reservation.id,
         userId: authResult.session.userId,
-        reason: "Scene planning actual Z.ai token usage settled",
+        reason: "Scene planning actual provider token usage settled",
       });
       providerDirectedPrompt = cleanStructuredOutput(result.content);
     } catch (error) {
