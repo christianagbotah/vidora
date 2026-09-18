@@ -20,6 +20,16 @@ type ImageAsset = {
   url: string;
 };
 
+type DigitalActorProfile = {
+  id: string;
+  name: string;
+  role?: string | null;
+  voiceId?: string | null;
+  consentStatus: string;
+  performanceProfile: string;
+  primaryAsset?: ImageAsset | null;
+};
+
 type AudioAsset = {
   id: string;
   originalName: string;
@@ -72,6 +82,28 @@ type TalkingPhotoJob = {
 
 interface TalkingPhotoStudioProps {
   images: ImageAsset[];
+  characters: DigitalActorProfile[];
+}
+
+const DIGITAL_ACTOR_VOICES = new Set(["tongtong", "xiaochen", "jam", "kazi", "luodo", "chuichui"]);
+
+function digitalActorSpeechStyle(raw: string): string {
+  try {
+    const row = JSON.parse(raw) as Record<string, unknown>;
+    const acting = typeof row.actingStyle === "string" ? row.actingStyle.trim() : "";
+    const emotion = typeof row.emotion === "string" ? row.emotion.trim() : "";
+    const gesture = typeof row.gestureIntensity === "string" ? row.gestureIntensity.trim() : "";
+    const body = typeof row.bodyMotion === "string" ? row.bodyMotion.trim() : "";
+    const parts = [
+      acting,
+      emotion ? `emotion ${emotion}` : "",
+      gesture ? `${gesture} gestures` : "",
+      body ? `${body} body motion` : "",
+    ].filter(Boolean);
+    return (parts.join("; ") || "natural, warm and expressive").slice(0, 120);
+  } catch {
+    return "natural, warm and expressive";
+  }
 }
 
 function durationLabel(raw?: number | null): string {
@@ -96,7 +128,7 @@ function statusLabel(status: string): string {
   }
 }
 
-export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
+export function TalkingPhotoStudio({ images, characters }: TalkingPhotoStudioProps) {
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
@@ -105,6 +137,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const recordingCancelledRef = useRef(false);
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>([]);
   const [selectedImageId, setSelectedImageId] = useState("");
+  const [selectedCharacterId, setSelectedCharacterId] = useState("");
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [quote, setQuote] = useState<TalkingPhotoQuote | null>(null);
   const [job, setJob] = useState<TalkingPhotoJob | null>(null);
@@ -150,13 +183,21 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   }, []);
 
   useEffect(() => {
+    const confirmedProfileHasImage = characters.some((profile) =>
+      profile.consentStatus === "confirmed" && profile.primaryAsset?.id === selectedImageId,
+    );
     if (!selectedImageId && images[0]) setSelectedImageId(images[0].id);
-    if (selectedImageId && !images.some((image) => image.id === selectedImageId)) {
+    if (
+      selectedImageId
+      && !images.some((image) => image.id === selectedImageId)
+      && !confirmedProfileHasImage
+    ) {
       setSelectedImageId(images[0]?.id || "");
+      setSelectedCharacterId("");
       setQuote(null);
       setJob(null);
     }
-  }, [images, selectedImageId]);
+  }, [characters, images, selectedImageId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,9 +266,35 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     setError("");
   };
 
+  const selectCharacter = (profileId: string) => {
+    const profile = characters.find((candidate) =>
+      candidate.id === profileId
+      && candidate.consentStatus === "confirmed"
+      && candidate.primaryAsset,
+    );
+    if (!profile?.primaryAsset) return;
+
+    setSelectedCharacterId(profile.id);
+    setSelectedImageId(profile.primaryAsset.id);
+    const savedVoice = (profile.voiceId || "").trim().toLowerCase();
+    setSpeechVoice(DIGITAL_ACTOR_VOICES.has(savedVoice) ? savedVoice : "tongtong");
+    setSpeechStyle(digitalActorSpeechStyle(profile.performanceProfile));
+    setSpeechQuote(null);
+    setSpeechJob(null);
+    resetPaidState();
+  };
+
   const selectImage = (id: string) => {
     if (id === selectedImageId) return;
+    const leavingSavedActor = Boolean(selectedCharacterId);
     setSelectedImageId(id);
+    setSelectedCharacterId("");
+    if (leavingSavedActor) {
+      setSpeechVoice("tongtong");
+      setSpeechStyle("natural, warm and expressive");
+      setSpeechQuote(null);
+      setSpeechJob(null);
+    }
     resetPaidState();
   };
 
@@ -562,7 +629,11 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     }
   };
 
-  const selectedImage = images.find((image) => image.id === selectedImageId);
+  const selectedImage = images.find((image) => image.id === selectedImageId)
+    || characters.find((profile) =>
+      profile.consentStatus === "confirmed" && profile.primaryAsset?.id === selectedImageId,
+    )?.primaryAsset
+    || null;
   const selectedAudio = audioAssets.find((audio) => audio.id === selectedAudioId);
 
   return (
@@ -606,6 +677,54 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <div>
+          {characters.some((profile) => profile.consentStatus === "confirmed" && profile.primaryAsset) ? (
+            <div className="mb-5">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-violet-300">Saved Digital Actors</p>
+                  <p className="mt-1 text-[11px] text-slate-500">Reuse a consent-confirmed Character Forge portrait, voice and performance direction.</p>
+                </div>
+                <span className="rounded-full border border-emerald-300/15 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-200">
+                  Consent confirmed
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {characters
+                  .filter((profile) => profile.consentStatus === "confirmed" && profile.primaryAsset)
+                  .slice(0, 9)
+                  .map((profile) => (
+                    <button
+                      type="button"
+                      key={profile.id}
+                      onClick={() => selectCharacter(profile.id)}
+                      className={`flex items-center gap-2 rounded-xl border p-2 text-left ${
+                        selectedCharacterId === profile.id
+                          ? "border-violet-300 bg-violet-400/10 ring-2 ring-violet-300/20"
+                          : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
+                      }`}
+                    >
+                      <img
+                        src={profile.primaryAsset!.url}
+                        alt={profile.name}
+                        className="h-11 w-11 shrink-0 rounded-lg object-cover"
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-bold text-slate-100">{profile.name}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                          {profile.role || "Reusable character"}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+              {selectedCharacterId ? (
+                <p className="mt-2 text-[11px] text-violet-200">
+                  Saved portrait, voice and acting profile restored. Current lip-sync still requires explicit confirmation below.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Portrait</p>
           {images.length ? (
             <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-6">
