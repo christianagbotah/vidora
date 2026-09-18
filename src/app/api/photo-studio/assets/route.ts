@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       }
 
       const url = await saveGeneratedFile(
-        `photo-studio/assets/${auth.session.userId}/${sha256}.${ext}`,
+        `users/${auth.session.userId}/photo-studio/${sha256}.${ext}`,
         buffer,
       );
       const created = await db.mediaAsset.create({
