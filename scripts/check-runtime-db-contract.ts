@@ -255,7 +255,7 @@ async function main(): Promise<void> {
       `Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai or xAI`,
     );
   }
-  if (providerSettings.textProvider === 'xai' && providerSettings.xaiBaseUrl.replace(/\\/+$/, '') !== 'https://api.x.ai/v1') {
+  if (providerSettings.textProvider === 'xai' && providerSettings.xaiBaseUrl.replace(/\/+$/, '') !== 'https://api.x.ai/v1') {
     throw new Error(
       'Runtime DB contract failed: Billing v2 xAI text pricing is verified only for https://api.x.ai/v1',
     );
