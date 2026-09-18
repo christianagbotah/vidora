@@ -305,6 +305,40 @@ async function submitNewJob(job: {
   }
 }
 
+async function ensureAcceptedJobCaptured(job: {
+  id: string;
+  userId: string;
+  imageAssetId: string;
+  audioAssetId: string;
+  creditReservationId: string | null;
+  providerTaskId: string;
+}): Promise<boolean> {
+  if (!job.creditReservationId) {
+    await markNeedsReconciliation(
+      job.id,
+      `fal request ${job.providerTaskId} is persisted but its credit reservation id is missing.`,
+    );
+    return false;
+  }
+  try {
+    await captureReservedQuoteLine({
+      reservationId: job.creditReservationId,
+      lineKey: talkingPhotoLineKey(job.imageAssetId, job.audioAssetId),
+      userId: job.userId,
+      providerTaskId: job.providerTaskId,
+    });
+    return true;
+  } catch (error) {
+    await markNeedsReconciliation(
+      job.id,
+      `fal request ${job.providerTaskId} exists, but billing capture needs reconciliation: ${
+        error instanceof Error ? error.message : "unknown capture error"
+      }`,
+    );
+    return false;
+  }
+}
+
 async function runJob(jobId: string): Promise<void> {
   const job = await db.talkingPhotoJob.findUnique({
     where: { id: jobId },
@@ -325,6 +359,15 @@ async function runJob(jobId: string): Promise<void> {
   }
 
   if (job.providerTaskId) {
+    const captured = await ensureAcceptedJobCaptured({
+      id: job.id,
+      userId: job.userId,
+      imageAssetId: job.imageAssetId,
+      audioAssetId: job.audioAssetId,
+      creditReservationId: job.creditReservationId,
+      providerTaskId: job.providerTaskId,
+    });
+    if (!captured) return;
     await pollAcceptedJob({ id: job.id, providerTaskId: job.providerTaskId });
     return;
   }
