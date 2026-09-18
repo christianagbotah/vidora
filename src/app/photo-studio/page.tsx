@@ -1,4 +1,5 @@
-"use client";\n/* eslint-disable @next/next/no-img-element */
+"use client";
+/* eslint-disable @next/next/no-img-element */
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -302,8 +303,7 @@ export default function PhotoStudioPage() {
                     onClick={() => toggleAsset(asset.id)}
                     className={`group relative overflow-hidden rounded-2xl border text-left transition ${active ? "border-violet-400 ring-2 ring-violet-400/30" : "border-white/10 hover:border-white/25"}`}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={asset.url} alt={asset.originalName} className="aspect-square w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                      <img src={asset.url} alt={asset.originalName} className="aspect-square w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
                     <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-slate-950/80">
                       {active ? <Check className="h-4 w-4 text-emerald-300" /> : <span className="text-[10px] text-white/60">+</span>}
                     </span>
@@ -413,7 +413,6 @@ export default function PhotoStudioPage() {
                   onClick={() => setPrimaryAssetId(asset.id)}
                   className={`overflow-hidden rounded-xl border ${primaryAssetId === asset.id ? "border-fuchsia-400 ring-2 ring-fuchsia-400/30" : "border-white/10"}`}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={asset.url} alt="" className="aspect-square w-full object-cover" />
                 </button>
               ))}
@@ -462,7 +461,6 @@ export default function PhotoStudioPage() {
                       className={`flex w-full items-center gap-3 rounded-xl border p-2.5 text-left ${characterProfileId === profile.id ? "border-fuchsia-400 bg-fuchsia-500/10" : "border-white/10 bg-white/[0.03]"}`}
                     >
                       {profile.primaryAsset?.url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={profile.primaryAsset.url} alt="" className="h-11 w-11 rounded-lg object-cover" />
                       ) : <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-white/5"><Users className="h-4 w-4" /></div>}
                       <div className="min-w-0 flex-1">
