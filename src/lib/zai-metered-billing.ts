@@ -1,4 +1,9 @@
-import { BillingSafetyError, getCommercialPricingPolicy, quoteProviderCharge } from "@/lib/provider-cost-billing";
+import {
+  BillingSafetyError,
+  getCommercialPricingPolicy,
+  quoteProviderCharge,
+  type BillableProvider,
+} from "@/lib/provider-cost-billing";
 import {
   captureImmediateProviderOperations,
   reserveImmediateProviderOperations,
@@ -48,7 +53,77 @@ export async function resolveConfiguredBillableZaiTextModel(requestedModel?: str
   return resolveZaiTextBillingModel(requestedModel || settings.textModel);
 }
 
+export type BillableTextProvider = "zai" | "xai";
+
+export async function resolveConfiguredBillableTextRoute(
+  requestedModel?: string | null,
+): Promise<{ provider: BillableTextProvider; model: string }> {
+  const settings = await getAIProviderSettings();
+  if (settings.textProvider === "zai") {
+    return {
+      provider: "zai",
+      model: resolveZaiTextBillingModel(requestedModel || settings.textModel),
+    };
+  }
+  if (settings.textProvider === "xai") {
+    const model = (requestedModel || settings.textModel || settings.xaiTextModel).trim();
+    if (!model) {
+      throw new BillingSafetyError(
+        "UNPRICED_TEXT_PROVIDER",
+        "xAI text model is not configured for paid AI text work.",
+      );
+    }
+    return { provider: "xai", model };
+  }
+  throw new BillingSafetyError(
+    "UNPRICED_TEXT_PROVIDER",
+    `Text provider ${settings.textProvider} does not have a verified cost catalog in Billing v2.`,
+  );
+}
+
+export async function reserveMeteredTextOperation(opts: {
+  userId: string;
+  projectId?: string | null;
+  sceneId?: string | null;
+  referenceId: string;
+  idempotencyKey: string;
+  lineKeyPrefix: string;
+  label: string;
+  systemPrompt?: string | null;
+  userPrompt: string;
+  maxOutputTokens?: number;
+  model?: string | null;
+}) {
+  const route = await resolveConfiguredBillableTextRoute(opts.model);
+  const inputTokens = estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt);
+  const maxOutputTokens = safeOutputTokenCeiling(opts.maxOutputTokens, 4_000);
+  const lines = textLines({
+    provider: route.provider,
+    model: route.model,
+    inputTokens,
+    maxOutputTokens,
+    lineKeyPrefix: opts.lineKeyPrefix,
+    label: opts.label,
+  }).map((line) => ({ ...line, sceneId: opts.sceneId ?? null }));
+  const reserved = await reserveImmediateProviderOperations({
+    userId: opts.userId,
+    projectId: opts.projectId ?? null,
+    referenceId: opts.referenceId,
+    operation: `${route.provider}_text`,
+    lines,
+    idempotencyKey: opts.idempotencyKey,
+  });
+  return {
+    ...reserved,
+    provider: route.provider,
+    model: route.model,
+    inputTokens,
+    maxOutputTokens,
+  };
+}
+
 function textLines(opts: {
+  provider?: Extract<BillableProvider, "zai" | "xai">;
   model: string;
   inputTokens: number;
   maxOutputTokens: number;
@@ -57,7 +132,7 @@ function textLines(opts: {
 }): ImmediateProviderLineInput[] {
   return [
     {
-      provider: "zai",
+      provider: opts.provider ?? "zai",
       model: opts.model,
       operation: "text_input",
       quantity: opts.inputTokens,
@@ -65,7 +140,7 @@ function textLines(opts: {
       label: `${opts.label} — input token ceiling`,
     },
     {
-      provider: "zai",
+      provider: opts.provider ?? "zai",
       model: opts.model,
       operation: "text_output",
       quantity: opts.maxOutputTokens,
