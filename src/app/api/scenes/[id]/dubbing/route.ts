@@ -80,9 +80,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           systemPrompt,
           userPrompt: sourceText,
           maxOutputTokens: 4_000,
-            });
+        });
 
         const result = await submitBilledText({
+          provider: translationBilling.provider,
           model: translationBilling.model,
           systemPrompt,
           userPrompt: sourceText,
