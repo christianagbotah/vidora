@@ -135,6 +135,7 @@ export async function runPhotoSlideshowJob(jobId: string): Promise<void> {
       where: { id: job.projectId },
       select: {
         id: true,
+        userId: true,
         projectType: true,
         aspectRatio: true,
         scenes: {
@@ -153,6 +154,9 @@ export async function runPhotoSlideshowJob(jobId: string): Promise<void> {
     });
     if (!project || project.projectType !== "photo-slideshow") {
       throw new Error("Photo slideshow project not found");
+    }
+    if (!job.userId || project.userId !== job.userId) {
+      throw new Error("Photo slideshow media ownership could not be verified");
     }
     if (project.scenes.length === 0) {
       throw new Error("Photo slideshow has no scenes");
@@ -177,8 +181,21 @@ export async function runPhotoSlideshowJob(jobId: string): Promise<void> {
       if (!existsSync(sourcePath)) {
         throw new Error(`Scene ${scene.sceneNumber} source image is missing from storage`);
       }
-      return { scene, sourcePath };
+      return { scene, sourceUrl, sourcePath };
     });
+
+    const uniqueSourceUrls = [...new Set(sources.map((source) => source.sourceUrl))];
+    const ownedAssets = await db.mediaAsset.findMany({
+      where: {
+        userId: job.userId,
+        kind: "image",
+        url: { in: uniqueSourceUrls },
+      },
+      select: { url: true },
+    });
+    if (ownedAssets.length !== uniqueSourceUrls.length) {
+      throw new Error("Photo slideshow source ownership validation failed");
+    }
 
     workDir = path.join(generatedStoreDir(), `.photo-slideshow-${jobId}`);
     await rm(workDir, { recursive: true, force: true });
