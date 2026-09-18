@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useAppStore } from "@/store/useAppStore";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -215,6 +216,26 @@ export default function PhotoStudioPage() {
       setError(reason instanceof Error ? reason.message : "Unable to create project");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const openProjectInStudio = async () => {
+    if (!result?.projectId) return;
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(result.projectId)}`, {
+        cache: "no-store",
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success || !body.project) {
+        throw new Error(body.error || "Unable to open this project in Vidora Studio");
+      }
+      const store = useAppStore.getState();
+      store.setCurrentProject(body.project);
+      store.setCurrentView("studio");
+      window.location.assign("/");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to open this project in Vidora Studio");
     }
   };
 
@@ -485,9 +506,13 @@ export default function PhotoStudioPage() {
                     ) : null}
                   </div>
                 ) : null}
-                <Link href={result.dashboardUrl || "/"} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-white hover:text-emerald-100">
-                  Return to Vidora workspace <ArrowRight className="h-4 w-4" />
-                </Link>
+                <button
+                  type="button"
+                  onClick={() => void openProjectInStudio()}
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-white hover:text-emerald-100"
+                >
+                  Open this project in Vidora Studio <ArrowRight className="h-4 w-4" />
+                </button>
               </div>
             ) : null}
           </div>
