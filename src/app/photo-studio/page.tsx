@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAppStore } from "@/store/useAppStore";
+import { livingPhotoGenerationProgress, type LivingPhotoProgress } from "@/lib/photo-studio-living-progress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -53,6 +54,10 @@ type SlideshowRenderState = {
   error?: string | null;
 };
 
+type LivingPhotoGenerationState = LivingPhotoProgress & {
+  generationRunId?: string;
+};
+
 const modeOptions = [
   {
     id: "animate",
@@ -81,6 +86,8 @@ export default function PhotoStudioPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [renderingSlideshow, setRenderingSlideshow] = useState(false);
   const [slideshowRender, setSlideshowRender] = useState<SlideshowRenderState | null>(null);
+  const [generatingLivingPhotos, setGeneratingLivingPhotos] = useState(false);
+  const [livingPhotoGeneration, setLivingPhotoGeneration] = useState<LivingPhotoGenerationState | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProjectResult | null>(null);
 
@@ -195,6 +202,7 @@ export default function PhotoStudioPage() {
     setError("");
     setResult(null);
     setSlideshowRender(null);
+    setLivingPhotoGeneration(null);
     try {
       const response = await fetch("/api/photo-studio/projects", {
         method: "POST",
@@ -236,6 +244,89 @@ export default function PhotoStudioPage() {
       window.location.assign("/");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to open this project in Vidora Studio");
+    }
+  };
+
+  const generateLivingPhotos = async () => {
+    if (!result || result.mode !== "animate") return;
+    setGeneratingLivingPhotos(true);
+    setError("");
+    try {
+      // GenerationBillingGate intercepts this paid endpoint globally. It loads
+      // the authoritative Billing v2 quote and requires explicit confirmation
+      // before replaying this request with quoteId attached.
+      const response = await fetch("/api/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: result.projectId }),
+      });
+      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (!response.ok || body.success !== true) {
+        if (body.code === "GENERATION_CANCELLED") return;
+        throw new Error(typeof body.error === "string" ? body.error : "Unable to start AI motion generation");
+      }
+
+      const generationRunId = typeof body.generationRunId === "string"
+        ? body.generationRunId
+        : undefined;
+      const alreadyDone = body.alreadyDone === true;
+      setLivingPhotoGeneration({
+        generationRunId,
+        status: alreadyDone ? "done" : "queued",
+        totalScenes: result.sceneCount,
+        completedScenes: alreadyDone ? result.sceneCount : 0,
+        activeScenes: 0,
+        failedScenes: 0,
+        progress: alreadyDone ? 100 : 0,
+        step: typeof body.message === "string"
+          ? body.message
+          : alreadyDone
+            ? "AI motion clips are ready"
+            : "Preparing AI motion generation",
+        error: null,
+      });
+      if (alreadyDone) return;
+
+      for (let attempt = 0; attempt < 900; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        const projectResponse = await fetch(
+          `/api/projects/${encodeURIComponent(result.projectId)}`,
+          { cache: "no-store" },
+        );
+        const projectBody = await projectResponse.json().catch(() => ({})) as Record<string, unknown>;
+        if (!projectResponse.ok || projectBody.success !== true || !projectBody.project) {
+          throw new Error(
+            typeof projectBody.error === "string"
+              ? projectBody.error
+              : "Unable to read Living Photo generation progress",
+          );
+        }
+
+        const progress = livingPhotoGenerationProgress(
+          projectBody.project as Parameters<typeof livingPhotoGenerationProgress>[0],
+        );
+        setLivingPhotoGeneration({ ...progress, generationRunId });
+
+        if (progress.status === "done") return;
+        if (progress.status === "failed") {
+          throw new Error(
+            progress.error ||
+            "AI motion generation needs attention. Open the project in Vidora Studio to review the affected scene.",
+          );
+        }
+      }
+
+      setLivingPhotoGeneration((current) => current
+        ? {
+            ...current,
+            status: "running",
+            step: "Generation is still running in the background. Open Vidora Studio to continue monitoring.",
+          }
+        : current);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "AI motion generation failed");
+    } finally {
+      setGeneratingLivingPhotos(false);
     }
   };
 
@@ -468,6 +559,65 @@ export default function PhotoStudioPage() {
               <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
                 <p className="font-bold text-emerald-200">Project ready · {result.sceneCount} scenes</p>
                 <p className="mt-1 text-sm leading-6 text-emerald-100/80">{result.message}</p>
+                {result.mode === "animate" ? (
+                  <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="max-w-xl">
+                        <p className="text-sm font-bold text-violet-100">AI Living Photo motion</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          Vidora will show a fresh provider-backed cost first. No credits are reserved until you explicitly confirm the generation.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void generateLivingPhotos()}
+                        disabled={
+                          generatingLivingPhotos ||
+                          livingPhotoGeneration?.status === "done" ||
+                          livingPhotoGeneration?.status === "failed"
+                        }
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-violet-300 px-3.5 py-2 text-xs font-black text-slate-950 hover:bg-violet-200 disabled:opacity-50"
+                      >
+                        {generatingLivingPhotos ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                        {livingPhotoGeneration?.status === "done"
+                          ? "AI motion ready"
+                          : livingPhotoGeneration?.status === "failed"
+                            ? "Review in Studio"
+                            : generatingLivingPhotos
+                              ? livingPhotoGeneration
+                                ? "Generating AI motion…"
+                                : "Waiting for confirmation…"
+                              : "Review cost & animate"}
+                      </button>
+                    </div>
+                    {livingPhotoGeneration ? (
+                      <div className="mt-3">
+                        <div className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                          <span>{livingPhotoGeneration.step}</span>
+                          <span>
+                            {livingPhotoGeneration.completedScenes}/{livingPhotoGeneration.totalScenes} · {livingPhotoGeneration.progress}%
+                          </span>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-violet-400 to-fuchsia-400 transition-[width] duration-500"
+                            style={{ width: `${Math.max(0, Math.min(100, livingPhotoGeneration.progress))}%` }}
+                          />
+                        </div>
+                        {livingPhotoGeneration.status === "done" ? (
+                          <p className="mt-2 text-xs font-semibold text-emerald-200">
+                            Every Living Photo scene now has an AI motion clip. Open Vidora Studio to review the cut, voice, music and export.
+                          </p>
+                        ) : null}
+                        {livingPhotoGeneration.status === "failed" ? (
+                          <p className="mt-2 text-xs font-semibold text-amber-200">
+                            {livingPhotoGeneration.error || "One or more scenes need review before generation can continue safely."}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {result.mode === "slideshow" ? (
                   <div className="mt-4 rounded-xl border border-cyan-300/20 bg-slate-950/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
