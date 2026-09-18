@@ -129,6 +129,24 @@ describe("Talking Photo execution", () => {
     expect(component).not.toContain("queue.fal.run");
   });
 
+
+  test("provider readiness is authenticated, secret-free and disables paid UI fail-closed", () => {
+    const route = read("src/app/api/photo-studio/talking-photo/capabilities/route.ts");
+    const component = read("src/components/TalkingPhotoStudio.tsx");
+
+    expect(route).toContain("requireAuth");
+    expect(route).toContain("isFalTalkingPhotoConfigured");
+    expect(route).toContain("available: isFalTalkingPhotoConfigured()");
+    expect(route).not.toContain("process.env.FAL_KEY");
+
+    expect(component).toContain("/api/photo-studio/talking-photo/capabilities");
+    expect(component).toContain("setProviderAvailable");
+    expect(component).toContain("providerAvailable !== true");
+    expect(component).toContain("Provider setup required");
+    expect(component).toContain("will not quote, reserve credits, or submit lip-sync work");
+    expect(component).not.toContain("FAL_KEY");
+  });
+
   test("production topology supervises the Talking Photo worker and passes FAL_KEY server-side", () => {
     const ecosystem = read("ecosystem.config.js");
     const heartbeat = read("scripts/worker-heartbeat.ts");
