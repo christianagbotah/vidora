@@ -5,6 +5,7 @@ import { requireAuth } from "@/lib/project-auth";
 import { assertFalTalkingPhotoConfigured } from "@/lib/fal-lipsync";
 import {
   getBillingQuote,
+  releaseReservationRemainder,
   reserveBillingQuote,
 } from "@/lib/credit-reservations";
 import {
@@ -94,27 +95,14 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
+    let reserved;
     try {
-      const reserved = await reserveBillingQuote({
+      reserved = await reserveBillingQuote({
         quoteId: quote.id,
         userId: auth.session.userId,
         referenceId: job.id,
         idempotencyKey: `talking-photo-job:${job.id}`,
       });
-      job = await db.talkingPhotoJob.update({
-        where: { id: job.id },
-        data: {
-          creditReservationId: reserved.reservation.id,
-          status: "queued",
-          error: null,
-        },
-      });
-      return NextResponse.json({
-        success: true,
-        job,
-        alreadyRunning: false,
-        wallet: reserved.wallet,
-      }, { status: 202 });
     } catch (error) {
       await db.talkingPhotoJob.update({
         where: { id: job.id },
@@ -126,6 +114,40 @@ export async function POST(req: NextRequest) {
       }).catch(() => undefined);
       throw error;
     }
+
+    try {
+      job = await db.talkingPhotoJob.update({
+        where: { id: job.id },
+        data: {
+          creditReservationId: reserved.reservation.id,
+          status: "queued",
+          error: null,
+        },
+      });
+    } catch (error) {
+      await releaseReservationRemainder({
+        reservationId: reserved.reservation.id,
+        userId: auth.session.userId,
+        reason: "Talking Photo queue handoff failed before any provider submission",
+      }).catch(() => undefined);
+      await db.talkingPhotoJob.update({
+        where: { id: job.id },
+        data: {
+          status: "failed",
+          activeKey: null,
+          creditReservationId: reserved.reservation.id,
+          error: "Job could not enter the durable provider queue; reserved credits were released.",
+        },
+      }).catch(() => undefined);
+      throw error;
+    }
+
+    return NextResponse.json({
+      success: true,
+      job,
+      alreadyRunning: false,
+      wallet: reserved.wallet,
+    }, { status: 202 });
   } catch (error) {
     return NextResponse.json({
       success: false,
