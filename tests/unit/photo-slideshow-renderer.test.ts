@@ -62,6 +62,8 @@ describe("provider-free Photo Studio slideshow renderer", () => {
     expect(renderer).toContain("photo-slideshow-");
     expect(renderer).toContain("providerCostUsd: 0");
     expect(renderer).toContain("creditsCharged: 0");
+    expect(renderer).toContain("project.userId !== job.userId");
+    expect(renderer).toContain("userId: job.userId");
     expect(renderer).not.toContain("@/lib/zai");
     expect(renderer).not.toContain("generateVideo(");
     const unlock = renderer.indexOf("data: { activeKey: null, progress: 92");
@@ -75,6 +77,8 @@ describe("provider-free Photo Studio slideshow renderer", () => {
     expect(route).toContain("requireProjectAccess(projectId, true)");
     expect(route).toContain('project.projectType !== "photo-slideshow"');
     expect(route).toContain("resolvePublicAssetPath(sourceUrl)");
+    expect(route).toContain("db.mediaAsset.findMany");
+    expect(route).toContain("userId: access.session.userId");
     expect(route).toContain("activeKey");
     expect(route).toContain("project:");
     expect(route).toContain('mode: "photo_slideshow"');
