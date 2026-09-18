@@ -63,6 +63,8 @@ describe("Photo Studio Motion Director", () => {
     expect(component).toContain("0 credits to direct");
     expect(component).toContain("PHOTO_MOTION_PRESETS");
     expect(component).toContain("maxLength={500}");
+    expect(component).toContain("onDirtyChange");
+    expect(component).toContain("Object.values(next).some(Boolean)");
     expect(component).toContain("/api/photo-studio/projects/");
     expect(component).toContain("/motion/");
     expect(component).not.toContain("/api/generate-video");
@@ -72,5 +74,8 @@ describe("Photo Studio Motion Director", () => {
     expect(directorIndex).toBeGreaterThan(0);
     expect(generationIndex).toBeGreaterThan(directorIndex);
     expect(page).toContain("locked={generatingLivingPhotos || livingPhotoGeneration !== null}");
+    expect(page).toContain("onDirtyChange={setMotionDirectorDirty}");
+    expect(page).toContain("motionDirectorDirty ||");
+    expect(page).toContain("Save motion directions first");
   });
 });
