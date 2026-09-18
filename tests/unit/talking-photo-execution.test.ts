@@ -82,6 +82,8 @@ describe("Talking Photo execution", () => {
     expect(worker).toContain("needs_reconciliation");
     expect(worker).toContain("Automatic resubmission is blocked");
     expect(worker).toContain("providerDefinitelyNotSubmitted");
+    expect(worker).toContain("ensureAcceptedJobCaptured");
+    expect(worker).toContain("captureReservedQuoteLine");
     expect(worker).toContain('current?.status === "submitting"');
     expect(worker).toContain("automatic resubmission is blocked");
   });
