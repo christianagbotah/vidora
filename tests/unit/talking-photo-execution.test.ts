@@ -136,7 +136,7 @@ describe("Talking Photo execution", () => {
 
     expect(route).toContain("requireAuth");
     expect(route).toContain("isFalTalkingPhotoConfigured");
-    expect(route).toContain("available: isFalTalkingPhotoConfigured()");
+    expect(route).toContain("available: await isFalTalkingPhotoConfigured()");
     expect(route).not.toContain("process.env.FAL_KEY");
 
     expect(component).toContain("/api/photo-studio/talking-photo/capabilities");
