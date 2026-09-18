@@ -108,3 +108,22 @@ export function buildPhotoScenePrompt(
   }
   return `Animate source photograph ${index + 1} of ${total} into a believable cinematic moment. Preserve identity and composition. Add subtle breathing, natural blinking and eye movement where a person is visible, realistic hair and clothing motion, environmental micro-motion, and restrained camera movement. Do not change age, face, body shape, wardrobe, product identity, readable text, or scene location.${subject}`;
 }
+
+export function parseStoredPerformanceProfile(value: string | null | undefined): CharacterPerformanceProfile {
+  if (!value) return sanitizePerformanceProfile(null);
+  try {
+    return sanitizePerformanceProfile(JSON.parse(value));
+  } catch {
+    return sanitizePerformanceProfile(null);
+  }
+}
+
+export function performanceDirection(profile: CharacterPerformanceProfile): string {
+  return [
+    `Performance direction: ${profile.actingStyle}`,
+    `emotion ${profile.emotion}`,
+    `${profile.gestureIntensity} gesture intensity`,
+    `${profile.bodyMotion} body motion`,
+    `eye contact ${profile.eyeContact}`,
+  ].join(", ") + ".";
+}
