@@ -197,6 +197,51 @@ async function main(): Promise<void> {
     }
   }
 
+  const speechJobTables = await db.$queryRaw<TableRow[]>`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'TalkingPhotoSpeechJob'
+  `;
+  if (!speechJobTables.some((row) => row.table_name === 'TalkingPhotoSpeechJob')) {
+    throw new Error('Runtime DB contract failed: TalkingPhotoSpeechJob table is missing');
+  }
+
+  const speechJobColumns = await db.$queryRaw<ColumnRow[]>`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'TalkingPhotoSpeechJob'
+      AND column_name IN (
+        'userId','activeKey','status','script','scriptSha256','voice','language',
+        'accent','style','providerModel','billingQuoteId','creditReservationId',
+        'outputAssetId','chunkCount','error','updatedAt'
+      )
+  `;
+  const speechJobColumnNames = new Set(speechJobColumns.map((row) => row.column_name));
+  const missingSpeechJobColumns = [
+    'userId','activeKey','status','script','scriptSha256','voice','language',
+    'accent','style','providerModel','billingQuoteId','creditReservationId',
+    'outputAssetId','chunkCount','error','updatedAt',
+  ].filter((name) => !speechJobColumnNames.has(name));
+  if (missingSpeechJobColumns.length) {
+    throw new Error(`Runtime DB contract failed: TalkingPhotoSpeechJob column(s) missing: ${missingSpeechJobColumns.join(', ')}`);
+  }
+
+  const speechJobIndexes = await db.$queryRaw<IndexRow[]>`
+    SELECT indexname, indexdef FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'TalkingPhotoSpeechJob'
+  `;
+  if (!hasUniqueIndex(speechJobIndexes, 'activekey')) {
+    throw new Error('Runtime DB contract failed: TalkingPhotoSpeechJob.activeKey must be unique');
+  }
+  const speechJobIndexNames = new Set(speechJobIndexes.map((row) => row.indexname));
+  for (const required of [
+    'TalkingPhotoSpeechJob_userId_createdAt_idx',
+    'TalkingPhotoSpeechJob_status_updatedAt_idx',
+    'TalkingPhotoSpeechJob_scriptSha256_idx',
+  ]) {
+    if (!speechJobIndexNames.has(required)) {
+      throw new Error(`Runtime DB contract failed: Digital Actor speech index missing: ${required}`);
+    }
+  }
+
   const generationColumns = await db.$queryRaw<ColumnRow[]>`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'GenerationRun'
