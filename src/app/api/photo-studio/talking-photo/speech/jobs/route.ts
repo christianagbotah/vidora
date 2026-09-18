@@ -53,6 +53,26 @@ export async function POST(req: NextRequest) {
       userId: auth.session.userId,
       spec,
     });
+    const completed = await db.talkingPhotoSpeechJob.findFirst({
+      where: {
+        userId: auth.session.userId,
+        scriptSha256: matched.fingerprint,
+        providerModel: matched.model,
+        status: "completed",
+        outputAssetId: { not: null },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (completed) {
+      return NextResponse.json({
+        success: true,
+        job: completed,
+        alreadyRunning: false,
+        replayed: true,
+        message: "This exact Digital Actor voice already exists and was reused without another charge.",
+      });
+    }
+
     const key = activeKey(auth.session.userId, matched.fingerprint);
     const existing = await db.talkingPhotoSpeechJob.findUnique({ where: { activeKey: key } });
     if (existing) {
