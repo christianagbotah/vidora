@@ -412,7 +412,7 @@ async function runForever(): Promise<void> {
       speechJobId = await claimTalkingPhotoSpeechJob();
       if (speechJobId) {
         await runTalkingPhotoSpeechJob(speechJobId);
-        continue;
+        speechJobId = null;
       }
 
       jobId = await claimJob();
