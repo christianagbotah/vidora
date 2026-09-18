@@ -98,3 +98,17 @@ export function buildDirectedPhotoPrompt(
     `Motion Director (${direction.label}): ${direction.instruction}`,
   ].filter(Boolean).join(" ");
 }
+
+
+export function photoMotionPresetFromCameraMove(value: unknown): PhotoMotionPresetId {
+  if (typeof value !== "string" || !value.trim()) return "natural";
+  return PHOTO_MOTION_PRESETS.find((preset) => preset.cameraMove === value)?.id || "natural";
+}
+
+export function extractCustomPhotoMotionDirection(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const marker = "Motion Director (Custom direction):";
+  const index = value.lastIndexOf(marker);
+  if (index < 0) return "";
+  return sanitizePhotoMotionCustomDirection(value.slice(index + marker.length));
+}
