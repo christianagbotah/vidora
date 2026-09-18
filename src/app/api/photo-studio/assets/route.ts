@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import type { MediaAsset } from "@prisma/client";
 import { db } from "@/lib/db";
 import { saveGeneratedFile } from "@/lib/generated-store";
 import { requireAuth } from "@/lib/project-auth";
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const assets = [];
+    const assets: MediaAsset[] = [];
     for (const file of files) {
       if (file.size > PHOTO_STUDIO_MAX_IMAGE_BYTES) {
         return NextResponse.json(
