@@ -44,13 +44,16 @@ describe("full preview Cloudflare timeout regression", () => {
     expect(route).toContain('"Cache-Control": "no-cache, no-store, no-transform"');
   });
 
-  test("export worker dispatches only preview jobs to the durable preview renderer", () => {
+  test("export worker dispatches durable preview and local slideshow jobs without final exports", () => {
     const worker = read("scripts/export-worker.ts");
     const dispatcher = read("src/lib/export-job-dispatch.ts");
     const previewJob = read("src/lib/full-preview-job.ts");
     expect(worker).toContain("runQueuedMediaJob(jobId)");
     expect(worker).toContain('"params" LIKE \'%"mode":"preview"%\'');
-    expect(dispatcher).toContain('jobMode(job.params) !== "preview"');
+    expect(worker).toContain('"params" LIKE \'%"mode":"photo_slideshow"%\'');
+    expect(dispatcher).toContain('if (mode === "preview")');
+    expect(dispatcher).toContain('if (mode === "photo_slideshow")');
+    expect(dispatcher).toContain("runPhotoSlideshowJob(jobId)");
     expect(dispatcher).toContain("runFullPreviewJob(jobId)");
     expect(dispatcher).not.toContain("runExportJob(jobId)");
     expect(previewJob).toContain("renderFullProjectPreview");
