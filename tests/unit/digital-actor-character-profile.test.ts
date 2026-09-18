@@ -41,6 +41,8 @@ describe("Digital Actor Character Profile reuse", () => {
     expect(component).toContain("confirmedProfileHasImage");
     expect(component).toContain("profile.primaryAsset?.id === selectedImageId");
     expect(component).toContain("&& !confirmedProfileHasImage");
+    expect(component).toContain("const selectedImage = images.find");
+    expect(component).toContain('profile.consentStatus === "confirmed" && profile.primaryAsset?.id === selectedImageId');
   });
 
   test("reusable character consent never replaces current paid-job confirmation", () => {
