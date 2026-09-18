@@ -60,6 +60,8 @@ const CONFIG_SCHEMA: Record<string, string> = {
   compatible_base_url: "OpenAI-compatible API base URL",
   compatible_api_key: "OpenAI-compatible API key",
   compatible_text_model: "Default model for the OpenAI-compatible provider",
+
+  fal_api_key: "fal API key for Sync-3 Talking Photo / lip-sync",
 };
 
 const SECRET_ENV: Record<string, string> = {
@@ -77,6 +79,7 @@ const SECRET_ENV: Record<string, string> = {
   xai_tts_api_key: "XAI_TTS_API_KEY",
   elevenlabs_api_key: "ELEVENLABS_API_KEY",
   compatible_api_key: "AI_COMPATIBLE_API_KEY",
+  fal_api_key: "FAL_KEY",
 };
 
 const DEFAULT_VALUES: Record<string, string> = {
@@ -192,8 +195,9 @@ export async function GET(req: NextRequest) {
         text: ["zai", "xai", "compatible"],
         video: ["zai"],
         tts: ["zai", "qwen", "grok", "elevenlabs"],
+        talkingPhoto: ["fal"],
       },
-      secretPolicy: "Optional TTS provider keys may be entered by admins and are encrypted at rest. Grok TTS can reuse the server XAI_API_KEY when no dedicated TTS key is configured. Other provider/payment secrets remain environment-managed.",
+      secretPolicy: "Optional execution-provider keys for TTS and fal Talking Photo may be entered by admins and are encrypted at rest. Grok TTS can reuse the server XAI_API_KEY when no dedicated TTS key is configured. Core text/video and payment secrets remain environment-managed.",
     });
   } catch (error) {
     console.error("Admin get config error:", error);
@@ -254,7 +258,7 @@ export async function PUT(req: NextRequest) {
       updatedSecretKeys,
       blockedSecretKeys,
       ...(blockedSecretKeys.length
-        ? { warning: "Some protected secrets were not changed. Only optional TTS provider keys can be saved from this page." }
+        ? { warning: "Some protected secrets were not changed. Only approved optional execution-provider keys can be saved from this page." }
         : {}),
     });
   } catch (error) {
