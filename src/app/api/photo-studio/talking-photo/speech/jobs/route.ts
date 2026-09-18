@@ -63,14 +63,24 @@ export async function POST(req: NextRequest) {
       },
       orderBy: { createdAt: "desc" },
     });
-    if (completed) {
-      return NextResponse.json({
-        success: true,
-        job: completed,
-        alreadyRunning: false,
-        replayed: true,
-        message: "This exact Digital Actor voice already exists and was reused without another charge.",
+    if (completed?.outputAssetId) {
+      const outputAsset = await db.mediaAsset.findFirst({
+        where: {
+          id: completed.outputAssetId,
+          userId: auth.session.userId,
+          kind: "audio",
+        },
+        select: { id: true },
       });
+      if (outputAsset) {
+        return NextResponse.json({
+          success: true,
+          job: completed,
+          alreadyRunning: false,
+          replayed: true,
+          message: "This exact Digital Actor voice already exists and was reused without another charge.",
+        });
+      }
     }
 
     const key = activeKey(auth.session.userId, matched.fingerprint);
