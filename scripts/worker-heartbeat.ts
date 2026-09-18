@@ -5,6 +5,7 @@ export const VIDORA_DURABLE_WORKERS = [
   "vidora-generation-worker",
   "vidora-export-worker",
   "vidora-talking-photo-worker",
+  "vidora-talking-photo-speech-worker",
 ] as const;
 
 export type VidoraDurableWorkerName = typeof VIDORA_DURABLE_WORKERS[number];
