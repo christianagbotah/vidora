@@ -10,6 +10,7 @@ import {
   type ImmediateProviderLineInput,
 } from "@/lib/immediate-provider-billing";
 import { getAIProviderSettings } from "@/lib/ai-provider-router";
+import { getConfigValue } from "@/lib/secure-config";
 import {
   resolveZaiAsrBillingModel,
   resolveZaiSecondaryTextBillingModel,
@@ -70,6 +71,13 @@ export async function resolveConfiguredBillableTextRoute(
       throw new BillingSafetyError(
         "UNPRICED_TEXT_PROVIDER",
         "Billing v2 xAI pricing is verified only for the global https://api.x.ai/v1 endpoint.",
+      );
+    }
+    const apiKey = await getConfigValue("xai_api_key", "XAI_API_KEY");
+    if (!apiKey) {
+      throw new BillingSafetyError(
+        "PROVIDER_NOT_CONFIGURED",
+        "xAI API key is not configured for paid AI text work.",
       );
     }
     const model = (requestedModel || settings.textModel || settings.xaiTextModel).trim();
