@@ -129,6 +129,19 @@ async function authorizeGeneratedMedia(
     return { allowed: access.ok, publicCache: false };
   }
 
+  const talkingPhoto = await db.talkingPhotoJob.findFirst({
+    where: { videoUrl: mediaUrl },
+    select: { userId: true },
+  });
+  if (talkingPhoto) {
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed: auth.session.userId === talkingPhoto.userId || auth.session.role === "admin",
+      publicCache: false,
+    };
+  }
+
   const brand = await db.brandKit.findFirst({
     where: { logoUrl: mediaUrl },
     select: { userId: true },
