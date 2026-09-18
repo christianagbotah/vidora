@@ -386,8 +386,8 @@ export default function PhotoStudioPage() {
               <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
                 <p className="font-bold text-emerald-200">Project ready · {result.sceneCount} scenes</p>
                 <p className="mt-1 text-sm leading-6 text-emerald-100/80">{result.message}</p>
-                <Link href={result.dashboardUrl || "/?view=dashboard"} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-white hover:text-emerald-100">
-                  Open Vidora dashboard <ArrowRight className="h-4 w-4" />
+                <Link href={result.dashboardUrl || "/"} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-white hover:text-emerald-100">
+                  Return to Vidora workspace <ArrowRight className="h-4 w-4" />
                 </Link>
               </div>
             ) : null}
