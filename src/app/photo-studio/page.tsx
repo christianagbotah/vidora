@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useAppStore } from "@/store/useAppStore";
 import { PhotoMotionDirector } from "@/components/PhotoMotionDirector";
+import { TalkingPhotoStudio } from "@/components/TalkingPhotoStudio";
 import { livingPhotoGenerationProgress, type LivingPhotoProgress } from "@/lib/photo-studio-living-progress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -761,6 +762,8 @@ export default function PhotoStudioPage() {
             ) : null}
           </div>
         </section>
+
+        <TalkingPhotoStudio images={assets} />
 
         <section className="rounded-3xl border border-white/10 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/10 to-cyan-500/10 p-6 sm:p-8">
           <div className="grid gap-5 md:grid-cols-3">
