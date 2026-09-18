@@ -33,6 +33,7 @@ model User {
   mediaAssets              MediaAsset[]
   characterProfiles        CharacterProfile[]
   talkingPhotoJobs         TalkingPhotoJob[]
+  talkingPhotoSpeechJobs   TalkingPhotoSpeechJob[]
 }
 
 model VideoProject {
@@ -161,6 +162,7 @@ model MediaAsset {
   characterProfiles CharacterProfile[] @relation("CharacterProfilePrimaryAsset")
   talkingPhotoImageJobs TalkingPhotoJob[] @relation("TalkingPhotoImageAsset")
   talkingPhotoAudioJobs TalkingPhotoJob[] @relation("TalkingPhotoAudioAsset")
+  talkingPhotoSpeechJobs TalkingPhotoSpeechJob[] @relation("TalkingPhotoSpeechAsset")
 
   @@unique([userId, sha256])
   @@index([userId, createdAt])
@@ -218,6 +220,35 @@ model TalkingPhotoJob {
   @@index([status, updatedAt])
   @@index([providerTaskId])
   @@index([reconciliationKind, reconciliationAt])
+}
+
+model TalkingPhotoSpeechJob {
+  id                  String      @id
+  userId              String
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fingerprint         String
+  activeKey           String?     @unique
+  scriptText          String      @db.Text
+  voice               String
+  language            String      @default("en")
+  accent              String      @default("auto")
+  model               String
+  status              String      @default("quoted")
+  billingQuoteId      String      @unique
+  creditReservationId String?
+  outputAssetId       String?
+  outputAsset         MediaAsset? @relation("TalkingPhotoSpeechAsset", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  chunkCount          Int
+  completedChunks     Int         @default(0)
+  error               String?     @db.Text
+  reconciliationKind  String?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, fingerprint])
+  @@index([status, updatedAt])
+  @@index([outputAssetId])
 }
 
 model GenerationHistory {
