@@ -30,6 +30,7 @@ type DirectionDraft = {
 interface PhotoMotionDirectorProps {
   projectId: string;
   locked?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 function draftForScene(scene: MotionScene): DirectionDraft {
@@ -45,12 +46,14 @@ function draftForScene(scene: MotionScene): DirectionDraft {
 export function PhotoMotionDirector({
   projectId,
   locked = false,
+  onDirtyChange,
 }: PhotoMotionDirectorProps) {
   const [scenes, setScenes] = useState<MotionScene[]>([]);
   const [drafts, setDrafts] = useState<Record<string, DirectionDraft>>({});
   const [loading, setLoading] = useState(true);
   const [savingSceneId, setSavingSceneId] = useState("");
   const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -74,6 +77,8 @@ export function PhotoMotionDirector({
         setDrafts(Object.fromEntries(
           nextScenes.map((scene) => [scene.id, draftForScene(scene)]),
         ));
+        setDirty({});
+        onDirtyChange?.(false);
       } catch (reason) {
         if (!cancelled) {
           setError(reason instanceof Error ? reason.message : "Unable to load Motion Director");
@@ -87,7 +92,7 @@ export function PhotoMotionDirector({
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, onDirtyChange]);
 
   const updateDraft = (sceneId: string, patch: Partial<DirectionDraft>) => {
     setDrafts((current) => ({
@@ -98,6 +103,11 @@ export function PhotoMotionDirector({
       },
     }));
     setSaved((current) => ({ ...current, [sceneId]: false }));
+    setDirty((current) => {
+      const next = { ...current, [sceneId]: true };
+      onDirtyChange?.(Object.values(next).some(Boolean));
+      return next;
+    });
   };
 
   const saveDirection = async (sceneId: string) => {
@@ -130,6 +140,11 @@ export function PhotoMotionDirector({
         scene.id === sceneId ? { ...scene, ...body.scene } : scene
       )));
       setSaved((current) => ({ ...current, [sceneId]: true }));
+      setDirty((current) => {
+        const next = { ...current, [sceneId]: false };
+        onDirtyChange?.(Object.values(next).some(Boolean));
+        return next;
+      });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save motion direction");
     } finally {
