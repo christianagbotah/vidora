@@ -41,6 +41,24 @@ type TalkingPhotoQuote = {
   shortfallCredits: number;
 };
 
+type SpeechQuote = {
+  quoteId: string;
+  creditsRequired: number;
+  customerValueUsd: number;
+  customerValueGhs?: number | null;
+  wallet: { availableCredits: number };
+  hasEnoughCredits: boolean;
+  shortfallCredits: number;
+  chunkCount: number;
+};
+
+type SpeechJob = {
+  id: string;
+  status: string;
+  outputAssetId?: string | null;
+  error?: string | null;
+};
+
 type TalkingPhotoJob = {
   id: string;
   imageAssetId?: string;
@@ -93,6 +111,13 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const [recentJobs, setRecentJobs] = useState<TalkingPhotoJob[]>([]);
   const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null);
+  const [speechScript, setSpeechScript] = useState("");
+  const [speechVoice, setSpeechVoice] = useState("tongtong");
+  const [speechStyle, setSpeechStyle] = useState("natural, warm and expressive");
+  const [speechQuote, setSpeechQuote] = useState<SpeechQuote | null>(null);
+  const [speechJob, setSpeechJob] = useState<SpeechJob | null>(null);
+  const [speechQuoting, setSpeechQuoting] = useState(false);
+  const [speechStarting, setSpeechStarting] = useState(false);
   const [recordingSupported, setRecordingSupported] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -138,15 +163,17 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     void (async () => {
       setLoadingAudio(true);
       try {
-        const [audioResponse, jobsResponse, capabilityResponse] = await Promise.all([
+        const [audioResponse, jobsResponse, capabilityResponse, speechJobsResponse] = await Promise.all([
           fetch("/api/photo-studio/audio-assets", { cache: "no-store" }),
           fetch("/api/photo-studio/talking-photo/jobs", { cache: "no-store" }),
           fetch("/api/photo-studio/talking-photo/capabilities", { cache: "no-store" }),
+          fetch("/api/photo-studio/talking-photo/speech/jobs", { cache: "no-store" }),
         ]);
-        const [audioBody, jobsBody, capabilityBody] = await Promise.all([
+        const [audioBody, jobsBody, capabilityBody, speechJobsBody] = await Promise.all([
           audioResponse.json().catch(() => ({})),
           jobsResponse.json().catch(() => ({})),
           capabilityResponse.json().catch(() => ({})),
+          speechJobsResponse.json().catch(() => ({})),
         ]);
         if (!audioResponse.ok || !audioBody.success) {
           throw new Error(audioBody.error || "Unable to load audio library");
@@ -157,8 +184,12 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         if (!capabilityResponse.ok || !capabilityBody.success) {
           throw new Error(capabilityBody.error || "Unable to verify Talking Photo provider readiness");
         }
+        if (!speechJobsResponse.ok || !speechJobsBody.success) {
+          throw new Error(speechJobsBody.error || "Unable to load recent Digital Actor voice jobs");
+        }
         const items = Array.isArray(audioBody.assets) ? audioBody.assets as AudioAsset[] : [];
         const jobs = Array.isArray(jobsBody.jobs) ? jobsBody.jobs as TalkingPhotoJob[] : [];
+        const speechJobs = Array.isArray(speechJobsBody.jobs) ? speechJobsBody.jobs as SpeechJob[] : [];
         if (cancelled) return;
         setAudioAssets(items);
         setRecentJobs(jobs);
@@ -167,6 +198,10 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         const active = jobs.find((candidate) =>
           !["completed", "failed", "needs_reconciliation"].includes(candidate.status),
         );
+        const activeSpeech = speechJobs.find((candidate) =>
+          !["completed", "failed", "needs_reconciliation"].includes(candidate.status),
+        );
+        if (activeSpeech) setSpeechJob(activeSpeech);
         if (active) {
           setJob(active);
           if (active.imageAssetId) setSelectedImageId(active.imageAssetId);
@@ -345,6 +380,100 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
           ? "Microphone permission was denied. Allow microphone access or upload an audio file instead."
           : "Vidora could not start microphone recording. Upload an audio file instead.",
       );
+    }
+  };
+
+  const reviewSpeechCost = async () => {
+    if (!speechScript.trim()) return;
+    setSpeechQuoting(true);
+    setSpeechQuote(null);
+    setSpeechJob(null);
+    setError("");
+    try {
+      const response = await fetch("/api/photo-studio/talking-photo/speech/quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          script: speechScript,
+          voice: speechVoice,
+          language: "en",
+          accent: "ghanaian",
+          style: speechStyle,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) throw new Error(body.error || "Unable to calculate Digital Actor voice cost");
+      setSpeechQuote(body as SpeechQuote);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to calculate Digital Actor voice cost");
+    } finally {
+      setSpeechQuoting(false);
+    }
+  };
+
+  const pollSpeechJob = async (jobId: string) => {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      const response = await fetch(
+        `/api/photo-studio/talking-photo/speech/jobs/${encodeURIComponent(jobId)}`,
+        { cache: "no-store" },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success || !body.job) {
+        throw new Error(body.error || "Unable to read Digital Actor voice progress");
+      }
+      const next = body.job as SpeechJob;
+      setSpeechJob(next);
+      if (next.status === "completed") {
+        const asset = body.outputAsset as AudioAsset | null;
+        if (!asset) throw new Error("Voice completed but its private audio asset is unavailable");
+        setAudioAssets((current) => {
+          const map = new Map(current.map((item) => [item.id, item]));
+          map.set(asset.id, asset);
+          return [...map.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        });
+        setSelectedAudioId(asset.id);
+        setQuote(null);
+        setJob(null);
+        setConsentConfirmed(false);
+        return;
+      }
+      if (next.status === "failed" || next.status === "needs_reconciliation") {
+        throw new Error(next.error || "Digital Actor voice needs attention");
+      }
+    }
+    throw new Error("Digital Actor voice is still processing. The durable job is safe; return here to check again.");
+  };
+
+  const startSpeechJob = async () => {
+    if (!speechQuote || !speechScript.trim()) return;
+    setSpeechStarting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/photo-studio/talking-photo/speech/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quoteId: speechQuote.quoteId,
+          script: speechScript,
+          voice: speechVoice,
+          language: "en",
+          accent: "ghanaian",
+          style: speechStyle,
+          billingConfirmed: true,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success || !body.job) {
+        throw new Error(body.error || "Unable to start Digital Actor voice");
+      }
+      const next = body.job as SpeechJob;
+      setSpeechJob(next);
+      if (next.status !== "completed") await pollSpeechJob(next.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Digital Actor voice failed");
+    } finally {
+      setSpeechStarting(false);
     }
   };
 
@@ -550,6 +679,125 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
               <p className="mt-2 text-[11px] text-slate-500">
                 Record directly in Vidora or upload an existing audio file. Recording itself uses no provider credits.
               </p>
+            ) : null}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-fuchsia-300/15 bg-fuchsia-400/5 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-fuchsia-200">Scripted Digital Actor</p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                  Type the dialogue, review the exact Qwen TTS character charge, then generate measured speech. Lip-sync is priced separately afterward from the real audio duration.
+                </p>
+              </div>
+              <span className="rounded-full border border-fuchsia-300/15 px-2.5 py-1 text-[10px] font-bold text-fuchsia-200">
+                Two-stage billing
+              </span>
+            </div>
+            <textarea
+              value={speechScript}
+              onChange={(event) => {
+                setSpeechScript(event.target.value);
+                setSpeechQuote(null);
+                setSpeechJob(null);
+              }}
+              maxLength={3500}
+              rows={4}
+              placeholder="Type exactly what the person should say…"
+              className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2 text-sm outline-none focus:border-fuchsia-300/40"
+            />
+            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Single-speaker script · Qwen voice generation</span>
+              <span>{speechScript.length}/3500</span>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <select
+                value={speechVoice}
+                onChange={(event) => {
+                  setSpeechVoice(event.target.value);
+                  setSpeechQuote(null);
+                }}
+                className="min-h-10 rounded-xl border border-white/10 bg-slate-950/60 px-3 text-xs"
+              >
+                <option value="tongtong">Warm narrator</option>
+                <option value="xiaochen">Professional calm</option>
+                <option value="jam">British gentleman</option>
+                <option value="kazi">Clear standard</option>
+                <option value="luodo">Expressive</option>
+                <option value="chuichui">Playful</option>
+              </select>
+              <input
+                value={speechStyle}
+                onChange={(event) => {
+                  setSpeechStyle(event.target.value);
+                  setSpeechQuote(null);
+                }}
+                maxLength={120}
+                placeholder="Delivery style"
+                className="min-h-10 rounded-xl border border-white/10 bg-slate-950/60 px-3 text-xs"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void reviewSpeechCost()}
+              disabled={!speechScript.trim() || speechQuoting || speechStarting}
+              className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-xl border border-fuchsia-300/20 bg-fuchsia-400/10 px-4 py-2 text-xs font-black text-fuchsia-100 hover:bg-fuchsia-400/15 disabled:opacity-40"
+            >
+              {speechQuoting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {speechQuoting ? "Pricing voice…" : "Review voice cost"}
+            </button>
+
+            {speechQuote ? (
+              <div className="mt-3 rounded-xl border border-fuchsia-300/15 bg-slate-950/45 p-3">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div><p className="text-[10px] uppercase text-slate-500">Voice charge</p><p className="mt-1 text-sm font-bold">{speechQuote.creditsRequired} credits</p></div>
+                  <div><p className="text-[10px] uppercase text-slate-500">Wallet</p><p className="mt-1 text-sm font-bold">{speechQuote.wallet.availableCredits} credits</p></div>
+                  <div><p className="text-[10px] uppercase text-slate-500">Provider parts</p><p className="mt-1 text-sm font-bold">{speechQuote.chunkCount}</p></div>
+                </div>
+                {!speechQuote.hasEnoughCredits ? (
+                  <p className="mt-2 text-xs font-semibold text-amber-200">You need {speechQuote.shortfallCredits} more credits.</p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void startSpeechJob()}
+                    disabled={speechStarting}
+                    className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-fuchsia-500 px-4 py-2 text-xs font-black hover:bg-fuchsia-400 disabled:opacity-40"
+                  >
+                    {speechStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <AudioLines className="h-4 w-4" />}
+                    {speechStarting ? "Generating speech…" : `Confirm ${speechQuote.creditsRequired} credits & generate voice`}
+                  </button>
+                )}
+              </div>
+            ) : null}
+
+            {speechJob ? (
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
+                <p className="font-bold">
+                  {speechJob.status === "completed"
+                    ? "Voice ready and selected below"
+                    : speechJob.status === "needs_reconciliation"
+                      ? "Voice job needs safe reconciliation"
+                      : speechJob.status === "failed"
+                        ? "Voice generation failed"
+                        : "Durable voice generation in progress…"}
+                </p>
+                {speechJob.error ? <p className="mt-1 text-amber-100">{speechJob.error}</p> : null}
+                {!["completed", "failed", "needs_reconciliation"].includes(speechJob.status) && !speechStarting ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeechStarting(true);
+                      setError("");
+                      void pollSpeechJob(speechJob.id)
+                        .catch((reason) => setError(reason instanceof Error ? reason.message : "Unable to resume voice job"))
+                        .finally(() => setSpeechStarting(false));
+                    }}
+                    className="mt-2 font-bold text-fuchsia-200 hover:text-fuchsia-100"
+                  >
+                    Resume monitoring
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </div>
 
