@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-        const lineKeyPrefix = `${operationKey}:billing`;
+      const lineKeyPrefix = `${operationKey}:billing`;
       const billing = await reserveMeteredTextOperation({
         userId: authResult.session.userId,
         projectId,
