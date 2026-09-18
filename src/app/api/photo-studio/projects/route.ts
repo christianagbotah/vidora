@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
       message: mode === "slideshow"
         ? "Your cinematic slideshow storyboard is ready. Review it in Vidora, then generate motion when you are ready to spend credits."
         : "Your reference-backed photo animation project is ready. Review it before starting paid motion generation.",
-      dashboardUrl: "/?view=dashboard",
+      dashboardUrl: "/",
     }, { status: 201 });
   } catch (error) {
     console.error("[photo-studio projects POST]", error);
