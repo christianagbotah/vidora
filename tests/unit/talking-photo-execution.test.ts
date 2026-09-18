@@ -54,13 +54,15 @@ describe("Talking Photo execution", () => {
 
   test("job start requires both permission and explicit billing confirmation before reservation", () => {
     const route = read("src/app/api/photo-studio/talking-photo/jobs/route.ts");
-    const reserve = route.indexOf("reserveBillingQuote");
+    const reserve = route.indexOf("await reserveBillingQuote({");
     expect(route).toContain("body.consentConfirmed !== true");
     expect(route).toContain("body.billingConfirmed !== true");
     expect(route).toContain("requireMatchingTalkingPhotoQuote");
     expect(route).toContain("assertFalTalkingPhotoConfigured");
     expect(route).toContain('status: "reserving"');
-    expect(reserve).toBeGreaterThan(route.indexOf("requireMatchingTalkingPhotoQuote"));
+    const quoteMatch = route.indexOf("requireMatchingTalkingPhotoQuote({");
+    expect(quoteMatch).toBeGreaterThan(0);
+    expect(reserve).toBeGreaterThan(quoteMatch);
     expect(route).not.toContain("submitFalTalkingPhoto");
   });
 
