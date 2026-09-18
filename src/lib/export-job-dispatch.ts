@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { runFullPreviewJob } from "@/lib/full-preview-job";
+import { runPhotoSlideshowJob } from "@/lib/photo-slideshow-render";
 
 function jobMode(params: string | null): string {
   if (!params) return "final";
@@ -12,7 +13,7 @@ function jobMode(params: string | null): string {
 }
 
 /**
- * The durable export worker now owns Full Preview rendering only.
+ * The durable export worker owns Full Preview and provider-free Photo Studio slideshow rendering.
  *
  * Final exports are intentionally excluded: their ffmpeg stdout is streamed
  * directly to the authenticated browser download response, so allowing the
@@ -26,10 +27,15 @@ export async function runQueuedMediaJob(jobId: string): Promise<void> {
   });
   if (!job) return;
 
-  if (jobMode(job.params) !== "preview") {
-    console.warn(`[export-worker] ignored non-preview job ${jobId}; final exports are browser-streamed`);
+  const mode = jobMode(job.params);
+  if (mode === "preview") {
+    await runFullPreviewJob(jobId);
+    return;
+  }
+  if (mode === "photo_slideshow") {
+    await runPhotoSlideshowJob(jobId);
     return;
   }
 
-  await runFullPreviewJob(jobId);
+  console.warn(`[export-worker] ignored unsupported background media job ${jobId}; final exports are browser-streamed`);
 }
