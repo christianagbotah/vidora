@@ -78,7 +78,6 @@ export function PhotoMotionDirector({
           nextScenes.map((scene) => [scene.id, draftForScene(scene)]),
         ));
         setDirty({});
-        onDirtyChange?.(false);
       } catch (reason) {
         if (!cancelled) {
           setError(reason instanceof Error ? reason.message : "Unable to load Motion Director");
@@ -94,6 +93,10 @@ export function PhotoMotionDirector({
     };
   }, [projectId, onDirtyChange]);
 
+  useEffect(() => {
+    onDirtyChange?.(Object.values(dirty).some(Boolean));
+  }, [dirty, onDirtyChange]);
+
   const updateDraft = (sceneId: string, patch: Partial<DirectionDraft>) => {
     setDrafts((current) => ({
       ...current,
@@ -103,11 +106,7 @@ export function PhotoMotionDirector({
       },
     }));
     setSaved((current) => ({ ...current, [sceneId]: false }));
-    setDirty((current) => {
-      const next = { ...current, [sceneId]: true };
-      onDirtyChange?.(Object.values(next).some(Boolean));
-      return next;
-    });
+    setDirty((current) => ({ ...current, [sceneId]: true }));
   };
 
   const saveDirection = async (sceneId: string) => {
@@ -140,11 +139,7 @@ export function PhotoMotionDirector({
         scene.id === sceneId ? { ...scene, ...body.scene } : scene
       )));
       setSaved((current) => ({ ...current, [sceneId]: true }));
-      setDirty((current) => {
-        const next = { ...current, [sceneId]: false };
-        onDirtyChange?.(Object.values(next).some(Boolean));
-        return next;
-      });
+      setDirty((current) => ({ ...current, [sceneId]: false }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save motion direction");
     } finally {
