@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Preloader, ViewTransitionOverlay } from "@/components/Preloader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import VoiceStudioLauncher from "@/components/VoiceStudioLauncher";
+import PhotoStudioLauncher from "@/components/PhotoStudioLauncher";
 import { GenerationBillingGate } from "@/components/GenerationBillingGate";
 import { ExportDownloadBridge } from "@/components/ExportDownloadBridge";
 
@@ -110,6 +111,7 @@ export default function RootLayout({
           <GenerationBillingGate />
           <ExportDownloadBridge />
           <VoiceStudioLauncher />
+          <PhotoStudioLauncher />
           <Toaster />
         </ErrorBoundary>
       </body>
