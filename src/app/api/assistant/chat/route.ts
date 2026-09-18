@@ -1,11 +1,10 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
-import { zai } from "@/lib/zai";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { quoteFreeZaiTextAttempt } from "@/lib/zai-metered-billing";
+import { quoteFreeTextAttempt, submitBilledText } from "@/lib/metered-text-billing";
 
 export const runtime = "nodejs";
 
@@ -93,11 +92,10 @@ export async function POST(req: NextRequest) {
           .join("\n")}\n\nUser's new message: ${message}`
       : message;
 
-    const cost = await quoteFreeZaiTextAttempt({
+    const cost = await quoteFreeTextAttempt({
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
       maxOutputTokens: 1_000,
-      requireConfiguredPrimary: false,
     });
 
     const quota = await consumePreviewQuota(userId, "storyboard");
@@ -119,14 +117,16 @@ export async function POST(req: NextRequest) {
       customCostUsd: cost.providerCostUsd,
     });
 
-    const reply = await zai.chat({
+    const result = await submitBilledText({
+      provider: cost.provider,
+      model: cost.model,
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
-      model: cost.model,
+      maxOutputTokens: 1_000,
       thinking: "disabled",
-      extra: { max_tokens: 1_000 },
-      retry: { label: "assistant chat", timeoutMs: 25_000, maxRetries: 2 },
+      timeoutMs: 25_000,
     });
+    const reply = result.content;
 
     return NextResponse.json({
       success: true,
@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
       previewQuota: quota,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
+    return providerBillingErrorResponse(error, {
       session: authResult.session,
       fallbackStatus: 503,
       fallbackMessage: "The assistant is temporarily unavailable. Please try again later.",
