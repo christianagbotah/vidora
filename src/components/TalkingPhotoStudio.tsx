@@ -629,7 +629,11 @@ export function TalkingPhotoStudio({ images, characters }: TalkingPhotoStudioPro
     }
   };
 
-  const selectedImage = images.find((image) => image.id === selectedImageId);
+  const selectedImage = images.find((image) => image.id === selectedImageId)
+    || characters.find((profile) =>
+      profile.consentStatus === "confirmed" && profile.primaryAsset?.id === selectedImageId,
+    )?.primaryAsset
+    || null;
   const selectedAudio = audioAssets.find((audio) => audio.id === selectedAudioId);
 
   return (
