@@ -94,8 +94,9 @@ describe("customer provider billing boundaries", () => {
 
   test("split-scenes validates legacy local-parser compatibility before delegation", () => {
     const route = readFileSync(path.join(ROOT, "src", "app", "api", "split-scenes", "route.ts"), "utf8");
-    expect(route).toContain("reserveMeteredZaiTextOperation");
-    expect(route).toContain("submitBilledZaiText");
+    expect(route).toContain("reserveMeteredTextOperation");
+    expect(route).toContain("submitBilledText");
+    expect(route).toContain("provider: billing.provider");
     expect(route).toContain("hasParseableSceneBody");
     expect(route).toContain("const explicitPattern =");
     expect(route).toContain("const numberedPattern =");
