@@ -109,7 +109,7 @@ export function toProviderFetchUrl(
   if (inline) return inline;
 
   const rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
-  const { exp, sig } = createProviderMediaToken(rel, Math.floor(Date.now() / 1000), PROVIDER_MEDIA_MAX_TTL_SECONDS);
+  const { exp, sig } = createProviderMediaToken(rel);
   parsed.searchParams.set("vpm_exp", String(exp));
   parsed.searchParams.set("vpm_sig", sig);
   return parsed.toString();
@@ -146,7 +146,11 @@ export function toSignedProviderMediaUrl(
   } catch {
     return undefined;
   }
-  const { exp, sig } = createProviderMediaToken(rel);
+  const { exp, sig } = createProviderMediaToken(
+    rel,
+    Math.floor(Date.now() / 1000),
+    PROVIDER_MEDIA_MAX_TTL_SECONDS,
+  );
   parsed.searchParams.set("vpm_exp", String(exp));
   parsed.searchParams.set("vpm_sig", sig);
   return parsed.toString();
