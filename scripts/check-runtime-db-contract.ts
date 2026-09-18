@@ -250,14 +250,23 @@ async function main(): Promise<void> {
     .map((row) => `${row.provider}:${row.model}:${row.operation}`));
 
   const providerSettings = await getAIProviderSettings();
-  if (providerSettings.textProvider !== 'zai') {
-    throw new Error(`Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai`);
+  if (!['zai', 'xai'].includes(providerSettings.textProvider)) {
+    throw new Error(
+      `Runtime DB contract failed: paid text provider ${providerSettings.textProvider} has no verified Billing v2 catalog; configure Z.ai or xAI`,
+    );
+  }
+  if (providerSettings.textProvider === 'xai' && providerSettings.xaiBaseUrl.replace(/\\/+$/, '') !== 'https://api.x.ai/v1') {
+    throw new Error(
+      'Runtime DB contract failed: Billing v2 xAI text pricing is verified only for https://api.x.ai/v1',
+    );
   }
   if (providerSettings.ttsProvider !== 'qwen') {
     throw new Error(`Runtime DB contract failed: paid narration provider ${providerSettings.ttsProvider} has no verified Billing v2 catalog; configure Qwen`);
   }
 
-  const configuredTextModel = resolveZaiTextBillingModel(providerSettings.textModel);
+  const configuredTextModel = providerSettings.textProvider === 'zai'
+    ? resolveZaiTextBillingModel(providerSettings.textModel)
+    : (providerSettings.textModel || providerSettings.xaiTextModel || 'grok-4.6').trim();
   const configuredVisionModel = resolveZaiVisionBillingModel();
   const configuredAsrModel = resolveZaiAsrBillingModel();
   const configuredImageModel = resolveZaiImageBillingModel();
@@ -266,12 +275,14 @@ async function main(): Promise<void> {
   const requiredPrices = [
     'zai:glm-4.7:text_input',
     'zai:glm-4.7:text_output',
+    'xai:grok-4.6:text_input',
+    'xai:grok-4.6:text_output',
     'zai:glm-4.6v:vision_input',
     'zai:glm-4.6v:vision_output',
     'zai:glm-asr-2512:asr',
     'zai:search-prime:web_search',
-    `zai:${configuredTextModel}:text_input`,
-    `zai:${configuredTextModel}:text_output`,
+    `${providerSettings.textProvider}:${configuredTextModel}:text_input`,
+    `${providerSettings.textProvider}:${configuredTextModel}:text_output`,
     `zai:${configuredVisionModel}:vision_input`,
     `zai:${configuredVisionModel}:vision_output`,
     `zai:${configuredAsrModel}:asr`,
@@ -293,7 +304,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog/execution/reconciliation schema + long-form hierarchy/lease + Photo Studio verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing (Z.ai/xAI text) + fal Talking Photo catalog/execution/reconciliation schema + long-form hierarchy/lease + Photo Studio verified)');
 }
 
 main()
