@@ -28,9 +28,10 @@ describe("fal Talking Photo provider foundation", () => {
     expect(client).toContain("FAL_PROVIDER_RESULT_INVALID");
   });
 
-  test("verified price is versioned in migrations and required by runtime contract", () => {
+  test("verified price is versioned, runtime-required and admin-reverifiable", () => {
     const migration = read("prisma/migrations/20260918135000_fal_sync3_lipsync_pricing/migration.sql");
     const runtime = read("scripts/check-runtime-db-contract.ts");
+    const admin = read("src/app/api/admin/billing/route.ts");
     expect(migration).toContain("'fal'");
     expect(migration).toContain("'fal-ai/sync-lipsync/v3/image-to-video'");
     expect(migration).toContain("'lip_sync'");
@@ -38,6 +39,9 @@ describe("fal Talking Photo provider foundation", () => {
     expect(migration).toContain("0.1333");
     expect(migration).toContain("fal-sync3-image-to-video-2026-09-18");
     expect(runtime).toContain("fal:fal-ai/sync-lipsync/v3/image-to-video:lip_sync");
+    expect(admin).toContain('"zai", "qwen", "fal"');
+    expect(admin).toContain('"lip_sync"');
+    expect(admin).toContain('"second"');
   });
 
   test("no user-facing execution route exists until durable consent/audio/billing orchestration is added", () => {
