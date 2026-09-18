@@ -64,7 +64,7 @@ describe("Photo Studio Motion Director", () => {
     expect(component).toContain("PHOTO_MOTION_PRESETS");
     expect(component).toContain("maxLength={500}");
     expect(component).toContain("onDirtyChange");
-    expect(component).toContain("Object.values(next).some(Boolean)");
+    expect(component).toContain("onDirtyChange?.(Object.values(dirty).some(Boolean))");
     expect(component).toContain("/api/photo-studio/projects/");
     expect(component).toContain("/motion/");
     expect(component).not.toContain("/api/generate-video");
