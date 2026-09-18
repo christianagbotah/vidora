@@ -118,6 +118,21 @@ describe("Scripted Digital Actor voice", () => {
     expect(component).toContain("Review cost");
   });
 
+  test("admin reconciliation releases only unused voice reservation remainder", () => {
+    const route = read("src/app/api/admin/talking-photo/reconciliation/route.ts");
+    const page = read("src/app/admin/talking-photo/reconciliation/page.tsx");
+    expect(route).toContain('"close_speech_release_remainder"');
+    expect(route).toContain('jobType === "speech"');
+    expect(route).toContain("releaseReservationRemainder({");
+    expect(route).toContain("captured Qwen lines remain billable");
+    expect(route).toContain("capturedCreditsPreserved: reservation.capturedCredits");
+    expect(route).toContain('status: "failed"');
+    expect(route).toContain("activeKey: null");
+    expect(page).toContain("Digital Actor voice reconciliation");
+    expect(page).toContain("Close voice job & release unused credits");
+    expect(page).toContain("Already-captured Qwen credits are not refunded");
+  });
+
   test("migration and runtime contract enforce durable speech queue locks", () => {
     const migration = read("prisma/migrations/20260918171000_scripted_digital_actor_speech/migration.sql");
     const runtime = read("scripts/check-runtime-db-contract.ts");
