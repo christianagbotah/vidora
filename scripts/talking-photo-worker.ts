@@ -285,13 +285,38 @@ async function runForever(): Promise<void> {
         error instanceof Error ? error.message : "unknown error",
       );
       if (jobId) {
-        await db.talkingPhotoJob.update({
+        const current = await db.talkingPhotoJob.findUnique({
           where: { id: jobId },
-          data: {
-            status: "processing",
-            error: `Worker error: ${error instanceof Error ? error.message : "unknown error"}`,
-          },
-        }).catch(() => undefined);
+          select: { status: true, providerTaskId: true },
+        }).catch(() => null);
+        if (current?.status === "submitting" && !current.providerTaskId) {
+          await markNeedsReconciliation(
+            jobId,
+            `Worker interrupted an in-flight provider submission; automatic resubmission is blocked: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          ).catch(() => undefined);
+        } else if (current?.providerTaskId) {
+          await db.talkingPhotoJob.update({
+            where: { id: jobId },
+            data: {
+              status: "waiting_provider",
+              error: `Worker recovery will poll the persisted provider request: ${
+                error instanceof Error ? error.message : "unknown error"
+              }`,
+            },
+          }).catch(() => undefined);
+        } else {
+          await db.talkingPhotoJob.update({
+            where: { id: jobId },
+            data: {
+              status: "processing",
+              error: `Worker error before provider submission: ${
+                error instanceof Error ? error.message : "unknown error"
+              }`,
+            },
+          }).catch(() => undefined);
+        }
       }
       await sleep(IDLE_MS);
     }
