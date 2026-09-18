@@ -4,6 +4,7 @@ import path from "path";
 export const VIDORA_DURABLE_WORKERS = [
   "vidora-generation-worker",
   "vidora-export-worker",
+  "vidora-talking-photo-worker",
 ] as const;
 
 export type VidoraDurableWorkerName = typeof VIDORA_DURABLE_WORKERS[number];
