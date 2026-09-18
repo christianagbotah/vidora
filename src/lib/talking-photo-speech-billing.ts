@@ -10,6 +10,7 @@ import {
   getBillingQuote,
   type BillingQuoteLine,
 } from "@/lib/credit-reservations";
+import { getConfigValue } from "@/lib/secure-config";
 import {
   resolveQwenTtsModel,
   splitQwenTtsInput,
@@ -76,6 +77,13 @@ export async function resolveTalkingPhotoSpeechModel(): Promise<string> {
     throw new BillingSafetyError(
       "UNPRICED_TTS_PROVIDER",
       "Scripted Digital Actor voice generation currently requires Qwen TTS because that provider has verified Billing v2 pricing.",
+    );
+  }
+  const key = await getConfigValue("qwen_tts_api_key", "DASHSCOPE_API_KEY");
+  if (!key) {
+    throw new BillingSafetyError(
+      "QWEN_TTS_NOT_CONFIGURED",
+      "Qwen TTS is not configured. Add the DashScope key in Admin Providers before generating Digital Actor speech.",
     );
   }
   return resolveQwenTtsModel(settings.ttsModel);
