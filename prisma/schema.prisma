@@ -33,6 +33,7 @@ model User {
   mediaAssets              MediaAsset[]
   characterProfiles        CharacterProfile[]
   talkingPhotoJobs         TalkingPhotoJob[]
+  talkingPhotoSpeechJobs   TalkingPhotoSpeechJob[]
 }
 
 model VideoProject {
@@ -187,6 +188,32 @@ model CharacterProfile {
 
   @@index([userId, createdAt])
   @@index([primaryAssetId])
+}
+
+model TalkingPhotoSpeechJob {
+  id                   String   @id
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeKey            String?  @unique
+  status               String   @default("reserving")
+  script               String   @db.Text
+  scriptSha256         String
+  voice                String
+  language             String?
+  accent               String?
+  style                String?
+  providerModel        String
+  billingQuoteId       String?
+  creditReservationId  String?
+  outputAssetId        String?
+  chunkCount           Int      @default(0)
+  error                String?  @db.Text
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+  @@index([scriptSha256])
 }
 
 model TalkingPhotoJob {
