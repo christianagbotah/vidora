@@ -7,6 +7,8 @@ import {
   normalizeAssetIds,
   sanitizeAspectRatio,
   sanitizePerformanceProfile,
+  parseStoredPerformanceProfile,
+  performanceDirection,
   sanitizePhotoStudioMode,
   sanitizeSecondsPerPhoto,
 } from "../../src/lib/photo-studio";
@@ -57,6 +59,9 @@ describe("Photo & Character Studio foundation", () => {
       eyeContact: "unknown",
       bodyMotion: "chaos",
     }).gestureIntensity).toBe("medium");
+    const stored = parseStoredPerformanceProfile(JSON.stringify({ emotion: "joyful", gestureIntensity: "high" }));
+    expect(stored.emotion).toBe("joyful");
+    expect(performanceDirection(stored)).toContain("high gesture intensity");
   });
 
   test("photo prompts explicitly preserve source identity and composition", () => {
