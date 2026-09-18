@@ -30,6 +30,7 @@ const BILLING_GUARD_PATTERNS = [
   /reserveMeteredZai(?:Text|Vision|Asr)Operation/,
   /reserveMeteredTextOperation/,
   /quoteFreeZaiTextAttempt/,
+  /quoteFreeTextAttempt/,
   /quoteProviderCharge/,
   /getReservedQuoteLines/,
   /captureReservedQuoteLine/,
