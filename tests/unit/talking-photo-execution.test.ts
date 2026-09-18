@@ -124,11 +124,13 @@ describe("Talking Photo execution", () => {
     const ecosystem = read("ecosystem.config.js");
     const heartbeat = read("scripts/worker-heartbeat.ts");
     const health = read("scripts/check-pm2-health.ts");
+    const rollback = read("rollback.sh");
     expect(ecosystem).toContain("FAL_KEY: process.env.FAL_KEY");
     expect(ecosystem).toContain('name: "vidora-talking-photo-worker"');
     expect(ecosystem).toContain('script: "scripts/talking-photo-worker-entry.ts"');
     expect(heartbeat).toContain('"vidora-talking-photo-worker"');
     expect(health).toContain('"vidora-talking-photo-worker": "scripts/talking-photo-worker-entry.ts"');
+    expect(rollback).toContain("vidora-talking-photo-worker");
   });
 
   test("migration and runtime contract enforce durable job locks and measured duration", () => {
