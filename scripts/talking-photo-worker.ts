@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import {
   captureReservedQuoteLine,
+  findReservationByReference,
   releaseReservationRemainder,
 } from "@/lib/credit-reservations";
 import {
@@ -27,6 +28,69 @@ function publicOrigin(): string {
   const parsed = new URL(value);
   if (parsed.protocol !== "https:") throw new Error("Talking Photo provider origin must use HTTPS");
   return parsed.origin;
+}
+
+async function recoverStaleReservations(): Promise<void> {
+  const stale = await db.talkingPhotoJob.findMany({
+    where: {
+      status: "reserving",
+      activeKey: { not: null },
+      updatedAt: { lt: new Date(Date.now() - STALE_MINUTES * 60_000) },
+    },
+    select: { id: true, userId: true },
+    take: 25,
+  });
+
+  for (const job of stale) {
+    const reservation = await findReservationByReference(job.id);
+    if (!reservation) {
+      await db.talkingPhotoJob.update({
+        where: { id: job.id },
+        data: {
+          status: "failed",
+          activeKey: null,
+          error: "Reservation handoff was interrupted before credits moved; the job was safely released.",
+        },
+      });
+      continue;
+    }
+
+    if (reservation.capturedCredits > 0 || reservation.status === "captured") {
+      await markNeedsReconciliation(
+        job.id,
+        "A stale pre-provider job unexpectedly has captured credits; manual billing reconciliation is required.",
+      );
+      continue;
+    }
+
+    try {
+      await releaseReservationRemainder({
+        reservationId: reservation.id,
+        userId: job.userId,
+        reason: "Recovered stale Talking Photo reservation before any provider submission",
+      });
+      await db.talkingPhotoJob.update({
+        where: { id: job.id },
+        data: {
+          creditReservationId: reservation.id,
+          status: "failed",
+          activeKey: null,
+          error: "Reservation handoff was interrupted; reserved credits were safely released.",
+        },
+      });
+    } catch (error) {
+      await db.talkingPhotoJob.update({
+        where: { id: job.id },
+        data: {
+          creditReservationId: reservation.id,
+          status: "needs_reconciliation",
+          error: `Stale reservation could not be safely released: ${
+            error instanceof Error ? error.message : "unknown release error"
+          }`,
+        },
+      });
+    }
+  }
 }
 
 async function quarantineAmbiguousSubmissions(): Promise<void> {
@@ -272,6 +336,7 @@ async function runForever(): Promise<void> {
   while (!stopping) {
     let jobId: string | null = null;
     try {
+      await recoverStaleReservations();
       await quarantineAmbiguousSubmissions();
       jobId = await claimJob();
       if (!jobId) {
