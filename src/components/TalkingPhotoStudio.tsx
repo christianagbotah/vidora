@@ -129,7 +129,11 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         const active = jobs.find((candidate) =>
           !["completed", "failed", "needs_reconciliation"].includes(candidate.status),
         );
-        if (active) setJob(active);
+        if (active) {
+          setJob(active);
+          if (active.imageAssetId) setSelectedImageId(active.imageAssetId);
+          if (active.audioAssetId) setSelectedAudioId(active.audioAssetId);
+        }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load audio library");
       } finally {
@@ -406,6 +410,10 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
                   key={recent.id}
                   onClick={() => {
                     setJob(recent);
+                    if (recent.imageAssetId) setSelectedImageId(recent.imageAssetId);
+                    if (recent.audioAssetId) setSelectedAudioId(recent.audioAssetId);
+                    setQuote(null);
+                    setConsentConfirmed(false);
                     if (active && !starting) {
                       setStarting(true);
                       setError("");
