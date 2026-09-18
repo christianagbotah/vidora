@@ -28,8 +28,10 @@ function xaiUsage(body: Record<string, unknown>): BilledTextResult["usage"] {
     ? body.usage as Record<string, unknown>
     : null;
   if (!raw) return null;
-  const input = finiteUsage(raw.prompt_tokens ?? raw.input_tokens);
-  const output = finiteUsage(raw.completion_tokens ?? raw.output_tokens);
+  const input = finiteUsage(raw.input_tokens);
+  // xAI Responses API output_tokens is the generated-token total. Its
+  // output_tokens_details.reasoning_tokens is a subset, so do not add it again.
+  const output = finiteUsage(raw.output_tokens);
   if (input === null || output === null) return null;
   return {
     inputTokens: Math.max(1, input),
@@ -38,16 +40,23 @@ function xaiUsage(body: Record<string, unknown>): BilledTextResult["usage"] {
 }
 
 function completionContent(body: Record<string, unknown>): string {
-  const choices = Array.isArray(body.choices) ? body.choices : [];
-  const first = choices[0] && typeof choices[0] === "object"
-    ? choices[0] as Record<string, unknown>
-    : null;
-  const message = first?.message && typeof first.message === "object"
-    ? first.message as Record<string, unknown>
-    : null;
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const output = Array.isArray(body.output) ? body.output : [];
+  const parts: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (record.type !== "message" || !Array.isArray(record.content)) continue;
+    for (const content of record.content) {
+      if (!content || typeof content !== "object") continue;
+      const chunk = content as Record<string, unknown>;
+      if (chunk.type === "output_text" && typeof chunk.text === "string" && chunk.text.trim()) {
+        parts.push(chunk.text.trim());
+      }
+    }
+  }
+  const content = parts.join("\n").trim();
   if (!content) {
-    throw new BilledTextProviderError("xai", "Paid xAI text returned an empty completion");
+    throw new BilledTextProviderError("xai", "Paid xAI text returned an empty response");
   }
   return content;
 }
@@ -92,14 +101,10 @@ async function submitBilledXaiText(opts: {
     );
   }
 
-  const messages: Array<{ role: "system" | "user"; content: string }> = [];
-  if (opts.systemPrompt) messages.push({ role: "system", content: opts.systemPrompt });
-  messages.push({ role: "user", content: opts.userPrompt });
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 90_000);
   try {
-    const response = await fetch(`${normalizedBase}/chat/completions`, {
+    const response = await fetch(`${normalizedBase}/responses`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -108,10 +113,15 @@ async function submitBilledXaiText(opts: {
       },
       body: JSON.stringify({
         model: opts.model,
-        messages,
-        temperature: opts.temperature ?? 0.45,
-        max_tokens: opts.maxOutputTokens,
-        ...(opts.thinking === "enabled" ? { reasoning_effort: "high" } : {}),
+        input: opts.userPrompt,
+        ...(opts.systemPrompt ? { instructions: opts.systemPrompt } : {}),
+        max_output_tokens: opts.maxOutputTokens,
+        reasoning: {
+          // Grok 4.6 cannot disable reasoning. "low" is the closest bounded
+          // execution mode when callers do not request deep reasoning.
+          effort: opts.thinking === "enabled" ? "high" : "low",
+        },
+        store: false,
       }),
       signal: controller.signal,
       cache: "no-store",
@@ -136,11 +146,14 @@ async function submitBilledXaiText(opts: {
     }
 
     if (!response.ok) {
+      const ambiguous = response.status === 408
+        || response.status === 429
+        || response.status >= 500;
       throw new BilledTextProviderError(
         "xai",
         `Paid xAI text failed: ${xaiErrorMessage(body, response.status)}`,
         response.status,
-        false,
+        ambiguous,
       );
     }
     if (!body || typeof body !== "object") {
