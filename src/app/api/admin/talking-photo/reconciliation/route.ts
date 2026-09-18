@@ -22,7 +22,8 @@ type AdminAction =
   | "retry_release"
   | "confirm_not_submitted_release"
   | "retry_billing_capture"
-  | "retry_provider_status";
+  | "retry_provider_status"
+  | "close_speech_release_remainder";
 
 function allowedActions(kind: string | null): AdminAction[] {
   switch (kind as TalkingPhotoReconciliationKind | null) {
@@ -102,13 +103,30 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  const reservations = await Promise.all(jobs.map((job) => reservationForJob(job)));
+  const speechJobs = await db.talkingPhotoSpeechJob.findMany({
+    where: { status: "needs_reconciliation" },
+    orderBy: { updatedAt: "asc" },
+    take: 100,
+    include: {
+      user: { select: { id: true, email: true, name: true } },
+    },
+  });
+
+  const [reservations, speechReservations] = await Promise.all([
+    Promise.all(jobs.map((job) => reservationForJob(job))),
+    Promise.all(speechJobs.map((job) => reservationForJob(job))),
+  ]);
   return NextResponse.json({
     success: true,
     jobs: jobs.map((job, index) => ({
       ...job,
       reservation: reservations[index],
       allowedActions: allowedActions(job.reconciliationKind),
+    })),
+    speechJobs: speechJobs.map((job, index) => ({
+      ...job,
+      reservation: speechReservations[index],
+      allowedActions: ["close_speech_release_remainder"],
     })),
   });
 }
@@ -122,11 +140,60 @@ export async function POST(req: NextRequest) {
     const jobId = typeof body.jobId === "string" ? body.jobId.trim() : "";
     const action = typeof body.action === "string" ? body.action.trim() as AdminAction : null;
     const note = typeof body.note === "string" ? body.note.trim().slice(0, 1_000) : "";
+    const jobType = body.jobType === "speech" ? "speech" : "talking_photo";
     if (!jobId || !action) {
       return NextResponse.json(
         { success: false, error: "Job and reconciliation action are required" },
         { status: 400 },
       );
+    }
+
+    if (jobType === "speech") {
+      if (action !== "close_speech_release_remainder") {
+        return NextResponse.json(
+          { success: false, error: "Only safe remainder release is permitted for quarantined Digital Actor voice jobs" },
+          { status: 409 },
+        );
+      }
+      const speechJob = await db.talkingPhotoSpeechJob.findUnique({ where: { id: jobId } });
+      if (!speechJob || speechJob.status !== "needs_reconciliation") {
+        return NextResponse.json(
+          { success: false, error: "Digital Actor voice reconciliation job was not found" },
+          { status: 404 },
+        );
+      }
+      const reservation = await reservationForJob(speechJob);
+      if (!reservation) {
+        return NextResponse.json(
+          { success: false, error: "Voice job has no reservation to settle; inspect billing state manually" },
+          { status: 409 },
+        );
+      }
+      const released = await releaseReservationRemainder({
+        reservationId: reservation.id,
+        userId: speechJob.userId,
+        reason: "Admin closed quarantined Digital Actor voice job; captured Qwen lines remain billable",
+      });
+      await db.talkingPhotoSpeechJob.update({
+        where: { id: speechJob.id },
+        data: {
+          status: "failed",
+          activeKey: null,
+          error: [
+            "Admin closed the quarantined voice job. Any captured Qwen provider work remains charged; only unused reserved credits were released.",
+            `creditsReleased=${released.creditsReleased}`,
+            note ? `note=${note}` : "",
+          ].filter(Boolean).join(" "),
+        },
+      });
+      return NextResponse.json({
+        success: true,
+        action,
+        jobType,
+        jobId: speechJob.id,
+        creditsReleased: released.creditsReleased,
+        capturedCreditsPreserved: reservation.capturedCredits,
+      });
     }
 
     const job = await db.talkingPhotoJob.findUnique({ where: { id: jobId } });
