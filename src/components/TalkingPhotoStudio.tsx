@@ -286,8 +286,15 @@ export function TalkingPhotoStudio({ images, characters }: TalkingPhotoStudioPro
 
   const selectImage = (id: string) => {
     if (id === selectedImageId) return;
+    const leavingSavedActor = Boolean(selectedCharacterId);
     setSelectedImageId(id);
     setSelectedCharacterId("");
+    if (leavingSavedActor) {
+      setSpeechVoice("tongtong");
+      setSpeechStyle("natural, warm and expressive");
+      setSpeechQuote(null);
+      setSpeechJob(null);
+    }
     resetPaidState();
   };
 
