@@ -9,9 +9,9 @@ function read(relative: string): string {
 describe("fal Talking Photo provider foundation", () => {
   test("uses the durable fal queue from the server and never exposes the key to client code", () => {
     const client = read("src/lib/fal-lipsync.ts");
-    expect(client).toContain('process.env.FAL_KEY');
+    expect(client).toContain('getConfigValue("fal_api_key", "FAL_KEY")');
     expect(client).toContain('"https://queue.fal.run"');
-    expect(client).toContain('Authorization: `Key ${requireFalKey()}`');
+    expect(client).toContain('Authorization: `Key ${falKey}`');
     expect(client).toContain("/requests/");
     expect(client).toContain("/status");
     expect(client).toContain('image_url: imageUrl');
@@ -26,6 +26,22 @@ describe("fal Talking Photo provider foundation", () => {
     expect(client).toContain("FAL_KEY_MISSING");
     expect(client).toContain("FAL_PROVIDER_RESPONSE_INVALID");
     expect(client).toContain("FAL_PROVIDER_RESULT_INVALID");
+    expect(client).toContain("async function requireFalKey");
+    expect(client).toContain("await requireFalKey()");
+  });
+
+  test("admin-managed fal secret stays server-side and encrypted", () => {
+    const secure = read("src/lib/secure-config.ts");
+    const policy = read("src/lib/provider-secret-policy.ts");
+    const config = read("src/app/api/admin/config/route.ts");
+    const page = read("src/app/admin/providers/page.tsx");
+    expect(secure).toContain('"fal_api_key"');
+    expect(policy).toContain('"fal_api_key"');
+    expect(config).toContain('fal_api_key: "FAL_KEY"');
+    expect(config).toContain('talkingPhoto: ["fal"]');
+    expect(page).toContain('setSecretField("fal_api_key"');
+    expect(page).toContain("Environment fallback: FAL_KEY");
+    expect(page).not.toContain("NEXT_PUBLIC_FAL");
   });
 
   test("verified price is versioned, runtime-required and admin-reverifiable", () => {
