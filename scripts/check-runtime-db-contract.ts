@@ -140,6 +140,58 @@ async function main(): Promise<void> {
     throw new Error('Runtime DB contract failed: MediaAsset owner/hash dedup index is missing');
   }
 
+  const talkingPhotoTables = await db.$queryRaw<TableRow[]>`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'TalkingPhotoJob'
+  `;
+  if (!talkingPhotoTables.some((row) => row.table_name === 'TalkingPhotoJob')) {
+    throw new Error('Runtime DB contract failed: TalkingPhotoJob table is missing');
+  }
+
+  const talkingPhotoAssetColumns = await db.$queryRaw<ColumnRow[]>`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'MediaAsset'
+      AND column_name IN ('durationSeconds')
+  `;
+  if (!talkingPhotoAssetColumns.some((row) => row.column_name === 'durationSeconds')) {
+    throw new Error('Runtime DB contract failed: MediaAsset.durationSeconds is missing');
+  }
+
+  const talkingPhotoColumns = await db.$queryRaw<ColumnRow[]>`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'TalkingPhotoJob'
+      AND column_name IN (
+        'activeKey','status','durationSeconds','consentConfirmedAt',
+        'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error','updatedAt'
+      )
+  `;
+  const talkingPhotoColumnNames = new Set(talkingPhotoColumns.map((row) => row.column_name));
+  const missingTalkingPhotoColumns = [
+    'activeKey','status','durationSeconds','consentConfirmedAt',
+    'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error','updatedAt',
+  ].filter((name) => !talkingPhotoColumnNames.has(name));
+  if (missingTalkingPhotoColumns.length) {
+    throw new Error(`Runtime DB contract failed: TalkingPhotoJob column(s) missing: ${missingTalkingPhotoColumns.join(', ')}`);
+  }
+
+  const talkingPhotoIndexes = await db.$queryRaw<IndexRow[]>`
+    SELECT indexname, indexdef FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'TalkingPhotoJob'
+  `;
+  if (!hasUniqueIndex(talkingPhotoIndexes, 'activekey')) {
+    throw new Error('Runtime DB contract failed: TalkingPhotoJob.activeKey must be unique');
+  }
+  const talkingPhotoIndexNames = new Set(talkingPhotoIndexes.map((row) => row.indexname));
+  for (const required of [
+    'TalkingPhotoJob_userId_createdAt_idx',
+    'TalkingPhotoJob_status_updatedAt_idx',
+    'TalkingPhotoJob_providerTaskId_idx',
+  ]) {
+    if (!talkingPhotoIndexNames.has(required)) {
+      throw new Error(`Runtime DB contract failed: Talking Photo index missing: ${required}`);
+    }
+  }
+
   const generationColumns = await db.$queryRaw<ColumnRow[]>`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'GenerationRun'
@@ -236,7 +288,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog + long-form hierarchy/lease + Photo Studio verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog/execution schema + long-form hierarchy/lease + Photo Studio verified)');
 }
 
 main()
