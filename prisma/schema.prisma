@@ -203,15 +203,21 @@ model TalkingPhotoJob {
   consentConfirmedAt  DateTime
   billingQuoteId      String?
   creditReservationId String?
-  providerTaskId      String?
-  videoUrl            String?    @db.Text
-  error               String?    @db.Text
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
+  providerTaskId          String?
+  videoUrl                String?    @db.Text
+  error                   String?    @db.Text
+  reconciliationKind      String?
+  reconciliationAt        DateTime?
+  reconciliationResolution String?   @db.Text
+  reconciledAt            DateTime?
+  reconciledByUserId      String?
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
 
   @@index([userId, createdAt])
   @@index([status, updatedAt])
   @@index([providerTaskId])
+  @@index([reconciliationKind, reconciliationAt])
 }
 
 model GenerationHistory {
