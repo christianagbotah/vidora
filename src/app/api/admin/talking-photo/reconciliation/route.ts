@@ -31,7 +31,7 @@ function allowedActions(kind: string | null): AdminAction[] {
     case "ambiguous_submission":
       return ["confirm_not_submitted_release"];
     case "billing_capture":
-      return ["retry_billing_capture", "retry_provider_status"];
+      return ["retry_billing_capture"];
     case "provider_lookup":
     case "provider_status":
       return ["retry_provider_status"];
