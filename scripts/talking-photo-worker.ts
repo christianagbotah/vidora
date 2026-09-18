@@ -13,6 +13,7 @@ import {
 import { persistProviderVideo } from "@/lib/provider-video-storage";
 import { toSignedProviderMediaUrl } from "@/lib/provider-media-access";
 import { talkingPhotoLineKey } from "@/lib/talking-photo-billing";
+import { markTalkingPhotoNeedsReconciliation } from "@/lib/talking-photo-reconciliation";
 
 const IDLE_MS = Math.max(1_000, Number(process.env.TALKING_PHOTO_WORKER_IDLE_MS || 3_000));
 const STALE_MINUTES = Math.max(1, Number(process.env.TALKING_PHOTO_WORKER_STALE_MINUTES || 3));
@@ -56,10 +57,11 @@ async function recoverStaleReservations(): Promise<void> {
     }
 
     if (reservation.capturedCredits > 0 || reservation.status === "captured") {
-      await markNeedsReconciliation(
-        job.id,
-        "A stale pre-provider job unexpectedly has captured credits; manual billing reconciliation is required.",
-      );
+      await markTalkingPhotoNeedsReconciliation({
+        jobId: job.id,
+        kind: "billing_state",
+        message: "A stale pre-provider job unexpectedly has captured credits; manual billing reconciliation is required.",
+      });
       continue;
     }
 
@@ -81,13 +83,14 @@ async function recoverStaleReservations(): Promise<void> {
     } catch (error) {
       await db.talkingPhotoJob.update({
         where: { id: job.id },
-        data: {
-          creditReservationId: reservation.id,
-          status: "needs_reconciliation",
-          error: `Stale reservation could not be safely released: ${
-            error instanceof Error ? error.message : "unknown release error"
-          }`,
-        },
+        data: { creditReservationId: reservation.id },
+      });
+      await markTalkingPhotoNeedsReconciliation({
+        jobId: job.id,
+        kind: "reservation_release",
+        message: `Stale reservation could not be safely released: ${
+          error instanceof Error ? error.message : "unknown release error"
+        }`,
       });
     }
   }
@@ -97,6 +100,11 @@ async function quarantineAmbiguousSubmissions(): Promise<void> {
   await db.$executeRaw`
     UPDATE "TalkingPhotoJob"
     SET "status" = 'needs_reconciliation',
+        "reconciliationKind" = 'ambiguous_submission',
+        "reconciliationAt" = CURRENT_TIMESTAMP,
+        "reconciliationResolution" = NULL,
+        "reconciledAt" = NULL,
+        "reconciledByUserId" = NULL,
         "error" = 'Provider submission was interrupted before the request id was durably recorded. Automatic resubmission is blocked.',
         "updatedAt" = CURRENT_TIMESTAMP
     WHERE "status" = 'submitting'
@@ -129,13 +137,6 @@ async function claimJob(): Promise<string | null> {
   });
 }
 
-async function markNeedsReconciliation(jobId: string, message: string): Promise<void> {
-  await db.talkingPhotoJob.update({
-    where: { id: jobId },
-    data: { status: "needs_reconciliation", error: message.slice(0, 4_000) },
-  });
-}
-
 function providerDefinitelyNotSubmitted(error: unknown): boolean {
   if (!(error instanceof FalProviderError)) return false;
   if (["FAL_KEY_MISSING", "FAL_INPUT_URL_INVALID", "FAL_INPUT_URL_UNSAFE"].includes(error.code)) {
@@ -160,12 +161,13 @@ async function failBeforeProviderAcceptance(
         reason: "Talking Photo provider rejected the request before accepting work",
       });
     } catch (releaseError) {
-      await markNeedsReconciliation(
-        job.id,
-        `Provider rejected before acceptance, but reserved credits could not be released safely: ${
+      await markTalkingPhotoNeedsReconciliation({
+        jobId: job.id,
+        kind: "reservation_release",
+        message: `Provider rejected before acceptance, but reserved credits could not be released safely: ${
           releaseError instanceof Error ? releaseError.message : "unknown release error"
         }`,
-      );
+      });
       return;
     }
   }
@@ -210,16 +212,18 @@ async function pollAcceptedJob(job: { id: string; providerTaskId: string }): Pro
       });
       return;
     }
-    await markNeedsReconciliation(
-      job.id,
-      `fal returned unrecognized status ${provider.status}; automatic resubmission is blocked.`,
-    );
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "provider_status",
+      message: `fal returned unrecognized status ${provider.status}; automatic resubmission is blocked.`,
+    });
   } catch (error) {
     if (error instanceof FalProviderError && error.status === 404) {
-      await markNeedsReconciliation(
-        job.id,
-        "fal no longer recognizes the persisted provider request id; manual reconciliation is required.",
-      );
+      await markTalkingPhotoNeedsReconciliation({
+        jobId: job.id,
+        kind: "provider_lookup",
+        message: "fal no longer recognizes the persisted provider request id; manual reconciliation is required.",
+      });
       return;
     }
     await db.talkingPhotoJob.update({
@@ -243,11 +247,19 @@ async function submitNewJob(job: {
   audioAsset: { url: string; durationSeconds: number | null };
 }): Promise<void> {
   if (!job.creditReservationId) {
-    await markNeedsReconciliation(job.id, "Talking Photo job is missing its credit reservation.");
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "billing_state",
+      message: "Talking Photo job is missing its credit reservation.",
+    });
     return;
   }
   if (!job.audioAsset.durationSeconds || Math.abs(job.audioAsset.durationSeconds - job.durationSeconds) > 0.01) {
-    await markNeedsReconciliation(job.id, "Stored audio duration changed after billing reservation.");
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "asset_integrity",
+      message: "Stored audio duration changed after billing reservation.",
+    });
     return;
   }
 
@@ -276,10 +288,11 @@ async function submitNewJob(job: {
       await failBeforeProviderAcceptance(job, message);
       return;
     }
-    await markNeedsReconciliation(
-      job.id,
-      `Provider submission outcome is ambiguous and will not be retried automatically: ${message}`,
-    );
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "ambiguous_submission",
+      message: `Provider submission outcome is ambiguous and will not be retried automatically: ${message}`,
+    });
     return;
   }
 
@@ -296,12 +309,13 @@ async function submitNewJob(job: {
       providerTaskId: submitted.requestId,
     });
   } catch (error) {
-    await markNeedsReconciliation(
-      job.id,
-      `fal accepted request ${submitted.requestId}, but billing capture needs reconciliation: ${
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "billing_capture",
+      message: `fal accepted request ${submitted.requestId}, but billing capture needs reconciliation: ${
         error instanceof Error ? error.message : "unknown capture error"
       }`,
-    );
+    });
   }
 }
 
@@ -314,10 +328,11 @@ async function ensureAcceptedJobCaptured(job: {
   providerTaskId: string;
 }): Promise<boolean> {
   if (!job.creditReservationId) {
-    await markNeedsReconciliation(
-      job.id,
-      `fal request ${job.providerTaskId} is persisted but its credit reservation id is missing.`,
-    );
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "billing_state",
+      message: `fal request ${job.providerTaskId} is persisted but its credit reservation id is missing.`,
+    });
     return false;
   }
   try {
@@ -329,12 +344,13 @@ async function ensureAcceptedJobCaptured(job: {
     });
     return true;
   } catch (error) {
-    await markNeedsReconciliation(
-      job.id,
-      `fal request ${job.providerTaskId} exists, but billing capture needs reconciliation: ${
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "billing_capture",
+      message: `fal request ${job.providerTaskId} exists, but billing capture needs reconciliation: ${
         error instanceof Error ? error.message : "unknown capture error"
       }`,
-    );
+    });
     return false;
   }
 }
@@ -354,7 +370,11 @@ async function runJob(jobId: string): Promise<void> {
     job.imageAsset.userId !== job.userId ||
     job.audioAsset.userId !== job.userId
   ) {
-    await markNeedsReconciliation(job.id, "Talking Photo source asset ownership/type verification failed.");
+    await markTalkingPhotoNeedsReconciliation({
+      jobId: job.id,
+      kind: "asset_integrity",
+      message: "Talking Photo source asset ownership/type verification failed.",
+    });
     return;
   }
 
@@ -398,12 +418,13 @@ async function runForever(): Promise<void> {
           select: { status: true, providerTaskId: true },
         }).catch(() => null);
         if (current?.status === "submitting" && !current.providerTaskId) {
-          await markNeedsReconciliation(
+          await markTalkingPhotoNeedsReconciliation({
             jobId,
-            `Worker interrupted an in-flight provider submission; automatic resubmission is blocked: ${
+            kind: "ambiguous_submission",
+            message: `Worker interrupted an in-flight provider submission; automatic resubmission is blocked: ${
               error instanceof Error ? error.message : "unknown error"
             }`,
-          ).catch(() => undefined);
+          }).catch(() => undefined);
         } else if (current?.providerTaskId) {
           await db.talkingPhotoJob.update({
             where: { id: jobId },
