@@ -143,7 +143,6 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-      const model = await resolveConfiguredBillableZaiTextModel();
       const lineKeyPrefix = `${operationKey}:billing`;
       const billing = await reserveMeteredTextOperation({
         userId: authResult.session.userId,
@@ -158,8 +157,7 @@ export async function POST(req: NextRequest) {
       });
       const result = await submitBilledText({
         provider: billing.provider,
-        provider: billing.provider,
-      model: billing.model,
+        model: billing.model,
         systemPrompt: director.systemPrompt,
         userPrompt: director.userPrompt,
         maxOutputTokens: 6_000,
