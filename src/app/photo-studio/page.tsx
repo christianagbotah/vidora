@@ -34,6 +34,7 @@ type CharacterProfile = {
   id: string;
   name: string;
   role?: string | null;
+  voiceId?: string | null;
   consentStatus: string;
   performanceProfile: string;
   primaryAsset?: MediaAsset | null;
@@ -763,7 +764,7 @@ export default function PhotoStudioPage() {
           </div>
         </section>
 
-        <TalkingPhotoStudio images={assets} />
+        <TalkingPhotoStudio images={assets} characters={profiles} />
 
         <section className="rounded-3xl border border-white/10 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/10 to-cyan-500/10 p-6 sm:p-8">
           <div className="grid gap-5 md:grid-cols-3">
