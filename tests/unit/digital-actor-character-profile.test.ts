@@ -52,6 +52,9 @@ describe("Digital Actor Character Profile reuse", () => {
   test("manual portrait selection exits saved-actor mode", () => {
     const component = read("src/components/TalkingPhotoStudio.tsx");
     expect(component).toContain('setSelectedCharacterId("")');
+    expect(component).toContain("const leavingSavedActor = Boolean(selectedCharacterId)");
+    expect(component).toContain('setSpeechVoice("tongtong")');
+    expect(component).toContain('setSpeechStyle("natural, warm and expressive")');
     expect(component).toContain("const selectImage = (id: string) => {");
   });
 });
