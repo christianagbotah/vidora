@@ -302,7 +302,7 @@ export default function PhotoStudioPage() {
                   ["Photos", "Upload once, reuse everywhere", ImagePlus],
                   ["Characters", "Identity + voice + performance", UserRound],
                   ["Stories", "Photo sets become editable scenes", Clapperboard],
-                  ["Motion", "Generate only after review", Sparkles],
+                  ["Motion", "Local or AI motion", Sparkles],
                 ].map(([label, copy, Icon]) => {
                   const IconComponent = Icon as typeof ImagePlus;
                   return (
@@ -578,7 +578,7 @@ export default function PhotoStudioPage() {
           <div className="grid gap-5 md:grid-cols-3">
             {[
               ["Upload once", "Your original photos are stored as durable, account-owned Vidora assets instead of temporary browser blobs.", ImagePlus],
-              ["Direct before spending", "Vidora builds the scenes first. The existing generation billing gate remains the point where paid AI motion begins.", ShieldCheck],
+              ["Choose local or AI motion", "Slideshows render locally for zero credits; Living Photos keep Vidora’s explicit billing gate before paid AI motion.", ShieldCheck],
               ["Keep identity reusable", "Character Forge separates a person's reusable identity and performance defaults from any single video project.", UserRound],
             ].map(([heading, copy, Icon]) => {
               const IconComponent = Icon as typeof ImagePlus;
