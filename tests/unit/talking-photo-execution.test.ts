@@ -128,6 +128,9 @@ describe("Talking Photo execution", () => {
     expect(component).toContain("void uploadAudioFile(file)");
     expect(component).toContain("Recording itself uses no provider credits");
     expect(component).toContain("recordingStreamRef.current?.getTracks().forEach((track) => track.stop())");
+    expect(component).toContain("recordingCancelledRef.current = true");
+    expect(component).toContain('if (recorder.state !== "inactive") recorder.stop()');
+    expect(component).toContain("providerAvailable !== true || recording || uploadingAudio || quoting");
     expect(audioRoute).toContain("probeTalkingPhotoAudio(buffer)");
     expect(audioRoute).toContain("TALKING_PHOTO_MAX_AUDIO_BYTES");
     expect(component).not.toContain("submitFalTalkingPhoto");
