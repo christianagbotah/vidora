@@ -43,6 +43,15 @@ type ProjectResult = {
   dashboardUrl: string;
 };
 
+type SlideshowRenderState = {
+  jobId: string;
+  status: string;
+  progress: number;
+  step: string;
+  message?: string | null;
+  error?: string | null;
+};
+
 const modeOptions = [
   {
     id: "animate",
@@ -69,6 +78,8 @@ export default function PhotoStudioPage() {
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [renderingSlideshow, setRenderingSlideshow] = useState(false);
+  const [slideshowRender, setSlideshowRender] = useState<SlideshowRenderState | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProjectResult | null>(null);
 
@@ -182,6 +193,7 @@ export default function PhotoStudioPage() {
     setCreating(true);
     setError("");
     setResult(null);
+    setSlideshowRender(null);
     try {
       const response = await fetch("/api/photo-studio/projects", {
         method: "POST",
@@ -206,6 +218,56 @@ export default function PhotoStudioPage() {
     }
   };
 
+  const renderSlideshowLocally = async () => {
+    if (!result || result.mode !== "slideshow") return;
+    setRenderingSlideshow(true);
+    setError("");
+    try {
+      const response = await fetch("/api/photo-studio/slideshow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: result.projectId }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success || !body.jobId) {
+        throw new Error(body.error || "Unable to start local slideshow render");
+      }
+
+      const jobId = String(body.jobId);
+      setSlideshowRender({
+        jobId,
+        status: body.status || "queued",
+        progress: Number(body.progress || 0),
+        step: body.step || "Queued local slideshow render",
+      });
+
+      for (let attempt = 0; attempt < 400; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        const statusResponse = await fetch(
+          `/api/export-video?jobId=${encodeURIComponent(jobId)}`,
+          { cache: "no-store" },
+        );
+        const statusBody = await statusResponse.json();
+        if (!statusResponse.ok || !statusBody.success) {
+          throw new Error(statusBody.error || "Unable to read slideshow render progress");
+        }
+        const job = statusBody.job as SlideshowRenderState | null;
+        if (!job) throw new Error("Local slideshow render job disappeared");
+        setSlideshowRender(job);
+        if (job.status === "done") return;
+        if (job.status === "failed") {
+          throw new Error(job.error || job.message || "Local slideshow render failed");
+        }
+      }
+
+      throw new Error("Local slideshow render is taking longer than expected. You can return to Vidora and check it again.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Local slideshow render failed");
+    } finally {
+      setRenderingSlideshow(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,_rgba(124,58,237,.24),_transparent_42%),radial-gradient(circle_at_top_right,_rgba(6,182,212,.16),_transparent_36%)]">
@@ -213,7 +275,7 @@ export default function PhotoStudioPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Link href="/" className="text-sm font-semibold text-violet-300 hover:text-violet-200">← Back to Vidora</Link>
             <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200">
-              Upload & project setup do not spend AI credits
+              Uploads & local slideshow rendering use no AI credits
             </span>
           </div>
 
@@ -385,6 +447,44 @@ export default function PhotoStudioPage() {
               <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
                 <p className="font-bold text-emerald-200">Project ready · {result.sceneCount} scenes</p>
                 <p className="mt-1 text-sm leading-6 text-emerald-100/80">{result.message}</p>
+                {result.mode === "slideshow" ? (
+                  <div className="mt-4 rounded-xl border border-cyan-300/20 bg-slate-950/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-cyan-100">Provider-free motion render</p>
+                        <p className="mt-1 text-xs text-slate-400">Ken Burns zoom and directional drift run on Vidora's FFmpeg worker. AI credits: 0.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void renderSlideshowLocally()}
+                        disabled={renderingSlideshow || slideshowRender?.status === "done"}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-cyan-300 px-3.5 py-2 text-xs font-black text-slate-950 hover:bg-cyan-200 disabled:opacity-50"
+                      >
+                        {renderingSlideshow ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />}
+                        {slideshowRender?.status === "done" ? "Local clips ready" : renderingSlideshow ? "Rendering locally…" : "Render locally · 0 credits"}
+                      </button>
+                    </div>
+                    {slideshowRender ? (
+                      <div className="mt-3">
+                        <div className="flex items-center justify-between gap-3 text-xs text-slate-300">
+                          <span>{slideshowRender.step}</span>
+                          <span>{Math.max(0, Math.min(100, Math.round(slideshowRender.progress)))}%</span>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-400 transition-[width] duration-500"
+                            style={{ width: `${Math.max(0, Math.min(100, slideshowRender.progress))}%` }}
+                          />
+                        </div>
+                        {slideshowRender.status === "done" ? (
+                          <p className="mt-2 text-xs font-semibold text-emerald-200">
+                            {slideshowRender.message || "Local slideshow clips are ready. Build Full Preview in Vidora to review the complete cut."}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <Link href={result.dashboardUrl || "/"} className="mt-3 inline-flex items-center gap-2 text-sm font-bold text-white hover:text-emerald-100">
                   Return to Vidora workspace <ArrowRight className="h-4 w-4" />
                 </Link>
