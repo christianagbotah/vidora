@@ -11,8 +11,8 @@ function read(relativePath: string): string {
 describe("long-form provider billing boundary", () => {
   test("story-bible planning reserves before strict billed text submission and settles actual usage", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
-    const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
-    const submitIndex = route.indexOf("submitBilledZaiText(");
+    const reserveIndex = route.indexOf("reserveMeteredTextOperation(");
+    const submitIndex = route.indexOf("submitBilledText(");
     const captureIndex = route.indexOf("captureActualMeteredLine(");
     const finalizeIndex = route.indexOf("finalizeMeteredReservation(");
 
@@ -23,12 +23,13 @@ describe("long-form provider billing boundary", () => {
     expect(route).not.toContain("zai.chat(");
     expect(route).not.toContain("generateProviderText(");
     expect(route).not.toContain("withRetry(");
+    expect(route).toContain("provider: billing.provider");
   });
 
   test("story-bible idempotency replay is rejected before another paid planning call", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     const replayLookup = route.indexOf("findReservationByReference(referenceId)");
-    const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
+    const reserveIndex = route.indexOf("reserveMeteredTextOperation(");
     expect(replayLookup).toBeGreaterThan(-1);
     expect(replayLookup).toBeLessThan(reserveIndex);
     expect(route).toContain("replayed: true");
@@ -39,7 +40,7 @@ describe("long-form provider billing boundary", () => {
     const route = read("src/app/api/creative/long-form/plan/route.ts");
     expect(route).toContain('code: "LONG_FORM_PLAN_INVALID"');
     expect(route).toContain("No provider call will be repeated automatically");
-    expect((route.match(/submitBilledZaiText\(/g) || []).length).toBe(1);
+    expect((route.match(/submitBilledText\(/g) || []).length).toBe(1);
   });
 
   test("valid paid story-bible output is persisted transactionally and a DB failure returns the plan instead of paying twice", () => {
@@ -59,8 +60,8 @@ describe("long-form provider billing boundary", () => {
     const versionCheck = route.indexOf("expectedExpansionVersion !== context.episode.expansionVersion");
     const replayLookup = route.indexOf("findReservationByReference(referenceId)");
     const leaseIndex = route.indexOf("claimLongFormEpisodeExpansion({");
-    const reserveIndex = route.indexOf("reserveMeteredZaiTextOperation(");
-    const submitIndex = route.indexOf("submitBilledZaiText(");
+    const reserveIndex = route.indexOf("reserveMeteredTextOperation(");
+    const submitIndex = route.indexOf("submitBilledText(");
     const captureIndex = route.indexOf("captureActualMeteredLine(");
 
     expect(versionCheck).toBeGreaterThan(-1);
@@ -69,7 +70,7 @@ describe("long-form provider billing boundary", () => {
     expect(leaseIndex).toBeLessThan(reserveIndex);
     expect(submitIndex).toBeGreaterThan(reserveIndex);
     expect(captureIndex).toBeGreaterThan(submitIndex);
-    expect((route.match(/submitBilledZaiText\(/g) || []).length).toBe(1);
+    expect((route.match(/submitBilledText\(/g) || []).length).toBe(1);
     expect(route).not.toContain("zai.chat(");
     expect(route).not.toContain("withRetry(");
   });
