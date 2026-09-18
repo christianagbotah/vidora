@@ -245,52 +245,56 @@ export async function runTalkingPhotoSpeechJob(jobId: string): Promise<void> {
     return;
   }
 
-  try {
-    const buffer = await readFile(outputPath);
-    const probe = await probeTalkingPhotoAudio(buffer);
-    const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-    const existingAsset = await db.mediaAsset.findUnique({
-      where: { userId_sha256: { userId: job.userId, sha256 } },
-    });
-    let outputAssetId: string;
-    if (existingAsset) {
-      if (existingAsset.kind !== "audio") {
-        await failReconciliation(job.id, "Generated speech hash already exists as a non-audio asset.");
-        return;
-      }
-      outputAssetId = existingAsset.id;
-    } else {
-      const url = await saveGeneratedFile(
-        `users/${job.userId}/photo-studio/audio/${sha256}.${probe.extension}`,
-        buffer,
-      );
-      const asset = await db.mediaAsset.create({
-        data: {
-          userId: job.userId,
-          kind: "audio",
-          source: "qwen_tts",
-          originalName: `Digital Actor voice ${job.id.slice(0, 8)}.${probe.extension}`,
-          mimeType: probe.mimeType,
-          sizeBytes: buffer.length,
-          url,
-          sha256,
-          durationSeconds: probe.durationSeconds,
-        },
-      });
-      outputAssetId = asset.id;
+  const buffer = await readFile(outputPath);
+  const probe = await probeTalkingPhotoAudio(buffer);
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  const existingAsset = await db.mediaAsset.findUnique({
+    where: { userId_sha256: { userId: job.userId, sha256 } },
+  });
+  let outputAssetId: string;
+  if (existingAsset) {
+    if (existingAsset.kind !== "audio") {
+      await failReconciliation(job.id, "Generated speech hash already exists as a non-audio asset.");
+      return;
     }
-
-    await db.talkingPhotoSpeechJob.update({
-      where: { id: job.id },
+    const asset = existingAsset.durationSeconds
+      ? existingAsset
+      : await db.mediaAsset.update({
+          where: { id: existingAsset.id },
+          data: { durationSeconds: probe.durationSeconds },
+        });
+    outputAssetId = asset.id;
+  } else {
+    const url = await saveGeneratedFile(
+      `users/${job.userId}/photo-studio/audio/${sha256}.${probe.extension}`,
+      buffer,
+    );
+    const asset = await db.mediaAsset.create({
       data: {
-        status: "completed",
-        activeKey: null,
-        outputAssetId,
-        error: null,
+        userId: job.userId,
+        kind: "audio",
+        source: "qwen_tts",
+        originalName: `Digital Actor voice ${job.id.slice(0, 8)}.${probe.extension}`,
+        mimeType: probe.mimeType,
+        sizeBytes: buffer.length,
+        url,
+        sha256,
+        durationSeconds: probe.durationSeconds,
       },
     });
-  } finally {
-    deleteAudioFile(outputName);
-    for (const chunkPath of chunkPaths) deleteAudioFile(path.basename(chunkPath));
+    outputAssetId = asset.id;
   }
+
+  await db.talkingPhotoSpeechJob.update({
+    where: { id: job.id },
+    data: {
+      status: "completed",
+      activeKey: null,
+      outputAssetId,
+      error: null,
+    },
+  });
+
+  deleteAudioFile(outputName);
+  for (const chunkPath of chunkPaths) deleteAudioFile(path.basename(chunkPath));
 }
