@@ -105,6 +105,7 @@ export default function PhotoStudioPage() {
   const [primaryAssetId, setPrimaryAssetId] = useState("");
   const [characterName, setCharacterName] = useState("");
   const [characterRole, setCharacterRole] = useState("primary");
+  const [characterVoice, setCharacterVoice] = useState("tongtong");
   const [emotion, setEmotion] = useState("natural");
   const [gestureIntensity, setGestureIntensity] = useState("medium");
   const [eyeContact, setEyeContact] = useState("camera");
@@ -181,6 +182,7 @@ export default function PhotoStudioPage() {
         body: JSON.stringify({
           name: characterName,
           role: characterRole,
+          voiceId: characterVoice,
           primaryAssetId,
           referenceAssetIds: [primaryAssetId],
           consentConfirmed,
@@ -192,6 +194,7 @@ export default function PhotoStudioPage() {
       setProfiles((current) => [body.profile as CharacterProfile, ...current]);
       setCharacterProfileId(body.profile.id);
       setCharacterName("");
+      setCharacterVoice("tongtong");
       setConsentConfirmed(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to save character");
@@ -710,6 +713,14 @@ export default function PhotoStudioPage() {
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <input placeholder="Character name" value={characterName} onChange={(e) => setCharacterName(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm" />
               <input placeholder="Role e.g. founder, mother, presenter" value={characterRole} onChange={(e) => setCharacterRole(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm" />
+              <select value={characterVoice} onChange={(e) => setCharacterVoice(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm">
+                <option value="tongtong">Voice: Warm narrator</option>
+                <option value="xiaochen">Voice: Professional calm</option>
+                <option value="jam">Voice: British gentleman</option>
+                <option value="kazi">Voice: Clear standard</option>
+                <option value="luodo">Voice: Expressive</option>
+                <option value="chuichui">Voice: Playful</option>
+              </select>
               <input placeholder="Emotion" value={emotion} onChange={(e) => setEmotion(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm" />
               <input placeholder="Acting style" value={actingStyle} onChange={(e) => setActingStyle(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm" />
               <select value={gestureIntensity} onChange={(e) => setGestureIntensity(e.target.value)} className="rounded-xl border border-white/10 bg-slate-950 px-3.5 py-3 text-sm">
@@ -754,7 +765,7 @@ export default function PhotoStudioPage() {
                       ) : <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-white/5"><Users className="h-4 w-4" /></div>}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-bold">{profile.name}</p>
-                        <p className="truncate text-xs text-slate-500">{profile.role || "character"} · consent {profile.consentStatus}</p>
+                        <p className="truncate text-xs text-slate-500">{profile.role || "character"} · {profile.voiceId || "default voice"} · consent {profile.consentStatus}</p>
                       </div>
                     </button>
                   ))}
