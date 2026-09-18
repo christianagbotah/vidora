@@ -35,10 +35,10 @@ describe("language and export pipeline regression guards", () => {
     expect(direct).toContain("persistedOnServer: false");
   });
 
-  test("final export project recovery excludes Full Preview jobs", () => {
+  test("final export project recovery excludes pre-review media jobs", () => {
     const route = source("src/app/api/export-video/route.ts");
     expect(route).toContain('where: { activeKey: `project:${projectId}` }');
-    expect(route).toContain('mediaJobMode(activeJob.params) === "preview"');
+    expect(route).toContain('mediaJobMode(activeJob.params) !== "final"');
     expect(route).toContain("return NextResponse.json({ success: true, job: null })");
     expect(route).toContain('forwardedUrl.searchParams.set("jobId", activeJob.id)');
   });

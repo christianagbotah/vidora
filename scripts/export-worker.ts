@@ -15,7 +15,10 @@ async function claimJob(): Promise<string | null> {
       SELECT "id", "status"
       FROM "ExportJob"
       WHERE "activeKey" IS NOT NULL
-        AND "params" LIKE '%"mode":"preview"%'
+        AND (
+          "params" LIKE '%"mode":"preview"%'
+          OR "params" LIKE '%"mode":"photo_slideshow"%'
+        )
         AND (
           "status" = 'queued'
           OR (
@@ -35,7 +38,7 @@ async function claimJob(): Promise<string | null> {
       where: { id: row.id },
       data: {
         status: "running",
-        step: row.status === "running" ? "Recovering interrupted preview…" : "Preparing preview…",
+        step: row.status === "running" ? "Recovering interrupted media job…" : "Preparing media job…",
         error: null,
         updatedAt: new Date(),
       },
@@ -46,7 +49,7 @@ async function claimJob(): Promise<string | null> {
 }
 
 async function runForever(): Promise<void> {
-  console.log("[export-worker] started (preview jobs only; final exports stream directly to browsers)");
+  console.log("[export-worker] started (preview + local slideshow jobs; final exports stream directly to browsers)");
 
   while (!stopping) {
     let jobId: string | null = null;

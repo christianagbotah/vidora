@@ -134,9 +134,10 @@ export async function POST(req: NextRequest) {
       projectId: project.id,
       sceneCount: orderedAssets.length,
       mode,
-      generationRequired: true,
+      generationRequired: mode !== "slideshow",
+      localRenderAvailable: mode === "slideshow",
       message: mode === "slideshow"
-        ? "Your cinematic slideshow storyboard is ready. Review it in Vidora, then generate motion when you are ready to spend credits."
+        ? "Your cinematic slideshow storyboard is ready. Render its motion locally with FFmpeg — no AI credits required."
         : "Your reference-backed photo animation project is ready. Review it before starting paid motion generation.",
       dashboardUrl: "/",
     }, { status: 201 });

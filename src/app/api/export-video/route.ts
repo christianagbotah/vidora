@@ -41,6 +41,18 @@ function previewActiveResponse(jobId?: string): NextResponse {
   );
 }
 
+function slideshowActiveResponse(jobId?: string): NextResponse {
+  return NextResponse.json(
+    {
+      success: false,
+      error: "Photo Studio is still rendering local slideshow clips. Wait for it to finish before starting Full Preview or final export.",
+      code: "VIDORA_SLIDESHOW_ACTIVE",
+      ...(jobId ? { jobId } : {}),
+    },
+    { status: 409 },
+  );
+}
+
 function previewRequiredResponse(): NextResponse {
   return NextResponse.json(
     {
@@ -182,7 +194,9 @@ export async function POST(req: NextRequest) {
       activeJob = null;
     }
     if (activeJob) {
-      if (mediaJobMode(activeJob.params) === "preview") return previewActiveResponse(activeJob.id);
+      const mode = mediaJobMode(activeJob.params);
+      if (mode === "preview") return previewActiveResponse(activeJob.id);
+      if (mode === "photo_slideshow") return slideshowActiveResponse(activeJob.id);
       return resumedFinalJob(activeJob);
     }
 
@@ -216,7 +230,9 @@ export async function POST(req: NextRequest) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const concurrent = await db.exportJob.findUnique({ where: { activeKey } });
         if (concurrent) {
-          if (mediaJobMode(concurrent.params) === "preview") return previewActiveResponse(concurrent.id);
+          const mode = mediaJobMode(concurrent.params);
+          if (mode === "preview") return previewActiveResponse(concurrent.id);
+          if (mode === "photo_slideshow") return slideshowActiveResponse(concurrent.id);
           return resumedFinalJob(concurrent);
         }
       }
@@ -266,7 +282,7 @@ export async function GET(req: NextRequest) {
     where: { activeKey: `project:${projectId}` },
     select: { id: true, params: true },
   });
-  if (!activeJob || mediaJobMode(activeJob.params) === "preview") {
+  if (!activeJob || mediaJobMode(activeJob.params) !== "final") {
     return NextResponse.json({ success: true, job: null });
   }
 

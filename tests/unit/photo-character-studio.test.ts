@@ -98,7 +98,8 @@ describe("Photo & Character Studio foundation", () => {
     expect(route).toContain("referenceImageUrl: asset.url");
     expect(route).toContain("imageUrl: asset.url");
     expect(route).toContain('status: "pending"');
-    expect(route).toContain("generationRequired: true");
+    expect(route).toContain('generationRequired: mode !== "slideshow"');
+    expect(route).toContain('localRenderAvailable: mode === "slideshow"');
     expect(route).toContain("sourceProfileId: profile.id");
     expect(route).toContain("performanceDirection(savedPerformance)");
     expect(route).not.toContain("zai.");
@@ -127,6 +128,6 @@ describe("Photo & Character Studio foundation", () => {
     expect(layout).toContain("<PhotoStudioLauncher />");
     expect(launcher).toContain('href="/photo-studio"');
     expect(page).toContain("Vidora Photo & Character Studio");
-    expect(page).toContain("Upload & project setup do not spend AI credits");
+    expect(page).toContain("Uploads & local slideshow rendering use no AI credits");
   });
 });

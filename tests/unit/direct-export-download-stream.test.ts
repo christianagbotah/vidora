@@ -40,13 +40,15 @@ describe("direct final-export delivery", () => {
     expect(route).toContain("return released.count === 1");
   });
 
-  test("background export worker only claims preview jobs", () => {
+  test("background export worker only claims durable pre-review media jobs", () => {
     const worker = source("scripts", "export-worker.ts");
     const dispatch = source("src", "lib", "export-job-dispatch.ts");
 
     expect(worker).toContain('"params" LIKE \'%"mode":"preview"%\'');
-    expect(worker).toContain("preview jobs only");
-    expect(dispatch).toContain('jobMode(job.params) !== "preview"');
+    expect(worker).toContain('"params" LIKE \'%"mode":"photo_slideshow"%\'');
+    expect(worker).toContain("preview + local slideshow jobs");
+    expect(dispatch).toContain('if (mode === "preview")');
+    expect(dispatch).toContain('if (mode === "photo_slideshow")');
     expect(dispatch).not.toContain('runExportJob(jobId)');
   });
 
