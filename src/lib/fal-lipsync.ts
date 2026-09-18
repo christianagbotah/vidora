@@ -46,6 +46,14 @@ function requireFalKey(): string {
   return value;
 }
 
+export function isFalTalkingPhotoConfigured(): boolean {
+  return Boolean((process.env.FAL_KEY || "").trim());
+}
+
+export function assertFalTalkingPhotoConfigured(): void {
+  requireFalKey();
+}
+
 function assertHttpsUrl(value: string, label: string): string {
   let parsed: URL;
   try {

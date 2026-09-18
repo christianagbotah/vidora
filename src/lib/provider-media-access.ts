@@ -5,6 +5,7 @@ import { resolvePublicAssetPath, sanitizeRelPath } from "./generated-store";
 
 const TOKEN_VERSION = 1;
 export const PROVIDER_MEDIA_TTL_SECONDS = 15 * 60;
+export const PROVIDER_MEDIA_MAX_TTL_SECONDS = 60 * 60;
 export const PROVIDER_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 function signingSecret(): string {
@@ -25,10 +26,12 @@ function signatureFor(relPath: string, exp: number): string {
 
 export function createProviderMediaToken(
   relPath: string,
-  nowSeconds = Math.floor(Date.now() / 1000)
+  nowSeconds = Math.floor(Date.now() / 1000),
+  ttlSeconds = PROVIDER_MEDIA_TTL_SECONDS,
 ): { exp: number; sig: string } {
   const safe = sanitizeRelPath(relPath);
-  const exp = nowSeconds + PROVIDER_MEDIA_TTL_SECONDS;
+  const ttl = Math.max(60, Math.min(PROVIDER_MEDIA_MAX_TTL_SECONDS, Math.round(ttlSeconds)));
+  const exp = nowSeconds + ttl;
   return { exp, sig: signatureFor(safe, exp) };
 }
 
@@ -42,7 +45,7 @@ export function verifyProviderMediaToken(
   const exp = Number(expValue);
   if (!Number.isSafeInteger(exp) || exp < nowSeconds) return false;
   // Reject unexpectedly long-lived capabilities even if a future caller signs one.
-  if (exp > nowSeconds + PROVIDER_MEDIA_TTL_SECONDS + 60) return false;
+  if (exp > nowSeconds + PROVIDER_MEDIA_MAX_TTL_SECONDS + 60) return false;
 
   let expected: string;
   try {
@@ -107,6 +110,47 @@ export function toProviderFetchUrl(
 
   const rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
   const { exp, sig } = createProviderMediaToken(rel);
+  parsed.searchParams.set("vpm_exp", String(exp));
+  parsed.searchParams.set("vpm_sig", sig);
+  return parsed.toString();
+}
+
+
+/**
+ * Prepare any Vidora-owned generated media for URL-only external providers.
+ * Unlike toProviderFetchUrl(), this helper never inlines image bytes: fal's
+ * Talking Photo API requires fetchable image/audio URLs.
+ */
+export function toSignedProviderMediaUrl(
+  mediaUrl: string | undefined | null,
+  origin: string,
+): string | undefined {
+  if (!mediaUrl) return undefined;
+  const normalizedOrigin = origin.replace(/\/$/, "");
+  let parsed: URL;
+  let originUrl: URL;
+  try {
+    parsed = new URL(mediaUrl, `${normalizedOrigin}/`);
+    originUrl = new URL(normalizedOrigin);
+  } catch {
+    return undefined;
+  }
+
+  if (parsed.protocol !== "https:") return undefined;
+  if (parsed.origin !== originUrl.origin) return parsed.toString();
+  if (!parsed.pathname.startsWith("/generated/")) return undefined;
+
+  let rel: string;
+  try {
+    rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
+  } catch {
+    return undefined;
+  }
+  const { exp, sig } = createProviderMediaToken(
+    rel,
+    Math.floor(Date.now() / 1000),
+    PROVIDER_MEDIA_MAX_TTL_SECONDS,
+  );
   parsed.searchParams.set("vpm_exp", String(exp));
   parsed.searchParams.set("vpm_sig", sig);
   return parsed.toString();

@@ -26,6 +26,10 @@ const MIME: Record<string, string> = {
   ".mov": "video/quicktime",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
   ".srt": "text/plain; charset=utf-8",
   ".vtt": "text/vtt; charset=utf-8",
 };
@@ -123,6 +127,19 @@ async function authorizeGeneratedMedia(
     // account even when a public-share password is configured.
     const access = await requireProjectAccess(project.id, false);
     return { allowed: access.ok, publicCache: false };
+  }
+
+  const talkingPhoto = await db.talkingPhotoJob.findFirst({
+    where: { videoUrl: mediaUrl },
+    select: { userId: true },
+  });
+  if (talkingPhoto) {
+    const auth = await requireAuth();
+    if (!auth.ok) return { allowed: false, publicCache: false };
+    return {
+      allowed: auth.session.userId === talkingPhoto.userId || auth.session.role === "admin",
+      publicCache: false,
+    };
   }
 
   const brand = await db.brandKit.findFirst({

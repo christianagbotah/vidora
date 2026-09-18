@@ -30,12 +30,13 @@ function heartbeat(
 }
 
 describe("Vidora PM2 deployment health", () => {
-  test("passes process state only when web and both workers are online", () => {
+  test("passes process state only when web and all durable workers are online", () => {
     const result = evaluatePm2Processes([
       row("vidora", "online", 1001),
       row("vidora-generation-worker", "online", 1002),
       row("vidora-export-worker", "online", 1003),
-      row("unrelated-service", "stopped", 1004),
+      row("vidora-talking-photo-worker", "online", 1004),
+      row("unrelated-service", "stopped", 1005),
     ]);
 
     expect(result).toEqual({ ok: true, missing: [], unhealthy: [] });
@@ -48,7 +49,7 @@ describe("Vidora PM2 deployment health", () => {
     ]);
 
     expect(result.ok).toBe(false);
-    expect(result.missing).toEqual(["vidora-export-worker"]);
+    expect(result.missing).toEqual(["vidora-export-worker", "vidora-talking-photo-worker"]);
     expect(result.unhealthy).toEqual([]);
   });
 
@@ -57,6 +58,7 @@ describe("Vidora PM2 deployment health", () => {
       row("vidora", "online"),
       row("vidora-generation-worker", "errored"),
       row("vidora-export-worker", "launching"),
+      row("vidora-talking-photo-worker", "online"),
     ]);
 
     expect(result.ok).toBe(false);
@@ -87,6 +89,12 @@ describe("Vidora PM2 deployment health", () => {
         "online",
         1003,
         `${projectDir}/${EXPECTED_DURABLE_WORKER_TARGETS["vidora-export-worker"]}`,
+      ),
+      row(
+        "vidora-talking-photo-worker",
+        "online",
+        1004,
+        `${projectDir}/${EXPECTED_DURABLE_WORKER_TARGETS["vidora-talking-photo-worker"]}`,
       ),
     ], projectDir);
 

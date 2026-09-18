@@ -7,6 +7,13 @@ describe("provider video storage URL policy", () => {
     expect(isTrustedProviderVideoUrl("https://cdn.z.ai/video/clip.mp4")).toBe(true);
   });
 
+  test("accepts fal-controlled Talking Photo result hosts", () => {
+    expect(isTrustedProviderVideoUrl("https://v3.fal.media/files/rabbit/output.mp4")).toBe(true);
+    expect(isTrustedProviderVideoUrl("https://v3b.fal.media/files/b/output.mp4")).toBe(true);
+    expect(isTrustedProviderVideoUrl("https://fal.media/files/output.mp4")).toBe(true);
+    expect(isTrustedProviderVideoUrl("https://fal.media.attacker.example/output.mp4")).toBe(false);
+  });
+
   test("rejects non-HTTPS and unrelated hosts", () => {
     expect(isTrustedProviderVideoUrl("http://mfile.z.ai/clip.mp4")).toBe(false);
     expect(isTrustedProviderVideoUrl("https://example.com/clip.mp4")).toBe(false);

@@ -2,10 +2,12 @@ import { saveGeneratedFile } from "@/lib/generated-store";
 
 const MAX_PROVIDER_VIDEO_BYTES = 256 * 1024 * 1024;
 const RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
-const DEFAULT_PROVIDER_MEDIA_HOSTS = ["mfile.z.ai"];
+const DEFAULT_PROVIDER_MEDIA_HOSTS = ["mfile.z.ai", "fal.media"];
 
 function allowedProviderHosts(): Set<string> {
-  const configured = (process.env.ZAI_MEDIA_HOSTS || "")
+  const configured = [process.env.ZAI_MEDIA_HOSTS, process.env.FAL_MEDIA_HOSTS]
+    .filter(Boolean)
+    .join(",")
     .split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
@@ -17,7 +19,7 @@ export function isTrustedProviderVideoUrl(value: string): boolean {
     const parsed = new URL(value);
     if (parsed.protocol !== "https:") return false;
     const host = parsed.hostname.toLowerCase();
-    return allowedProviderHosts().has(host) || host.endsWith(".z.ai");
+    return allowedProviderHosts().has(host) || host.endsWith(".z.ai") || host.endsWith(".fal.media");
   } catch {
     return false;
   }

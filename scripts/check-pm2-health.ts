@@ -14,11 +14,13 @@ export const EXPECTED_VIDORA_PM2_APPS = [
   "vidora",
   "vidora-generation-worker",
   "vidora-export-worker",
+  "vidora-talking-photo-worker",
 ] as const;
 
 export const EXPECTED_DURABLE_WORKER_TARGETS: Record<VidoraDurableWorkerName, string> = {
   "vidora-generation-worker": "scripts/generation-worker-entry.ts",
   "vidora-export-worker": "scripts/export-worker-entry.ts",
+  "vidora-talking-photo-worker": "scripts/talking-photo-worker-entry.ts",
 };
 
 interface Pm2ProcessRow {
