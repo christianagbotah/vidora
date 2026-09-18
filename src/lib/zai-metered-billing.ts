@@ -22,7 +22,13 @@ const VISION_CONTEXT_TOKEN_CEILING = 128_000;
  */
 export function estimateTextInputTokenCeiling(...parts: Array<string | null | undefined>): number {
   const bytes = parts.reduce((sum, part) => sum + Buffer.byteLength(part || "", "utf8"), 0);
-  return Math.max(1, Math.min(TEXT_CONTEXT_TOKEN_CEILING, bytes));
+  if (bytes > TEXT_CONTEXT_TOKEN_CEILING) {
+    throw new BillingSafetyError(
+      "TEXT_INPUT_TOO_LARGE",
+      `Paid text input exceeds Vidora's prepaid ${TEXT_CONTEXT_TOKEN_CEILING}-token safety ceiling.`,
+    );
+  }
+  return Math.max(1, bytes);
 }
 
 function safeOutputTokenCeiling(value: number | undefined, fallback: number): number {
