@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "worker:generation": "bun scripts/generation-worker.ts",
     "worker:export": "bun scripts/export-worker.ts",
+    "worker:talking-photo": "bun scripts/talking-photo-worker.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
