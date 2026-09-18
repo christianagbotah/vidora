@@ -111,6 +111,35 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: long-form hierarchy index(es) missing: ${missingLongFormIndexes.join(', ')}`);
   }
 
+  const requiredPhotoStudioTables = ['MediaAsset', 'CharacterProfile'];
+  const photoStudioTables = await db.$queryRaw<TableRow[]>`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name IN ('MediaAsset','CharacterProfile')
+  `;
+  const photoStudioTableNames = new Set(photoStudioTables.map((row) => row.table_name));
+  const missingPhotoStudioTables = requiredPhotoStudioTables.filter((name) => !photoStudioTableNames.has(name));
+  if (missingPhotoStudioTables.length) {
+    throw new Error(`Runtime DB contract failed: Photo Studio table(s) missing: ${missingPhotoStudioTables.join(', ')}`);
+  }
+
+  const characterProfileColumns = await db.$queryRaw<ColumnRow[]>`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'Character'
+      AND column_name IN ('sourceProfileId')
+  `;
+  if (!characterProfileColumns.some((row) => row.column_name === 'sourceProfileId')) {
+    throw new Error('Runtime DB contract failed: Character.sourceProfileId is missing');
+  }
+
+  const mediaAssetIndexes = await db.$queryRaw<IndexRow[]>`
+    SELECT indexname, indexdef FROM pg_indexes
+    WHERE schemaname = 'public' AND tablename = 'MediaAsset'
+  `;
+  if (!mediaAssetIndexes.some((row) => row.indexname === 'MediaAsset_userId_sha256_key')) {
+    throw new Error('Runtime DB contract failed: MediaAsset owner/hash dedup index is missing');
+  }
+
   const generationColumns = await db.$queryRaw<ColumnRow[]>`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'GenerationRun'
@@ -206,7 +235,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy/lease verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy/lease + Photo Studio verified)');
 }
 
 main()

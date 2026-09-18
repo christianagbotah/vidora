@@ -1,10 +1,15 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import crypto from "crypto";
 import { db } from "@/lib/db";
 import { createBillingQuote, reserveBillingQuote, type BillingQuoteLine } from "@/lib/credit-reservations";
 import type { CommercialPricingPolicy } from "@/lib/provider-cost-billing";
 
 const userId = `billing-ci-${crypto.randomUUID()}`;
+let activePricing: {
+  pricingVersion: string;
+  sourceUrl: string;
+  verifiedAt: Date;
+} | null = null;
 const policy: CommercialPricingPolicy = {
   creditValueUsd: 0.05,
   targetGrossMarginPct: 0.35,
@@ -18,7 +23,33 @@ const policy: CommercialPricingPolicy = {
   billingEnabled: true,
 };
 
+beforeAll(async () => {
+  activePricing = await db.providerPrice.findFirst({
+    where: {
+      provider: "zai",
+      model: "CogVideoX-3",
+      operation: "video_generation",
+      active: true,
+      effectiveFrom: { lte: new Date() },
+      OR: [
+        { effectiveUntil: null },
+        { effectiveUntil: { gt: new Date() } },
+      ],
+    },
+    orderBy: { effectiveFrom: "desc" },
+    select: {
+      pricingVersion: true,
+      sourceUrl: true,
+      verifiedAt: true,
+    },
+  });
+  if (!activePricing) {
+    throw new Error("CI billing fixture requires an active CogVideoX-3 provider price");
+  }
+});
+
 function line(key: string): BillingQuoteLine {
+  if (!activePricing) throw new Error("Active provider price fixture was not loaded");
   return {
     lineKey: key,
     label: `Concurrent test ${key}`,
@@ -27,9 +58,9 @@ function line(key: string): BillingQuoteLine {
     operation: "video_generation",
     billingUnit: "request",
     quantity: 1,
-    pricingVersion: "ci-test",
-    sourceUrl: "https://example.invalid/price",
-    verifiedAt: new Date().toISOString(),
+    pricingVersion: activePricing.pricingVersion,
+    sourceUrl: activePricing.sourceUrl,
+    verifiedAt: activePricing.verifiedAt.toISOString(),
     providerCostUsd: 0.2,
     providerSafetyUsd: 0.01,
     fxReserveUsd: 0.01,

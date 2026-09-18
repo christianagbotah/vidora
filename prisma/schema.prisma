@@ -30,6 +30,8 @@ model User {
   socialConnections        SocialConnection[]
   workspaces               WorkspaceMember[]
   longFormProductions      LongFormProduction[]
+  mediaAssets              MediaAsset[]
+  characterProfiles        CharacterProfile[]
 }
 
 model VideoProject {
@@ -120,20 +122,67 @@ model VideoScene {
 }
 
 model Character {
-  id          String       @id @default(cuid())
-  projectId   String
-  project     VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name        String
-  role        String?
-  description String?      @db.Text
-  stylePrompt String?      @db.Text
-  voiceId     String?
-  imageUrl    String?      @db.Text
-  imageBase64 String?      @db.Text
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @default(now())
+  id              String            @id @default(cuid())
+  projectId       String
+  project         VideoProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceProfileId String?
+  sourceProfile   CharacterProfile? @relation(fields: [sourceProfileId], references: [id], onDelete: SetNull)
+  name            String
+  role            String?
+  description     String?           @db.Text
+  stylePrompt     String?           @db.Text
+  voiceId         String?
+  imageUrl        String?           @db.Text
+  imageBase64     String?           @db.Text
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now())
 
   @@index([projectId])
+  @@index([sourceProfileId])
+}
+
+model MediaAsset {
+  id                String             @id @default(cuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind              String             @default("image")
+  source            String             @default("upload")
+  originalName      String
+  mimeType          String
+  sizeBytes         Int
+  url               String             @db.Text
+  sha256            String
+  width             Int?
+  height            Int?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  characterProfiles CharacterProfile[] @relation("CharacterProfilePrimaryAsset")
+
+  @@unique([userId, sha256])
+  @@index([userId, createdAt])
+}
+
+model CharacterProfile {
+  id                 String      @id @default(cuid())
+  userId             String
+  user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name               String
+  role               String?
+  description        String?     @db.Text
+  stylePrompt        String?     @db.Text
+  voiceId            String?
+  primaryAssetId     String?
+  primaryAsset       MediaAsset? @relation("CharacterProfilePrimaryAsset", fields: [primaryAssetId], references: [id], onDelete: SetNull)
+  referenceAssetIds  String      @default("[]") @db.Text
+  performanceProfile String      @default("{}") @db.Text
+  consentStatus      String      @default("unconfirmed")
+  consentConfirmedAt DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  projectCharacters  Character[]
+
+  @@index([userId, createdAt])
+  @@index([primaryAssetId])
 }
 
 model GenerationHistory {
