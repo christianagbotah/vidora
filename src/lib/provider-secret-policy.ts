@@ -3,6 +3,7 @@ export const WEB_WRITABLE_PROVIDER_SECRET_KEYS = new Set([
   "qwen_tts_api_key",
   "xai_tts_api_key",
   "elevenlabs_api_key",
+  "fal_api_key",
 ]);
 
 const MASKED_SECRET_RE = /^\*{4,}[^*]{0,4}$/;
