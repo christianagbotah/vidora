@@ -10,6 +10,7 @@ import {
   Play,
   ShieldCheck,
   Sparkles,
+  Square,
   Upload,
 } from "lucide-react";
 
@@ -79,6 +80,11 @@ function statusLabel(status: string): string {
 
 export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingCancelledRef = useRef(false);
   const [audioAssets, setAudioAssets] = useState<AudioAsset[]>([]);
   const [selectedImageId, setSelectedImageId] = useState("");
   const [selectedAudioId, setSelectedAudioId] = useState("");
@@ -87,11 +93,36 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const [recentJobs, setRecentJobs] = useState<TalkingPhotoJob[]>([]);
   const [consentConfirmed, setConsentConfirmed] = useState(false);
   const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null);
+  const [recordingSupported, setRecordingSupported] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [loadingAudio, setLoadingAudio] = useState(true);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [quoting, setQuoting] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setRecordingSupported(
+      typeof MediaRecorder !== "undefined"
+      && Boolean(navigator.mediaDevices?.getUserMedia),
+    );
+    return () => {
+      recordingCancelledRef.current = true;
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      mediaRecorderRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedImageId && images[0]) setSelectedImageId(images[0].id);
@@ -171,9 +202,8 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     resetPaidState();
   };
 
-  const uploadAudio = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
+  const uploadAudioFile = async (file: File) => {
+    if (!file || file.size <= 0) return;
     setUploadingAudio(true);
     setError("");
     try {
@@ -200,6 +230,121 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     } finally {
       setUploadingAudio(false);
       if (audioInputRef.current) audioInputRef.current.value = "";
+    }
+  };
+
+  const uploadAudio = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    await uploadAudioFile(file);
+  };
+
+  const clearRecordingResources = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    setRecording(false);
+  };
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    recorder.stop();
+  };
+
+  const startRecording = async () => {
+    if (
+      typeof MediaRecorder === "undefined"
+      || !navigator.mediaDevices?.getUserMedia
+    ) {
+      setRecordingSupported(false);
+      setError("Microphone recording is not supported in this browser. Upload an audio file instead.");
+      return;
+    }
+    if (recording || uploadingAudio) return;
+
+    setError("");
+    setQuote(null);
+    setJob(null);
+    setConsentConfirmed(false);
+    recordingCancelledRef.current = false;
+    recordingChunksRef.current = [];
+    setRecordingSeconds(0);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      recordingStreamRef.current = stream;
+
+      const preferredMime = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ].find((mime) => MediaRecorder.isTypeSupported(mime));
+      const recorder = preferredMime
+        ? new MediaRecorder(stream, { mimeType: preferredMime })
+        : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        recordingCancelledRef.current = true;
+        if (recorder.state !== "inactive") recorder.stop();
+        else clearRecordingResources();
+        setError("Microphone recording failed. You can upload an audio file instead.");
+      };
+      recorder.onstop = () => {
+        const cancelled = recordingCancelledRef.current;
+        const chunks = [...recordingChunksRef.current];
+        recordingChunksRef.current = [];
+        const mimeType = recorder.mimeType || chunks[0]?.type || "audio/webm";
+        clearRecordingResources();
+        if (cancelled) return;
+
+        const blob = new Blob(chunks, { type: mimeType });
+        if (blob.size <= 0) {
+          setError("The microphone recording was empty. Please record again.");
+          return;
+        }
+        const extension = mimeType.includes("mp4")
+          ? "m4a"
+          : mimeType.includes("ogg")
+            ? "ogg"
+            : "webm";
+        const file = new File(
+          [blob],
+          `talking-photo-recording-${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`,
+          { type: mimeType },
+        );
+        void uploadAudioFile(file);
+      };
+
+      recorder.start(1_000);
+      setRecording(true);
+      const startedAt = Date.now();
+      recordingTimerRef.current = setInterval(() => {
+        const seconds = Math.min(600, Math.floor((Date.now() - startedAt) / 1_000));
+        setRecordingSeconds(seconds);
+        if (seconds >= 600 && recorder.state !== "inactive") recorder.stop();
+      }, 500);
+    } catch (reason) {
+      clearRecordingResources();
+      setError(
+        reason instanceof Error && reason.name === "NotAllowedError"
+          ? "Microphone permission was denied. Allow microphone access or upload an audio file instead."
+          : "Vidora could not start microphone recording. Upload an audio file instead.",
+      );
     }
   };
 
@@ -363,15 +508,32 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
               <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Speech audio</p>
               <p className="mt-1 text-xs text-slate-500">Audio-only · up to 50 MB · maximum 10 minutes.</p>
             </div>
-            <button
-              type="button"
-              onClick={() => audioInputRef.current?.click()}
-              disabled={uploadingAudio}
-              className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold hover:bg-white/10 disabled:opacity-50"
-            >
-              {uploadingAudio ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-              {uploadingAudio ? "Inspecting…" : "Upload audio"}
-            </button>
+            <div className="flex flex-wrap justify-end gap-2">
+              {recordingSupported ? (
+                <button
+                  type="button"
+                  onClick={() => recording ? stopRecording() : void startRecording()}
+                  disabled={uploadingAudio}
+                  className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold disabled:opacity-50 ${
+                    recording
+                      ? "border-red-300/30 bg-red-400/10 text-red-100 hover:bg-red-400/15"
+                      : "border-cyan-300/20 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15"
+                  }`}
+                >
+                  {recording ? <Square className="h-3.5 w-3.5 fill-current" /> : <Mic2 className="h-3.5 w-3.5" />}
+                  {recording ? `Stop · ${durationLabel(recordingSeconds)}` : "Record voice"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => audioInputRef.current?.click()}
+                disabled={uploadingAudio || recording}
+                className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold hover:bg-white/10 disabled:opacity-50"
+              >
+                {uploadingAudio ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {uploadingAudio ? "Inspecting…" : "Upload audio"}
+              </button>
+            </div>
             <input
               ref={audioInputRef}
               type="file"
@@ -379,6 +541,16 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
               hidden
               onChange={(event) => void uploadAudio(event.target.files)}
             />
+            {recording ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-300/20 bg-red-400/10 px-3 py-2 text-xs text-red-100">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-red-300" />
+                Recording from your microphone · {durationLabel(recordingSeconds)} · maximum 10 minutes · no provider credits used
+              </div>
+            ) : recordingSupported ? (
+              <p className="mt-2 text-[11px] text-slate-500">
+                Record directly in Vidora or upload an existing audio file. Recording itself uses no provider credits.
+              </p>
+            ) : null}
           </div>
 
           {loadingAudio ? (
@@ -477,7 +649,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
             <button
               type="button"
               onClick={() => void reviewCost()}
-              disabled={providerAvailable !== true || quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
+              disabled={providerAvailable !== true || recording || uploadingAudio || quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
               className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-slate-200 disabled:opacity-50"
             >
               {quoting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}

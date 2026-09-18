@@ -117,6 +117,26 @@ describe("Talking Photo execution", () => {
     expect(generated).toContain('".ogg": "audio/ogg"');
   });
 
+  test("browser microphone recording reuses the validated zero-cost audio upload path", () => {
+    const component = read("src/components/TalkingPhotoStudio.tsx");
+    const audioRoute = read("src/app/api/photo-studio/audio-assets/route.ts");
+
+    expect(component).toContain("navigator.mediaDevices.getUserMedia");
+    expect(component).toContain("new MediaRecorder");
+    expect(component).toContain("recorder.start(1_000)");
+    expect(component).toContain("seconds >= 600");
+    expect(component).toContain("void uploadAudioFile(file)");
+    expect(component).toContain("Recording itself uses no provider credits");
+    expect(component).toContain("recordingStreamRef.current?.getTracks().forEach((track) => track.stop())");
+    expect(component).toContain("recordingCancelledRef.current = true");
+    expect(component).toContain('if (recorder.state !== "inactive") recorder.stop()');
+    expect(component).toContain("providerAvailable !== true || recording || uploadingAudio || quoting");
+    expect(audioRoute).toContain("probeTalkingPhotoAudio(buffer)");
+    expect(audioRoute).toContain("TALKING_PHOTO_MAX_AUDIO_BYTES");
+    expect(component).not.toContain("submitFalTalkingPhoto");
+    expect(component).not.toContain("reserveBillingQuote");
+  });
+
   test("creator UI exposes quote/consent flow but no provider credential or direct provider call", () => {
     const component = read("src/components/TalkingPhotoStudio.tsx");
     expect(component).toContain("/api/photo-studio/talking-photo/quote");
