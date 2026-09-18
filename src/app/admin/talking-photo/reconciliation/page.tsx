@@ -17,7 +17,8 @@ type ReconciliationAction =
   | "retry_release"
   | "confirm_not_submitted_release"
   | "retry_billing_capture"
-  | "retry_provider_status";
+  | "retry_provider_status"
+  | "close_speech_release_remainder";
 
 interface ReconciliationJob {
   id: string;
@@ -66,6 +67,26 @@ interface ReconciliationJob {
   allowedActions: ReconciliationAction[];
 }
 
+interface SpeechReconciliationJob {
+  id: string;
+  userId: string;
+  status: string;
+  script: string;
+  voice: string;
+  providerModel: string;
+  chunkCount: number;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: {
+    id: string;
+    email: string;
+    name?: string | null;
+  };
+  reservation?: ReconciliationJob["reservation"];
+  allowedActions: ReconciliationAction[];
+}
+
 const KIND_LABELS: Record<string, string> = {
   ambiguous_submission: "Ambiguous provider submission",
   reservation_release: "Reservation release failed",
@@ -90,11 +111,13 @@ function actionLabel(action: ReconciliationAction): string {
     case "confirm_not_submitted_release": return "Confirm absent & release";
     case "retry_billing_capture": return "Retry billing capture";
     case "retry_provider_status": return "Recheck provider status";
+    case "close_speech_release_remainder": return "Close voice job & release unused credits";
   }
 }
 
 export default function TalkingPhotoReconciliationPage() {
   const [jobs, setJobs] = useState<ReconciliationJob[]>([]);
+  const [speechJobs, setSpeechJobs] = useState<SpeechReconciliationJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -113,6 +136,7 @@ export default function TalkingPhotoReconciliationPage() {
         throw new Error(body.error || "Unable to load Talking Photo reconciliation queue");
       }
       setJobs(Array.isArray(body.jobs) ? body.jobs : []);
+      setSpeechJobs(Array.isArray(body.speechJobs) ? body.speechJobs : []);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load reconciliation queue");
     } finally {
@@ -165,6 +189,34 @@ export default function TalkingPhotoReconciliationPage() {
     }
   };
 
+  const closeSpeechJob = async (job: SpeechReconciliationJob) => {
+    setRunning(`${job.id}:close_speech_release_remainder`);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/admin/talking-photo/reconciliation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobType: "speech",
+          jobId: job.id,
+          action: "close_speech_release_remainder",
+          note: notes[job.id] || "",
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) {
+        throw new Error(body.error || "Voice reconciliation action failed");
+      }
+      setMessage(`Voice job closed safely. Released ${body.creditsReleased ?? 0} unused credits; captured Qwen credits were preserved.`);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Voice reconciliation action failed");
+    } finally {
+      setRunning(null);
+    }
+  };
+
   return (
     <main className="mx-auto max-w-7xl space-y-6 p-4 md:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -212,7 +264,85 @@ export default function TalkingPhotoReconciliationPage() {
         </CardContent>
       </Card>
 
-      {loading && jobs.length === 0 ? (
+      {speechJobs.length ? (
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-fuchsia-700">Digital Actor voice reconciliation</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              These Qwen jobs preserve any captured provider charges. The only automated action releases unused reserved credits and closes the job.
+            </p>
+          </div>
+          {speechJobs.map((job) => {
+            const reservation = job.reservation;
+            const remaining = reservation
+              ? reservation.reservedCredits - reservation.capturedCredits - reservation.releasedCredits
+              : null;
+            return (
+              <Card key={job.id} className="border-fuchsia-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <AlertTriangle className="h-5 w-5 text-fuchsia-600" />
+                    Quarantined scripted voice
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    job {job.id} · user {job.user.email} · model {job.providerModel} · {job.chunkCount} part{job.chunkCount === 1 ? "" : "s"}
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="rounded-xl border bg-muted/30 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Script</p>
+                    <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-xs leading-5">{job.script}</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border p-3 text-xs">
+                      <p className="font-semibold">Voice</p>
+                      <p className="mt-1 text-muted-foreground">{job.voice}</p>
+                    </div>
+                    <div className="rounded-xl border p-3 text-xs">
+                      <p className="font-semibold">Reservation</p>
+                      {reservation ? (
+                        <>
+                          <p className="mt-1 text-muted-foreground">
+                            {reservation.reservedCredits} reserved · {reservation.capturedCredits} captured · {reservation.releasedCredits} released
+                          </p>
+                          <p className="mt-1 font-semibold">remaining {remaining} credits</p>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-amber-700">No reservation record resolved</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+                    {job.error || "No quarantine detail recorded"}
+                  </div>
+                  <textarea
+                    value={notes[job.id] || ""}
+                    onChange={(event) => setNotes((current) => ({ ...current, [job.id]: event.target.value }))}
+                    placeholder="Optional operator note"
+                    maxLength={1000}
+                    className="min-h-20 w-full rounded-xl border bg-background px-3 py-2 text-sm"
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={Boolean(running) || !reservation}
+                    onClick={() => void closeSpeechJob(job)}
+                  >
+                    {running === `${job.id}:close_speech_release_remainder` ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    Close voice job & release unused credits
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground">
+                    Already-captured Qwen credits are not refunded by this action.
+                  </p>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {loading && jobs.length === 0 && speechJobs.length === 0 ? (
         <div className="flex min-h-48 items-center justify-center">
           <Loader2 className="h-6 w-6 animate-spin" />
         </div>
