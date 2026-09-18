@@ -397,7 +397,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
           script: speechScript,
           voice: speechVoice,
           language: "en",
-          accent: "ghanaian",
+          accent: "auto",
           style: speechStyle,
         }),
       });
@@ -458,7 +458,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
           script: speechScript,
           voice: speechVoice,
           language: "en",
-          accent: "ghanaian",
+          accent: "auto",
           style: speechStyle,
           billingConfirmed: true,
         }),
@@ -469,7 +469,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
       }
       const next = body.job as SpeechJob;
       setSpeechJob(next);
-      if (next.status !== "completed") await pollSpeechJob(next.id);
+      await pollSpeechJob(next.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Digital Actor voice failed");
     } finally {
