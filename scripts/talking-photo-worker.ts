@@ -14,6 +14,11 @@ import { persistProviderVideo } from "@/lib/provider-video-storage";
 import { toSignedProviderMediaUrl } from "@/lib/provider-media-access";
 import { talkingPhotoLineKey } from "@/lib/talking-photo-billing";
 import { markTalkingPhotoNeedsReconciliation } from "@/lib/talking-photo-reconciliation";
+import {
+  claimTalkingPhotoSpeechJob,
+  recoverStaleTalkingPhotoSpeechReservations,
+  runTalkingPhotoSpeechJob,
+} from "@/lib/talking-photo-speech-execution";
 
 const IDLE_MS = Math.max(1_000, Number(process.env.TALKING_PHOTO_WORKER_IDLE_MS || 3_000));
 const STALE_MINUTES = Math.max(1, Number(process.env.TALKING_PHOTO_WORKER_STALE_MINUTES || 3));
@@ -398,9 +403,18 @@ async function runForever(): Promise<void> {
   console.log("[talking-photo-worker] started (durable fal lip-sync queue)");
   while (!stopping) {
     let jobId: string | null = null;
+    let speechJobId: string | null = null;
     try {
       await recoverStaleReservations();
+      await recoverStaleTalkingPhotoSpeechReservations();
       await quarantineAmbiguousSubmissions();
+
+      speechJobId = await claimTalkingPhotoSpeechJob();
+      if (speechJobId) {
+        await runTalkingPhotoSpeechJob(speechJobId);
+        continue;
+      }
+
       jobId = await claimJob();
       if (!jobId) {
         await sleep(IDLE_MS);
@@ -409,10 +423,20 @@ async function runForever(): Promise<void> {
       await runJob(jobId);
     } catch (error) {
       console.error(
-        `[talking-photo-worker] ${jobId ? `job=${jobId} ` : ""}error`,
+        `[talking-photo-worker] ${speechJobId ? `speechJob=${speechJobId} ` : jobId ? `job=${jobId} ` : ""}error`,
         error instanceof Error ? error.message : "unknown error",
       );
-      if (jobId) {
+      if (speechJobId) {
+        await db.talkingPhotoSpeechJob.update({
+          where: { id: speechJobId },
+          data: {
+            status: "processing",
+            error: `Worker interrupted Digital Actor voice processing. Durable chunk/billing checks will decide whether retry is safe: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          },
+        }).catch(() => undefined);
+      } else if (jobId) {
         const current = await db.talkingPhotoJob.findUnique({
           where: { id: jobId },
           select: { status: true, providerTaskId: true },
