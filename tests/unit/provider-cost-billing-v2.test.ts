@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { calculateCommercialCharge, type CommercialPricingPolicy } from "@/lib/provider-cost-billing";
+import { calculateCommercialCharge, type BillableOperation, type BillableProvider, type BillingUnit, type CommercialPricingPolicy } from "@/lib/provider-cost-billing";
 import { calculateCreditPackageEconomics, calculateSafeCreditPackageCheckoutPrice } from "@/lib/package-billing-safety";
 import {
   DEFAULT_ZAI_IMAGE_MODEL_ID,
@@ -10,6 +10,11 @@ import { estimateTextInputTokenCeiling } from "@/lib/zai-metered-billing";
 import { resolveQwenTtsModel } from "@/lib/qwen-tts";
 import { requireReservedQuoteLine } from "@/lib/reserved-quote";
 import type { BillingQuoteLine } from "@/lib/credit-reservations";
+import {
+  FAL_TALKING_PHOTO_MODEL,
+  FAL_TALKING_PHOTO_OPERATION,
+} from "@/lib/fal-lipsync";
+import { normalizeTalkingPhotoDurationSeconds } from "@/lib/fal-lipsync-billing";
 
 const policy: CommercialPricingPolicy = {
   creditValueUsd: 0.05,
@@ -147,5 +152,26 @@ describe("metered provider safeguards", () => {
       provider: "zai",
       operation: "video_generation",
     })).toThrow();
+  });
+});
+
+describe("fal Talking Photo billing foundation", () => {
+  test("Billing v2 accepts fal lip-sync as a first-class provider operation", () => {
+    const provider: BillableProvider = "fal";
+    const operation: BillableOperation = "lip_sync";
+    const unit: BillingUnit = "second";
+    expect(provider).toBe("fal");
+    expect(operation).toBe(FAL_TALKING_PHOTO_OPERATION);
+    expect(unit).toBe("second");
+    expect(FAL_TALKING_PHOTO_MODEL).toBe("fal-ai/sync-lipsync/v3/image-to-video");
+  });
+
+  test("rounds output duration up to whole billable seconds and caps unsafe input", () => {
+    expect(normalizeTalkingPhotoDurationSeconds(0.1)).toBe(1);
+    expect(normalizeTalkingPhotoDurationSeconds(8)).toBe(8);
+    expect(normalizeTalkingPhotoDurationSeconds(8.01)).toBe(9);
+    expect(normalizeTalkingPhotoDurationSeconds(900)).toBe(600);
+    expect(() => normalizeTalkingPhotoDurationSeconds(0)).toThrow();
+    expect(() => normalizeTalkingPhotoDurationSeconds(Number.NaN)).toThrow();
   });
 });
