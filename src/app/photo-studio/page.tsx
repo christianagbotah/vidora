@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useAppStore } from "@/store/useAppStore";
+import { PhotoMotionDirector } from "@/components/PhotoMotionDirector";
 import { livingPhotoGenerationProgress, type LivingPhotoProgress } from "@/lib/photo-studio-living-progress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -560,7 +561,12 @@ export default function PhotoStudioPage() {
                 <p className="font-bold text-emerald-200">Project ready · {result.sceneCount} scenes</p>
                 <p className="mt-1 text-sm leading-6 text-emerald-100/80">{result.message}</p>
                 {result.mode === "animate" ? (
-                  <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
+                  <>
+                    <PhotoMotionDirector
+                      projectId={result.projectId}
+                      locked={generatingLivingPhotos || livingPhotoGeneration !== null}
+                    />
+                    <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="max-w-xl">
                         <p className="text-sm font-bold text-violet-100">AI Living Photo motion</p>
@@ -616,7 +622,8 @@ export default function PhotoStudioPage() {
                         ) : null}
                       </div>
                     ) : null}
-                  </div>
+                    </div>
+                  </>
                 ) : null}
                 {result.mode === "slideshow" ? (
                   <div className="mt-4 rounded-xl border border-cyan-300/20 bg-slate-950/40 p-3">
