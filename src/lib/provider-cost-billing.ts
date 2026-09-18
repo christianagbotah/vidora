@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 
-export type BillableProvider = "zai" | "qwen";
+export type BillableProvider = "zai" | "qwen" | "fal";
 export type BillableOperation =
   | "video_generation"
   | "image_generation"
@@ -10,8 +10,9 @@ export type BillableOperation =
   | "vision_input"
   | "vision_output"
   | "asr"
-  | "web_search";
-export type BillingUnit = "request" | "image" | "character" | "token" | "minute";
+  | "web_search"
+  | "lip_sync";
+export type BillingUnit = "request" | "image" | "character" | "token" | "minute" | "second";
 
 export interface ProviderPriceSnapshot {
   provider: BillableProvider;
@@ -230,7 +231,7 @@ export function calculateCommercialCharge(
 }
 
 function asProvider(value: string): BillableProvider | null {
-  return value === "zai" || value === "qwen" ? value : null;
+  return value === "zai" || value === "qwen" || value === "fal" ? value : null;
 }
 
 function asOperation(value: string): BillableOperation | null {
@@ -244,13 +245,14 @@ function asOperation(value: string): BillableOperation | null {
     "vision_output",
     "asr",
     "web_search",
+    "lip_sync",
   ]).has(value as BillableOperation)
     ? value as BillableOperation
     : null;
 }
 
 function asUnit(value: string): BillingUnit | null {
-  return new Set<BillingUnit>(["request", "image", "character", "token", "minute"]).has(value as BillingUnit)
+  return new Set<BillingUnit>(["request", "image", "character", "token", "minute", "second"]).has(value as BillingUnit)
     ? value as BillingUnit
     : null;
 }

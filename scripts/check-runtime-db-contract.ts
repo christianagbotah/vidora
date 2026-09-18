@@ -229,13 +229,14 @@ async function main(): Promise<void> {
     `zai:${configuredVideoModel}:video_generation`,
     'qwen:qwen3-tts-instruct-flash:tts',
     `qwen:${configuredQwenModel}:tts`,
+    'fal:fal-ai/sync-lipsync/v3/image-to-video:lip_sync',
   ];
   const missingPrices = [...new Set(requiredPrices)].filter((key) => !priceKeys.has(key));
   if (missingPrices.length) {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + long-form hierarchy/lease + Photo Studio verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog + long-form hierarchy/lease + Photo Studio verified)');
 }
 
 main()
