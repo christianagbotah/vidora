@@ -189,7 +189,7 @@ stop_vidora_services() {
   # Set this before the first stop command. If PM2 fails halfway through the
   # list, the error handler knows it must restart the untouched current release.
   SERVICES_STOPPED=true
-  for app in vidora vidora-generation-worker vidora-export-worker vidora-talking-photo-worker; do
+  for app in vidora vidora-generation-worker vidora-export-worker vidora-talking-photo-worker vidora-talking-photo-speech-worker; do
     if pm2 describe "$app" >/dev/null 2>&1; then
       pm2 stop "$app"
     fi
