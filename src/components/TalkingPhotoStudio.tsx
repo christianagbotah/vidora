@@ -86,6 +86,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   const [job, setJob] = useState<TalkingPhotoJob | null>(null);
   const [recentJobs, setRecentJobs] = useState<TalkingPhotoJob[]>([]);
   const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [providerAvailable, setProviderAvailable] = useState<boolean | null>(null);
   const [loadingAudio, setLoadingAudio] = useState(true);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [quoting, setQuoting] = useState(false);
@@ -106,13 +107,15 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
     void (async () => {
       setLoadingAudio(true);
       try {
-        const [audioResponse, jobsResponse] = await Promise.all([
+        const [audioResponse, jobsResponse, capabilityResponse] = await Promise.all([
           fetch("/api/photo-studio/audio-assets", { cache: "no-store" }),
           fetch("/api/photo-studio/talking-photo/jobs", { cache: "no-store" }),
+          fetch("/api/photo-studio/talking-photo/capabilities", { cache: "no-store" }),
         ]);
-        const [audioBody, jobsBody] = await Promise.all([
+        const [audioBody, jobsBody, capabilityBody] = await Promise.all([
           audioResponse.json().catch(() => ({})),
           jobsResponse.json().catch(() => ({})),
+          capabilityResponse.json().catch(() => ({})),
         ]);
         if (!audioResponse.ok || !audioBody.success) {
           throw new Error(audioBody.error || "Unable to load audio library");
@@ -120,11 +123,15 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         if (!jobsResponse.ok || !jobsBody.success) {
           throw new Error(jobsBody.error || "Unable to load recent Talking Photo jobs");
         }
+        if (!capabilityResponse.ok || !capabilityBody.success) {
+          throw new Error(capabilityBody.error || "Unable to verify Talking Photo provider readiness");
+        }
         const items = Array.isArray(audioBody.assets) ? audioBody.assets as AudioAsset[] : [];
         const jobs = Array.isArray(jobsBody.jobs) ? jobsBody.jobs as TalkingPhotoJob[] : [];
         if (cancelled) return;
         setAudioAssets(items);
         setRecentJobs(jobs);
+        setProviderAvailable(capabilityBody.talkingPhoto?.available === true);
         setSelectedAudioId((current) => current || items[0]?.id || "");
         const active = jobs.find((candidate) =>
           !["completed", "failed", "needs_reconciliation"].includes(candidate.status),
@@ -197,7 +204,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   };
 
   const reviewCost = async () => {
-    if (!selectedImageId || !selectedAudioId) return;
+    if (!providerAvailable || !selectedImageId || !selectedAudioId) return;
     setQuoting(true);
     setQuote(null);
     setJob(null);
@@ -248,7 +255,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
   };
 
   const startTalkingPhoto = async () => {
-    if (!quote || !selectedImageId || !selectedAudioId || !consentConfirmed) return;
+    if (!providerAvailable || !quote || !selectedImageId || !selectedAudioId || !consentConfirmed) return;
     setStarting(true);
     setError("");
     try {
@@ -294,8 +301,13 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
             Choose one owned photo and one audio track. Vidora measures the audio on the server, shows the exact current credit charge, then runs a durable speech-synchronization job only after you confirm.
           </p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/15 bg-amber-400/10 px-3 py-1.5 text-xs font-bold text-amber-100">
-          <ShieldCheck className="h-4 w-4" /> Explicit consent + billing
+        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-bold ${
+          providerAvailable === false
+            ? "border-slate-300/15 bg-slate-400/10 text-slate-300"
+            : "border-amber-300/15 bg-amber-400/10 text-amber-100"
+        }`}>
+          <ShieldCheck className="h-4 w-4" />
+          {providerAvailable === false ? "Provider setup required" : "Explicit consent + billing"}
         </span>
       </div>
 
@@ -303,6 +315,18 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         <div className="mt-4 flex items-start gap-2 rounded-xl border border-red-300/20 bg-red-400/10 p-3 text-xs leading-5 text-red-100">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      ) : null}
+
+      {providerAvailable === false ? (
+        <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-300/20 bg-amber-400/10 p-4 text-xs leading-5 text-amber-100">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-bold">Talking Photo rendering is not enabled on this server yet.</p>
+            <p className="mt-1 text-amber-100/80">
+              You can prepare photos and audio without charge, but Vidora will not quote, reserve credits, or submit lip-sync work until the provider is configured.
+            </p>
+          </div>
         </div>
       ) : null}
 
@@ -453,11 +477,15 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
             <button
               type="button"
               onClick={() => void reviewCost()}
-              disabled={quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
+              disabled={providerAvailable !== true || quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
               className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-slate-200 disabled:opacity-50"
             >
               {quoting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {quoting ? "Checking live cost…" : "Review cost"}
+              {providerAvailable === false
+                ? "Provider setup required"
+                : quoting
+                  ? "Checking live cost…"
+                  : "Review cost"}
             </button>
           </div>
 
