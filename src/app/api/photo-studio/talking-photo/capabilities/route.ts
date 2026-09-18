@@ -12,7 +12,7 @@ export async function GET() {
   return NextResponse.json({
     success: true,
     talkingPhoto: {
-      available: isFalTalkingPhotoConfigured(),
+      available: await isFalTalkingPhotoConfigured(),
     },
   });
 }

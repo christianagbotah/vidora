@@ -18,6 +18,7 @@ export const SECRET_CONFIG_KEYS = new Set([
   "xai_tts_api_key",
   "elevenlabs_api_key",
   "compatible_api_key",
+  "fal_api_key",
 ]);
 
 function encryptionKey(): Buffer | null {

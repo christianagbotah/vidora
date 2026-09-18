@@ -177,7 +177,7 @@ export default function AIProviderAdminPage() {
       const payload: Record<string, string> = {};
       for (const key of EDITABLE_KEYS) payload[key] = form[key] || "";
       const secretConfigs: Record<string, string> = {};
-      for (const key of ["zai_tts_api_key", "qwen_tts_api_key", "elevenlabs_api_key"]) {
+      for (const key of ["zai_tts_api_key", "qwen_tts_api_key", "elevenlabs_api_key", "fal_api_key"]) {
         const value = (secretForm[key] || "").trim();
         if (value) secretConfigs[key] = value;
       }
@@ -304,7 +304,38 @@ export default function AIProviderAdminPage() {
             </CardContent>
           </Card>
 
-          <Card><CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" />Server secrets</CardTitle><CardDescription>Keys never leave the server.</CardDescription></CardHeader><CardContent className="space-y-3"><SecretBadge configs={configs} configKey="zai_api_key" env="ZAI_API_KEY" /><SecretBadge configs={configs} configKey="zai_tts_api_key" env="ZAI_TTS_API_KEY" /><SecretBadge configs={configs} configKey="qwen_tts_api_key" env="DASHSCOPE_API_KEY" /><SecretBadge configs={configs} configKey="xai_api_key" env="XAI_API_KEY" /><SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" /><SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" /><p className="pt-2 text-xs text-muted-foreground">Qwen3-TTS, BigModel and ElevenLabs speech keys can be added above. They are stored encrypted and are never displayed again.</p></CardContent></Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Video className="h-5 w-5" />Talking Photo provider</CardTitle>
+              <CardDescription>fal Sync-3 powers real speech-driven lip-sync independently from Vidora&apos;s Z.ai video engine.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="rounded-xl border bg-muted/25 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <Label>fal API key</Label>
+                  <Badge variant={configs.fal_api_key?.configured ? "default" : "outline"}>
+                    {configs.fal_api_key?.configured ? `Configured · ${configs.fal_api_key.source || "server"}` : "Not configured"}
+                  </Badge>
+                </div>
+                <Input
+                  className="mt-3"
+                  type="password"
+                  autoComplete="new-password"
+                  value={secretForm.fal_api_key || ""}
+                  onChange={(event) => setSecretField("fal_api_key", event.target.value)}
+                  placeholder={configs.fal_api_key?.configured ? "Enter a new key only to replace the current one" : "Paste your fal API key"}
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Write-only field. Leave blank to keep the existing encrypted key. Environment fallback: FAL_KEY.
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Talking Photo remains fail-closed until this credential is configured. Saving the key does not submit a paid provider job.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card><CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5" />Server secrets</CardTitle><CardDescription>Keys never leave the server.</CardDescription></CardHeader><CardContent className="space-y-3"><SecretBadge configs={configs} configKey="zai_api_key" env="ZAI_API_KEY" /><SecretBadge configs={configs} configKey="zai_tts_api_key" env="ZAI_TTS_API_KEY" /><SecretBadge configs={configs} configKey="qwen_tts_api_key" env="DASHSCOPE_API_KEY" /><SecretBadge configs={configs} configKey="xai_api_key" env="XAI_API_KEY" /><SecretBadge configs={configs} configKey="elevenlabs_api_key" env="ELEVENLABS_API_KEY" /><SecretBadge configs={configs} configKey="compatible_api_key" env="AI_COMPATIBLE_API_KEY" /><SecretBadge configs={configs} configKey="fal_api_key" env="FAL_KEY" /><p className="pt-2 text-xs text-muted-foreground">Approved optional provider keys can be entered above. They are stored encrypted and are never displayed again.</p></CardContent></Card>
         </div>
 
         <Card className="mt-5"><CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><Cpu className="mt-0.5 h-5 w-5" /><div><div className="font-semibold">Recommended cost-conscious mix</div><p className="text-sm text-muted-foreground">Z.ai for story/video + Qwen3-TTS for character speech, with provider routing kept independent.</p></div></div><Badge variant="outline" className="w-fit">Capability routing</Badge></CardContent></Card>

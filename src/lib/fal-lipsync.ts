@@ -1,3 +1,5 @@
+import { getConfigValue } from "@/lib/secure-config";
+
 const FAL_QUEUE_BASE_URL = "https://queue.fal.run";
 export const FAL_TALKING_PHOTO_MODEL = "fal-ai/sync-lipsync/v3/image-to-video";
 export const FAL_TALKING_PHOTO_OPERATION = "lip_sync" as const;
@@ -35,8 +37,8 @@ export class FalProviderError extends Error {
   }
 }
 
-function requireFalKey(): string {
-  const value = (process.env.FAL_KEY || "").trim();
+async function requireFalKey(): Promise<string> {
+  const value = await getConfigValue("fal_api_key", "FAL_KEY");
   if (!value) {
     throw new FalProviderError(
       "FAL_KEY_MISSING",
@@ -46,12 +48,12 @@ function requireFalKey(): string {
   return value;
 }
 
-export function isFalTalkingPhotoConfigured(): boolean {
-  return Boolean((process.env.FAL_KEY || "").trim());
+export async function isFalTalkingPhotoConfigured(): Promise<boolean> {
+  return Boolean(await getConfigValue("fal_api_key", "FAL_KEY"));
 }
 
-export function assertFalTalkingPhotoConfigured(): void {
-  requireFalKey();
+export async function assertFalTalkingPhotoConfigured(): Promise<void> {
+  await requireFalKey();
 }
 
 function assertHttpsUrl(value: string, label: string): string {
@@ -78,11 +80,12 @@ async function falFetchJson(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const falKey = await requireFalKey();
     const response = await fetch(url, {
       ...init,
       signal: controller.signal,
       headers: {
-        Authorization: `Key ${requireFalKey()}`,
+        Authorization: `Key ${falKey}`,
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         ...(init.headers || {}),
