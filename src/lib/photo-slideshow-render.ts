@@ -224,7 +224,7 @@ export async function runPhotoSlideshowJob(jobId: string): Promise<void> {
         sceneIndex: index,
       });
 
-      const fileName = `photo-slideshow-${project.id}-${scene.id}-${Date.now()}-${index + 1}.mp4`;
+      const fileName = `photo-slideshow-${project.id}-${scene.id}-${jobId}.mp4`;
       const promoted = await promoteGeneratedFile(tempPath, fileName);
       promotedPaths.push(promoted.path);
       rendered.push({
