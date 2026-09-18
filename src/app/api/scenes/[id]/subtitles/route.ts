@@ -2,10 +2,9 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireSceneAccess } from "@/lib/project-auth";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { findReservationByReference } from "@/lib/credit-reservations";
-import { reserveMeteredZaiTextOperation } from "@/lib/zai-metered-billing";
-import { submitBilledZaiText } from "@/lib/zai-billed-client";
+import { reserveMeteredTextOperation, submitBilledText } from "@/lib/metered-text-billing";
 import { captureActualMeteredLine, finalizeMeteredReservation } from "@/lib/metered-settlement";
 
 export const runtime = "nodejs";
@@ -51,7 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const systemPrompt = `You are a subtitle generator. Convert the user's narration text into SRT subtitle format. Each subtitle should be 5-8 words, displayed for 2-3 seconds. The total duration is ${scene.duration} seconds. Distribute subtitles evenly across the duration. Output ONLY valid SRT format, nothing else. No markdown fences, no explanations.\n\nSRT format example:\n1\n00:00:00,000 --> 00:00:02,500\nFirst few words here\n\n2\n00:00:02,500 --> 00:00:05,000\nNext few words here`;
     const lineKeyPrefix = `${operationKey}:billing`;
-    const billing = await reserveMeteredZaiTextOperation({
+    const billing = await reserveMeteredTextOperation({
       userId,
       projectId: scene.projectId,
       sceneId: id,
@@ -62,12 +61,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       systemPrompt,
       userPrompt: sourceText,
       maxOutputTokens: 4_000,
-      requireConfiguredPrimary: false,
     });
 
     await db.videoScene.update({ where: { id }, data: { subtitleStatus: "generating", subtitleLang: lang } });
     try {
-      const result = await submitBilledZaiText({
+      const result = await submitBilledText({
+        provider: billing.provider,
         model: billing.model,
         systemPrompt,
         userPrompt: sourceText,
@@ -75,7 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         thinking: "disabled",
         timeoutMs: 60_000,
       });
-      if (!result.usage) throw new Error("Z.ai returned no usage metadata; the prepaid subtitle reserve is held for reconciliation");
+      if (!result.usage) throw new Error("Paid text provider returned no usage metadata; the prepaid subtitle reserve is held for reconciliation");
       const inputCapture = await captureActualMeteredLine({
         reservationId: billing.reservation.id,
         lineKey: `${lineKeyPrefix}:input`,
@@ -95,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const finalized = await finalizeMeteredReservation({
         reservationId: billing.reservation.id,
         userId,
-        reason: "Subtitle generation actual Z.ai token usage settled",
+        reason: "Subtitle generation actual provider token usage settled",
       });
 
       let srt = result.content.trim();
@@ -114,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
     } catch (aiError) {
       await db.videoScene.update({ where: { id }, data: { subtitleStatus: "failed" } }).catch(() => undefined);
-      return zaiErrorResponse(aiError, { session: authResult.session, logLabel: "subtitles" });
+      return providerBillingErrorResponse(aiError, { session: authResult.session, logLabel: "subtitles" });
     }
   } catch (error) {
     console.error("[subtitles POST]", error instanceof Error ? error.message : "unknown error");
