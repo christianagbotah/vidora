@@ -4,6 +4,8 @@ import { requireAuth } from "@/lib/project-auth";
 import {
   buildPhotoScenePrompt,
   normalizeAssetIds,
+  parseStoredPerformanceProfile,
+  performanceDirection,
   sanitizeAspectRatio,
   sanitizePhotoStudioMode,
   sanitizePhotoStudioTitle,
