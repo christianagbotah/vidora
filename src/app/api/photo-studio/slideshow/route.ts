@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Add at least one photo first" }, { status: 400 });
     }
 
+    const sourceUrls: string[] = [];
     for (const scene of project.scenes) {
       const sourceUrl = photoSlideshowSourceUrl(scene);
       if (!sourceUrl?.startsWith("/generated/")) {
@@ -98,6 +99,23 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         );
       }
+      sourceUrls.push(sourceUrl);
+    }
+
+    const uniqueSourceUrls = [...new Set(sourceUrls)];
+    const ownedAssets = await db.mediaAsset.findMany({
+      where: {
+        userId: access.session.userId,
+        kind: "image",
+        url: { in: uniqueSourceUrls },
+      },
+      select: { url: true },
+    });
+    if (ownedAssets.length !== uniqueSourceUrls.length) {
+      return NextResponse.json(
+        { success: false, error: "One or more slideshow photos are not owned by this account" },
+        { status: 403 },
+      );
     }
 
     const activeKey = `project:${projectId}`;
