@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth } from "@/lib/project-auth";
+import { assertFalTalkingPhotoConfigured } from "@/lib/fal-lipsync";
 import {
   getBillingQuote,
   reserveBillingQuote,
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) return auth.response;
 
   try {
+    assertFalTalkingPhotoConfigured();
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const imageAssetId = typeof body.imageAssetId === "string" ? body.imageAssetId.trim() : "";
     const audioAssetId = typeof body.audioAssetId === "string" ? body.audioAssetId.trim() : "";
