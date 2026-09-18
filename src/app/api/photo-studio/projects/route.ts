@@ -63,6 +63,9 @@ export async function POST(req: NextRequest) {
     const secondsPerPhoto = sanitizeSecondsPerPhoto(body.secondsPerPhoto);
     const style = optionalText(body.style, 120) || "cinematic";
     const targetDuration = Math.min(300, secondsPerPhoto * orderedAssets.length);
+    const savedPerformance = profile
+      ? parseStoredPerformanceProfile(profile.performanceProfile)
+      : null;
 
     const project = await db.$transaction(async (tx) => {
       const created = await tx.videoProject.create({
@@ -104,7 +107,10 @@ export async function POST(req: NextRequest) {
             projectId: created.id,
             sceneNumber: index + 1,
             title: `Photo ${index + 1}`,
-            prompt: buildPhotoScenePrompt(mode, index, orderedAssets.length, profile?.name),
+            prompt: [
+              buildPhotoScenePrompt(mode, index, orderedAssets.length, profile?.name),
+              mode === "animate" && savedPerformance ? performanceDirection(savedPerformance) : "",
+            ].filter(Boolean).join(" "),
             visualNote: mode === "slideshow"
               ? "Preserve the source photo; favor subtle depth, parallax and restrained camera movement."
               : "Preserve identity and composition while introducing believable natural motion.",
