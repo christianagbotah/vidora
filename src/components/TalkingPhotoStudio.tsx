@@ -299,6 +299,9 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
         if (event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
       recorder.onerror = () => {
+        recordingCancelledRef.current = true;
+        if (recorder.state !== "inactive") recorder.stop();
+        else clearRecordingResources();
         setError("Microphone recording failed. You can upload an audio file instead.");
       };
       recorder.onstop = () => {
@@ -646,7 +649,7 @@ export function TalkingPhotoStudio({ images }: TalkingPhotoStudioProps) {
             <button
               type="button"
               onClick={() => void reviewCost()}
-              disabled={providerAvailable !== true || quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
+              disabled={providerAvailable !== true || recording || uploadingAudio || quoting || starting || Boolean(job && !["failed", "completed", "needs_reconciliation"].includes(job.status))}
               className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-slate-200 disabled:opacity-50"
             >
               {quoting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
