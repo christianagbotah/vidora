@@ -111,3 +111,40 @@ export function toProviderFetchUrl(
   parsed.searchParams.set("vpm_sig", sig);
   return parsed.toString();
 }
+
+
+/**
+ * Prepare any Vidora-owned generated media for URL-only external providers.
+ * Unlike toProviderFetchUrl(), this helper never inlines image bytes: fal's
+ * Talking Photo API requires fetchable image/audio URLs.
+ */
+export function toSignedProviderMediaUrl(
+  mediaUrl: string | undefined | null,
+  origin: string,
+): string | undefined {
+  if (!mediaUrl) return undefined;
+  const normalizedOrigin = origin.replace(/\/$/, "");
+  let parsed: URL;
+  let originUrl: URL;
+  try {
+    parsed = new URL(mediaUrl, `${normalizedOrigin}/`);
+    originUrl = new URL(normalizedOrigin);
+  } catch {
+    return undefined;
+  }
+
+  if (parsed.protocol !== "https:") return undefined;
+  if (parsed.origin !== originUrl.origin) return parsed.toString();
+  if (!parsed.pathname.startsWith("/generated/")) return undefined;
+
+  let rel: string;
+  try {
+    rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
+  } catch {
+    return undefined;
+  }
+  const { exp, sig } = createProviderMediaToken(rel);
+  parsed.searchParams.set("vpm_exp", String(exp));
+  parsed.searchParams.set("vpm_sig", sig);
+  return parsed.toString();
+}
