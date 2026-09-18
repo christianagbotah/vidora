@@ -72,7 +72,7 @@ describe("Photo & Character Studio foundation", () => {
     const route = read("src/app/api/photo-studio/assets/route.ts");
     expect(route).toContain("requireAuth()");
     expect(route).toContain("userId: auth.session.userId");
-    expect(route).toContain("sha256");
+    expect(route).toContain("sha256");\n    expect(route).toContain("mediaAsset.upsert");\n    expect(route).toContain("userId_sha256");
     expect(route).toContain("users/${auth.session.userId}/photo-studio/");
     expect(route).not.toContain("zai.");
     expect(route).not.toContain("generateVideo");
@@ -92,7 +92,7 @@ describe("Photo & Character Studio foundation", () => {
     expect(route).toContain("imageUrl: asset.url");
     expect(route).toContain('status: "pending"');
     expect(route).toContain("generationRequired: true");
-    expect(route).toContain("sourceProfileId: profile.id");
+    expect(route).toContain("sourceProfileId: profile.id");\n    expect(route).toContain("performanceDirection(savedPerformance)");
     expect(route).not.toContain("zai.");
     expect(route).not.toContain("generateVideo");
   });
