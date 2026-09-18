@@ -123,6 +123,9 @@ describe("provider-free Photo Studio slideshow renderer", () => {
     expect(page).toContain("/api/export-video?jobId=");
     expect(page).toContain("Render locally · 0 credits");
     expect(page).toContain("AI credits: 0");
+    expect(page).toContain("useAppStore.getState()");
+    expect(page).toContain('store.setCurrentView("studio")');
+    expect(page).toContain("Open this project in Vidora Studio");
     expect(projectsRoute).toContain('generationRequired: mode !== "slideshow"');
     expect(projectsRoute).toContain('localRenderAvailable: mode === "slideshow"');
   });
