@@ -16,6 +16,21 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
+  const jobs = await db.talkingPhotoJob.findMany({
+    where: { userId: auth.session.userId },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    include: {
+      imageAsset: { select: { id: true, originalName: true, url: true } },
+      audioAsset: { select: { id: true, originalName: true, url: true, durationSeconds: true } },
+    },
+  });
+  return NextResponse.json({ success: true, jobs });
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireAuth();
   if (!auth.ok) return auth.response;
