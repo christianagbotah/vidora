@@ -65,20 +65,19 @@ export async function POST(req: NextRequest) {
         );
       }
       const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-      const existing = await db.mediaAsset.findFirst({
-        where: { userId: auth.session.userId, sha256 },
-      });
-      if (existing) {
-        assets.push(existing);
-        continue;
-      }
-
       const url = await saveGeneratedFile(
         `users/${auth.session.userId}/photo-studio/${sha256}.${ext}`,
         buffer,
       );
-      const created = await db.mediaAsset.create({
-        data: {
+      const asset = await db.mediaAsset.upsert({
+        where: {
+          userId_sha256: {
+            userId: auth.session.userId,
+            sha256,
+          },
+        },
+        update: {},
+        create: {
           userId: auth.session.userId,
           kind: "image",
           source: "upload",
@@ -89,7 +88,7 @@ export async function POST(req: NextRequest) {
           sha256,
         },
       });
-      assets.push(created);
+      assets.push(asset);
     }
 
     return NextResponse.json({ success: true, assets }, { status: 201 });
