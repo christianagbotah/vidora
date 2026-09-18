@@ -61,6 +61,8 @@ describe("Scripted Digital Actor voice", () => {
     expect(route).toContain("releaseReservationRemainder");
     expect(route).toContain('status: "completed"');
     expect(route).toContain("reused without another charge");
+    expect(route).toContain("db.mediaAsset.findFirst");
+    expect(route).toContain('kind: "audio"');
     expect(route).not.toContain("synthesizeQwenTts");
     expect(route).not.toContain("submitFalTalkingPhoto");
   });
@@ -98,6 +100,8 @@ describe("Scripted Digital Actor voice", () => {
     expect(worker).toContain("recoverStaleTalkingPhotoSpeechReservations");
     expect(worker).toContain("claimTalkingPhotoSpeechJob");
     expect(worker).toContain("runTalkingPhotoSpeechJob");
+    expect(worker).toContain("speechJobId = null;");
+    expect(worker.indexOf("runTalkingPhotoSpeechJob(speechJobId)")).toBeLessThan(worker.indexOf("jobId = await claimJob()"));
     expect(ecosystem).toContain('name: "vidora-talking-photo-worker"');
     expect(ecosystem).not.toContain("vidora-talking-photo-speech-worker");
   });
