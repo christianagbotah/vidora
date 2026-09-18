@@ -72,9 +72,12 @@ async function markNeedsReconciliation(jobId: string, message: string): Promise<
   });
 }
 
-function providerDefinitelyRejected(error: unknown): boolean {
-  return error instanceof FalProviderError
-    && typeof error.status === "number"
+function providerDefinitelyNotSubmitted(error: unknown): boolean {
+  if (!(error instanceof FalProviderError)) return false;
+  if (["FAL_KEY_MISSING", "FAL_INPUT_URL_INVALID", "FAL_INPUT_URL_UNSAFE"].includes(error.code)) {
+    return true;
+  }
+  return typeof error.status === "number"
     && error.status >= 400
     && error.status < 500
     && error.status !== 408
@@ -205,7 +208,7 @@ async function submitNewJob(job: {
     submitted = await submitFalTalkingPhoto({ imageUrl, audioUrl });
   } catch (error) {
     const message = error instanceof Error ? error.message : "fal submission failed";
-    if (providerDefinitelyRejected(error)) {
+    if (providerDefinitelyNotSubmitted(error)) {
       await failBeforeProviderAcceptance(job, message);
       return;
     }
