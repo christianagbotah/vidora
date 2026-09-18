@@ -5,6 +5,7 @@ import { resolvePublicAssetPath, sanitizeRelPath } from "./generated-store";
 
 const TOKEN_VERSION = 1;
 export const PROVIDER_MEDIA_TTL_SECONDS = 15 * 60;
+export const PROVIDER_MEDIA_MAX_TTL_SECONDS = 60 * 60;
 export const PROVIDER_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 function signingSecret(): string {
@@ -25,10 +26,12 @@ function signatureFor(relPath: string, exp: number): string {
 
 export function createProviderMediaToken(
   relPath: string,
-  nowSeconds = Math.floor(Date.now() / 1000)
+  nowSeconds = Math.floor(Date.now() / 1000),
+  ttlSeconds = PROVIDER_MEDIA_TTL_SECONDS,
 ): { exp: number; sig: string } {
   const safe = sanitizeRelPath(relPath);
-  const exp = nowSeconds + PROVIDER_MEDIA_TTL_SECONDS;
+  const ttl = Math.max(60, Math.min(PROVIDER_MEDIA_MAX_TTL_SECONDS, Math.round(ttlSeconds)));
+  const exp = nowSeconds + ttl;
   return { exp, sig: signatureFor(safe, exp) };
 }
 
@@ -42,7 +45,7 @@ export function verifyProviderMediaToken(
   const exp = Number(expValue);
   if (!Number.isSafeInteger(exp) || exp < nowSeconds) return false;
   // Reject unexpectedly long-lived capabilities even if a future caller signs one.
-  if (exp > nowSeconds + PROVIDER_MEDIA_TTL_SECONDS + 60) return false;
+  if (exp > nowSeconds + PROVIDER_MEDIA_MAX_TTL_SECONDS + 60) return false;
 
   let expected: string;
   try {
@@ -106,7 +109,7 @@ export function toProviderFetchUrl(
   if (inline) return inline;
 
   const rel = sanitizeRelPath(decodeURIComponent(parsed.pathname.slice("/generated/".length)));
-  const { exp, sig } = createProviderMediaToken(rel);
+  const { exp, sig } = createProviderMediaToken(rel, Math.floor(Date.now() / 1000), PROVIDER_MEDIA_MAX_TTL_SECONDS);
   parsed.searchParams.set("vpm_exp", String(exp));
   parsed.searchParams.set("vpm_sig", sig);
   return parsed.toString();
