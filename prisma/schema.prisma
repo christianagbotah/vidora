@@ -32,6 +32,7 @@ model User {
   longFormProductions      LongFormProduction[]
   mediaAssets              MediaAsset[]
   characterProfiles        CharacterProfile[]
+  talkingPhotoJobs         TalkingPhotoJob[]
 }
 
 model VideoProject {
@@ -154,9 +155,12 @@ model MediaAsset {
   sha256            String
   width             Int?
   height            Int?
+  durationSeconds   Float?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   characterProfiles CharacterProfile[] @relation("CharacterProfilePrimaryAsset")
+  talkingPhotoImageJobs TalkingPhotoJob[] @relation("TalkingPhotoImageAsset")
+  talkingPhotoAudioJobs TalkingPhotoJob[] @relation("TalkingPhotoAudioAsset")
 
   @@unique([userId, sha256])
   @@index([userId, createdAt])
@@ -183,6 +187,31 @@ model CharacterProfile {
 
   @@index([userId, createdAt])
   @@index([primaryAssetId])
+}
+
+model TalkingPhotoJob {
+  id                  String     @id
+  userId              String
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imageAssetId        String
+  imageAsset          MediaAsset @relation("TalkingPhotoImageAsset", fields: [imageAssetId], references: [id], onDelete: Restrict)
+  audioAssetId        String
+  audioAsset          MediaAsset @relation("TalkingPhotoAudioAsset", fields: [audioAssetId], references: [id], onDelete: Restrict)
+  activeKey           String?    @unique
+  status              String     @default("queued")
+  durationSeconds     Float
+  consentConfirmedAt  DateTime
+  billingQuoteId      String?
+  creditReservationId String?
+  providerTaskId      String?
+  videoUrl            String?    @db.Text
+  error               String?    @db.Text
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
+  @@index([providerTaskId])
 }
 
 model GenerationHistory {
