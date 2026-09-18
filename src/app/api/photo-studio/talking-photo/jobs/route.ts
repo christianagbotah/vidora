@@ -140,20 +140,33 @@ export async function POST(req: NextRequest) {
         },
       });
     } catch (error) {
-      await releaseReservationRemainder({
-        reservationId: reserved.reservation.id,
-        userId: auth.session.userId,
-        reason: "Talking Photo queue handoff failed before any provider submission",
-      }).catch(() => undefined);
-      await db.talkingPhotoJob.update({
-        where: { id: job.id },
-        data: {
-          status: "failed",
-          activeKey: null,
-          creditReservationId: reserved.reservation.id,
-          error: "Job could not enter the durable provider queue; reserved credits were released.",
-        },
-      }).catch(() => undefined);
+      try {
+        await releaseReservationRemainder({
+          reservationId: reserved.reservation.id,
+          userId: auth.session.userId,
+          reason: "Talking Photo queue handoff failed before any provider submission",
+        });
+        await db.talkingPhotoJob.update({
+          where: { id: job.id },
+          data: {
+            status: "failed",
+            activeKey: null,
+            creditReservationId: reserved.reservation.id,
+            error: "Job could not enter the durable provider queue; reserved credits were released.",
+          },
+        }).catch(() => undefined);
+      } catch (releaseError) {
+        await db.talkingPhotoJob.update({
+          where: { id: job.id },
+          data: {
+            status: "needs_reconciliation",
+            creditReservationId: reserved.reservation.id,
+            error: `Queue handoff failed and reserved credits could not be released safely: ${
+              releaseError instanceof Error ? releaseError.message : "unknown release error"
+            }`,
+          },
+        }).catch(() => undefined);
+      }
       throw error;
     }
 
