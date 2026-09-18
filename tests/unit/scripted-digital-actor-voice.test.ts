@@ -59,6 +59,8 @@ describe("Scripted Digital Actor voice", () => {
     expect(route).toContain('status: "reserving"');
     expect(route).toContain('status: "queued"');
     expect(route).toContain("releaseReservationRemainder");
+    expect(route).toContain('status: "completed"');
+    expect(route).toContain("reused without another charge");
     expect(route).not.toContain("synthesizeQwenTts");
     expect(route).not.toContain("submitFalTalkingPhoto");
   });
@@ -86,6 +88,8 @@ describe("Scripted Digital Actor voice", () => {
     expect(execution).toContain('source: "qwen_tts"');
     expect(execution).toContain("durationSeconds: probe.durationSeconds");
     expect(execution).toContain("outputAssetId");
+    expect(execution).not.toContain("} finally {");
+    expect(execution.indexOf('status: "completed"')).toBeLessThan(execution.lastIndexOf("deleteAudioFile(outputName)"));
   });
 
   test("existing Talking Photo worker processes speech jobs without another PM2 daemon", () => {
