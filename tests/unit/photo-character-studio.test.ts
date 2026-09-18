@@ -98,7 +98,8 @@ describe("Photo & Character Studio foundation", () => {
     expect(route).toContain("referenceImageUrl: asset.url");
     expect(route).toContain("imageUrl: asset.url");
     expect(route).toContain('status: "pending"');
-    expect(route).toContain("generationRequired: true");
+    expect(route).toContain('generationRequired: mode !== "slideshow"');
+    expect(route).toContain('localRenderAvailable: mode === "slideshow"');
     expect(route).toContain("sourceProfileId: profile.id");
     expect(route).toContain("performanceDirection(savedPerformance)");
     expect(route).not.toContain("zai.");
