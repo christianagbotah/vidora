@@ -20,6 +20,7 @@ const PROVIDER_CALL_PATTERNS = [
   /\bsubmitBilledZaiVision\s*\(/,
   /\bsubmitBilledZaiImage\s*\(/,
   /\bsubmitBilledZaiVideo\s*\(/,
+  /\bsubmitFalTalkingPhoto\s*\(/,
 ];
 
 const BILLING_GUARD_PATTERNS = [
