@@ -567,7 +567,7 @@ export default function PhotoStudioPage() {
                       locked={generatingLivingPhotos || livingPhotoGeneration !== null}
                     />
                     <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="max-w-xl">
                         <p className="text-sm font-bold text-violet-100">AI Living Photo motion</p>
                         <p className="mt-1 text-xs leading-5 text-slate-400">
