@@ -75,10 +75,15 @@ describe("Talking Photo execution", () => {
     expect(submitCall).toBeGreaterThan(submitting);
     expect(persistTask).toBeGreaterThan(submitCall);
     expect(capture).toBeGreaterThan(persistTask);
+    expect(worker).toContain("recoverStaleReservations");
+    expect(worker).toContain("findReservationByReference");
+    expect(worker).toContain("Recovered stale Talking Photo reservation before any provider submission");
     expect(worker).toContain("quarantineAmbiguousSubmissions");
     expect(worker).toContain("needs_reconciliation");
     expect(worker).toContain("Automatic resubmission is blocked");
     expect(worker).toContain("providerDefinitelyNotSubmitted");
+    expect(worker).toContain('current?.status === "submitting"');
+    expect(worker).toContain("automatic resubmission is blocked");
   });
 
   test("private image/audio source URLs use short-lived signed capabilities", () => {
