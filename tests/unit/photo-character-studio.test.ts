@@ -128,6 +128,6 @@ describe("Photo & Character Studio foundation", () => {
     expect(layout).toContain("<PhotoStudioLauncher />");
     expect(launcher).toContain('href="/photo-studio"');
     expect(page).toContain("Vidora Photo & Character Studio");
-    expect(page).toContain("Upload & project setup do not spend AI credits");
+    expect(page).toContain("Uploads & local slideshow rendering use no AI credits");
   });
 });
