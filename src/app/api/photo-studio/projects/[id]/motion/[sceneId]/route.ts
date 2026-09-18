@@ -91,7 +91,7 @@ export async function PUT(
     }
 
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-    let direction;
+    let direction: ReturnType<typeof resolvePhotoMotionDirection>;
     try {
       direction = resolvePhotoMotionDirection(body.preset, body.customDirection);
     } catch (error) {
