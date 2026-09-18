@@ -1,11 +1,11 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/project-auth";
-import { zai, cleanLLMOutput } from "@/lib/zai";
-import { zaiErrorResponse } from "@/lib/zai-errors";
+import { cleanLLMOutput } from "@/lib/zai";
+import { providerBillingErrorResponse } from "@/lib/billing-errors";
 import { consumePreviewQuota } from "@/lib/preview-limit";
 import { deductTokensForOperation } from "@/lib/tokens";
-import { quoteFreeZaiTextAttempt } from "@/lib/zai-metered-billing";
+import { quoteFreeTextAttempt, submitBilledText } from "@/lib/metered-text-billing";
 
 export const runtime = "nodejs";
 
@@ -40,11 +40,10 @@ export async function POST(req: NextRequest) {
 
     // Price verification happens before consuming the free quota. The feature
     // stays free to the customer but cannot cross an unknown/stale COGS edge.
-    const cost = await quoteFreeZaiTextAttempt({
+    const cost = await quoteFreeTextAttempt({
       systemPrompt,
       userPrompt,
       maxOutputTokens: 1_000,
-      requireConfiguredPrimary: false,
     });
 
     const quota = await consumePreviewQuota(authResult.session.userId, "storyboard");
@@ -66,15 +65,16 @@ export async function POST(req: NextRequest) {
       customCostUsd: cost.providerCostUsd,
     });
 
-    const raw = await zai.chat({
+    const result = await submitBilledText({
+      provider: cost.provider,
+      model: cost.model,
       systemPrompt,
       userPrompt,
-      model: cost.model,
+      maxOutputTokens: 1_000,
       thinking: "disabled",
-      extra: { max_tokens: 1_000 },
-      retry: { label: "Enhance prompt", timeoutMs: 45_000, maxRetries: 3 },
+      timeoutMs: 45_000,
     });
-    const enhancedPrompt = cleanLLMOutput(raw);
+    const enhancedPrompt = cleanLLMOutput(result.content);
 
     if (!enhancedPrompt) {
       return NextResponse.json(
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
       previewQuota: quota,
     });
   } catch (error) {
-    return zaiErrorResponse(error, {
+    return providerBillingErrorResponse(error, {
       session: authResult.session,
       logLabel: "enhance-prompt",
     });
