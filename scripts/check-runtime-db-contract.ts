@@ -162,13 +162,17 @@ async function main(): Promise<void> {
     WHERE table_schema = 'public' AND table_name = 'TalkingPhotoJob'
       AND column_name IN (
         'activeKey','status','durationSeconds','consentConfirmedAt',
-        'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error','updatedAt'
+        'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error',
+        'reconciliationKind','reconciliationAt','reconciliationResolution',
+        'reconciledAt','reconciledByUserId','updatedAt'
       )
   `;
   const talkingPhotoColumnNames = new Set(talkingPhotoColumns.map((row) => row.column_name));
   const missingTalkingPhotoColumns = [
     'activeKey','status','durationSeconds','consentConfirmedAt',
-    'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error','updatedAt',
+    'billingQuoteId','creditReservationId','providerTaskId','videoUrl','error',
+    'reconciliationKind','reconciliationAt','reconciliationResolution',
+    'reconciledAt','reconciledByUserId','updatedAt',
   ].filter((name) => !talkingPhotoColumnNames.has(name));
   if (missingTalkingPhotoColumns.length) {
     throw new Error(`Runtime DB contract failed: TalkingPhotoJob column(s) missing: ${missingTalkingPhotoColumns.join(', ')}`);
@@ -186,6 +190,7 @@ async function main(): Promise<void> {
     'TalkingPhotoJob_userId_createdAt_idx',
     'TalkingPhotoJob_status_updatedAt_idx',
     'TalkingPhotoJob_providerTaskId_idx',
+    'TalkingPhotoJob_reconciliationKind_reconciliationAt_idx',
   ]) {
     if (!talkingPhotoIndexNames.has(required)) {
       throw new Error(`Runtime DB contract failed: Talking Photo index missing: ${required}`);
@@ -288,7 +293,7 @@ async function main(): Promise<void> {
     throw new Error(`Runtime DB contract failed: active verified provider price(s) missing: ${missingPrices.join(', ')}`);
   }
 
-  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog/execution schema + long-form hierarchy/lease + Photo Studio verified)');
+  console.log('Runtime DB contract: OK (durable media lock + provider billing + fal Talking Photo catalog/execution/reconciliation schema + long-form hierarchy/lease + Photo Studio verified)');
 }
 
 main()
