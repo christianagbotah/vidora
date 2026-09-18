@@ -18,11 +18,10 @@ export async function GET(
   if (!job) {
     return NextResponse.json({ success: false, error: "Digital Actor voice job not found" }, { status: 404 });
   }
-  let outputAsset = null;
-  if (job.outputAssetId) {
-    outputAsset = await db.mediaAsset.findFirst({
-      where: { id: job.outputAssetId, userId: auth.session.userId, kind: "audio" },
-    });
-  }
+  const outputAsset = job.outputAssetId
+    ? await db.mediaAsset.findFirst({
+        where: { id: job.outputAssetId, userId: auth.session.userId, kind: "audio" },
+      })
+    : null;
   return NextResponse.json({ success: true, job, outputAsset });
 }
