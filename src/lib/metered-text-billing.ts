@@ -57,6 +57,14 @@ export async function reserveMeteredTextOperation(opts: {
   model?: string | null;
 }) {
   const route = await resolveConfiguredBillableTextRoute(opts.model);
+  const promptBytes = Buffer.byteLength(opts.systemPrompt || "", "utf8")
+    + Buffer.byteLength(opts.userPrompt || "", "utf8");
+  if (route.provider === "xai" && promptBytes > 128_000) {
+    throw new BillingSafetyError(
+      "XAI_TEXT_CONTEXT_TOO_LARGE",
+      "Paid xAI text prompts are currently limited to the verified short-context billing envelope. Reduce the prompt below 128,000 UTF-8 bytes.",
+    );
+  }
   const inputTokens = estimateTextInputTokenCeiling(opts.systemPrompt, opts.userPrompt);
   const maxOutputTokens = safeOutputTokenCeiling(opts.maxOutputTokens);
   const lines: ImmediateProviderLineInput[] = [
