@@ -89,6 +89,7 @@ export default function PhotoStudioPage() {
   const [slideshowRender, setSlideshowRender] = useState<SlideshowRenderState | null>(null);
   const [generatingLivingPhotos, setGeneratingLivingPhotos] = useState(false);
   const [livingPhotoGeneration, setLivingPhotoGeneration] = useState<LivingPhotoGenerationState | null>(null);
+  const [motionDirectorDirty, setMotionDirectorDirty] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProjectResult | null>(null);
 
@@ -204,6 +205,7 @@ export default function PhotoStudioPage() {
     setResult(null);
     setSlideshowRender(null);
     setLivingPhotoGeneration(null);
+    setMotionDirectorDirty(false);
     try {
       const response = await fetch("/api/photo-studio/projects", {
         method: "POST",
@@ -565,6 +567,7 @@ export default function PhotoStudioPage() {
                     <PhotoMotionDirector
                       projectId={result.projectId}
                       locked={generatingLivingPhotos || livingPhotoGeneration !== null}
+                      onDirtyChange={setMotionDirectorDirty}
                     />
                     <div className="mt-4 rounded-xl border border-violet-300/20 bg-slate-950/40 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -579,6 +582,7 @@ export default function PhotoStudioPage() {
                         onClick={() => void generateLivingPhotos()}
                         disabled={
                           generatingLivingPhotos ||
+                          motionDirectorDirty ||
                           livingPhotoGeneration?.status === "done" ||
                           livingPhotoGeneration?.status === "failed"
                         }
@@ -593,7 +597,9 @@ export default function PhotoStudioPage() {
                               ? livingPhotoGeneration
                                 ? "Generating AI motion…"
                                 : "Waiting for confirmation…"
-                              : "Review cost & animate"}
+                              : motionDirectorDirty
+                                ? "Save motion directions first"
+                                : "Review cost & animate"}
                       </button>
                     </div>
                     {livingPhotoGeneration ? (
