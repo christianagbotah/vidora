@@ -79,7 +79,7 @@ module.exports = {
       exec_mode: "fork",
       env: {
         ...commonEnv,
-        GENERATION_WORKER_IDLE_MS: process.env.GENERATION_WORKER_IDLE_MS || "3000",
+        GENERATION_WORKER_IDLE_MS: process.env.GENERATION_WORKER_IDLE_MS || "10000",
         GENERATION_SUBMISSION_SPACING_MS: process.env.GENERATION_SUBMISSION_SPACING_MS || "15000",
       },
       max_memory_restart: "768M",
@@ -127,7 +127,7 @@ module.exports = {
       exec_mode: "fork",
       env: {
         ...commonEnv,
-        EXPORT_WORKER_IDLE_MS: process.env.EXPORT_WORKER_IDLE_MS || "3000",
+        EXPORT_WORKER_IDLE_MS: process.env.EXPORT_WORKER_IDLE_MS || "10000",
         EXPORT_WORKER_STALE_MINUTES: process.env.EXPORT_WORKER_STALE_MINUTES || "3",
       },
       max_memory_restart: "1G",
